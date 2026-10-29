@@ -1,0 +1,4 @@
+﻿ALLGEMEIN: Lies STATUS.md und COMMANDS.md zuerst. Setze DIESEN kleinen Auftrag VOLLSTAENDIG um, so dass er ingame nutzbar ist. Nicht bei vorbereiteten Regeln oder Teilstaenden aufhoeren; lieber weniger Extras, aber fertig, eingebunden, gebaut, getestet und ausgerollt. bot\ nicht anfassen. Keine Kosten, keine Portfreigaben, keine Secrets ausgeben. Vor Neustart: Backup der betroffenen Daten. Ergebnis kurz in STATUS.md dokumentieren (was ingame testen).
+AUFTRAG L2: SHOP Bearbeitungsmenue + Discord-Daten: Eigene Angebote per Klick-GUI bearbeiten (Preis, Menge nachfuellen, zurueckziehen). Tabelle shop_events (gelistet, verkauft, zurueckgezogen) befuellen. Views v_shop_listings und v_ah_listings (mit korrekter Restlaufzeit) anlegen und dem Read-only-User creepy_ro SELECT darauf geben.
+
+HINWEIS: Ein frueherer L2-Lauf wurde kurz vor Abschluss unterbrochen (Views stehen, GRANT fuer creepy_ro ist bereits erledigt). Pruefe den Stand, schliesse ab, baue, rolle aus.

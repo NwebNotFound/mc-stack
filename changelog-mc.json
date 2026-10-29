@@ -1,0 +1,116 @@
+[
+  {
+    "version": "2026-10-29",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Echte Auktionen: Stelle Gegenst?nde mit /ah auction ein und biete mit /ah bid. Gewonnene Gegenst?nde warten im Abholfach; Guthaben wird beim ?berbieten sofort erstattet."
+      },
+      {
+        "type": "neu",
+        "text": "Boersenpreise in der Bank"
+      },
+      {
+        "type": "verbessert",
+        "text": "Der Markt zeigt fuer Spielershops jetzt auch Stueckpreise und verbleibende Mengen."
+      },
+      {
+        "type": "neu",
+        "text": "Statistiken, Bestenlisten und Marktdaten sind f?r die Website verf?gbar ? mit Wochenvergleich und st?ndlicher Handelshistorie."
+      },
+      {
+        "type": "neu",
+        "text": "Shop: Preise pro Item, du kaufst beliebige Mengen (1/8/16/32/64/alles), der Rest bleibt im Angebot"
+      },
+      {
+        "type": "neu",
+        "text": "Kaufaufträge: unter /shop einen Auftrag mit Stückpreis aufgeben, andere verkaufen dir beliebig viel"
+      },
+      {
+        "type": "neu",
+        "text": "Offline-Handel: Kaufen und Verkaufen klappt auch, wenn der andere offline ist, beim Join gibt's eine Zusammenfassung"
+      },
+      {
+        "type": "neu",
+        "text": "/challenges: tägliche und wöchentliche Aufgaben mit CP"
+      },
+      {
+        "type": "neu",
+        "text": "/tpteam: zu deinem Team teleportieren, die alten Warps sind weg"
+      },
+      {
+        "type": "neu",
+        "text": "Spawn: Neue Spieler und alle ohne Bett spawnen zufällig ~100 Blöcke um den Spawn, auf festem Boden unter freiem Himmel"
+      },
+      {
+        "type": "verbessert",
+        "text": "/stats: zeigt jetzt Streak und Titel"
+      },
+      {
+        "type": "verbessert",
+        "text": "Homes: zusätzliche Home-Slots kaufbar"
+      },
+      {
+        "type": "verbessert",
+        "text": "Verkaufslimit: max. 1.500 CP pro Tag durch Verkäufe"
+      },
+      {
+        "type": "verbessert",
+        "text": "Einladungen: Team- und Party-Einladungen über alle Server"
+      }
+    ],
+    "discord": [
+      "/menu und /hilfe: alles per Button, ohne Tippen",
+      "Namensvorschläge bei /stats",
+      "Neuer Kanal #feedback für Ideen, Feedback und Bugs",
+      "Kaufen per Discord kommt bald, bis dahin ingame"
+    ]
+  },
+  {
+    "version": "2026-10-29-economy",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Du kannst Shop- und Auktionshaus-Angebote jetzt auch ueber Discord kaufen. Die Items landen in deinem Abholfach (/abholen)."
+      },
+      {
+        "type": "neu",
+        "text": "Lade Freunde ein: Sobald dein Freund 2 Stunden gespielt hat, bekommst du eine CP-Belohnung."
+      },
+      {
+        "type": "verbessert",
+        "text": "Die Wirtschaft (Shop, Auktionshaus, Kaufauftraege, /pay, Bank) wurde komplett durchgetestet."
+      }
+    ]
+  },
+  {
+    "version": "2026-10-29-r1",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Das End ist vorerst gesperrt und wird spaeter als Event freigeschaltet."
+      }
+    ]
+  },
+  {
+    "version": "2026-10-29-preise",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Server-Markt: Preise passen sich an Angebot und Nachfrage an und haben feste Ober- und Untergrenzen. So bleibt CP langfristig stabil."
+      },
+      {
+        "type": "neu",
+        "text": "Diamanten, Netherite, Elytra, Totems, Shulker, Beacons und verzauberte Buecher kann man nicht mehr beim Server kaufen - die muesst ihr euch erspielen!"
+      },
+      {
+        "type": "neu",
+        "text": "Im Auktionshaus geht beim Verkauf eine Gebuehr von 5 % an den Server."
+      }
+    ]
+  }
+]

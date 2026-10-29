@@ -1,0 +1,2 @@
+﻿Lies STATUS.md. NUR diesen einen kleinen Punkt VOLLSTAENDIG im Code umsetzen, bauen, testen. Nicht bei Analyse aufhoeren. bot\ nicht anfassen. KEIN Neustart: neue Jar nach data\<server>\plugins\update\ legen, in STATUS.md 'wartet auf Neustart' notieren.
+AUFTRAG L7b: Sicherer Zufallsspawn in CraftCore (Survival): bei erstem Join und Respawn ohne Bett/Anker zufaellig im Radius 100 um den Weltspawn; Hoehe per Heightmap MOTION_BLOCKING_NO_LEAVES; nur fester Block, nicht Blaetter, Wasser, Lava; 2 Luftbloecke darueber; max 30 Versuche, sonst Weltspawn.

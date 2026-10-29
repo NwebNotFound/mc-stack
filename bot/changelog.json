@@ -1,0 +1,237 @@
+[
+  {
+    "version": "1.0",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Chat-Sync: #mc-chat und der Minecraft-Chat sind verbunden – in beide Richtungen"
+      },
+      {
+        "type": "neu",
+        "text": "Live-Serverstatus in #server-status"
+      },
+      {
+        "type": "neu",
+        "text": "/stats – deine Spielerstatistiken als Karte (Blöcke, Crafting, Kampf)"
+      },
+      {
+        "type": "neu",
+        "text": "Minecraft-Konto verknüpfen ganz einfach per DM an Creepy"
+      },
+      {
+        "type": "neu",
+        "text": "Join to create: eigener Voice-Kanal per Klick, steuerbar mit /voice"
+      },
+      {
+        "type": "neu",
+        "text": "Parkour-Bestenliste mit /leaderboard parkour"
+      },
+      {
+        "type": "neu",
+        "text": "Builder- und VIP-Rollen werden mit Minecraft synchronisiert"
+      },
+      {
+        "type": "verbessert",
+        "text": "Join-, Leave- und Erfolgsmeldungen sind schöner und kommen sofort"
+      },
+      {
+        "type": "fix",
+        "text": "Verknüpfen und /stats funktionieren jetzt zuverlässig"
+      }
+    ]
+  },
+  {
+    "version": "1.1",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Spielershops auf Discord ansehen: /shop, /shops und Live-Meldungen in #shops (kaufen weiterhin ingame)"
+      }
+    ]
+  },
+  {
+    "version": "1.2",
+    "date": "28.10.2026",
+    "requires": "shop_views",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Preisalarme: /alarm add – Creepy schreibt dir per DM, sobald jemand ein Item günstig anbietet"
+      }
+    ]
+  },
+  {
+    "version": "1.3",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Chat-Sync und Join-/Leave-Meldungen nur noch für Survival – Lobby und VIP-Welten bleiben ruhig"
+      }
+    ]
+  },
+  {
+    "version": "1.4",
+    "date": "28.10.2026",
+    "requires": "ah_data",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Auktionshaus auf Discord: /ah zeigt neueste und bald endende Angebote, /alarm meldet auch günstige AH-Angebote"
+      }
+    ]
+  },
+  {
+    "version": "1.5",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Konto verknüpfen ist jetzt einfacher: Schritt-für-Schritt-Anzeige 1/3 bis 3/3 in der DM, kopierbare Server-Adresse und Buttons für neuen Code oder falschen Namen"
+      },
+      {
+        "type": "verbessert",
+        "text": "Code-Eingabe ist toleranter (Leerzeichen und Bindestriche sind egal), der Kick-Bildschirm zeigt den Code jetzt groß und klar an"
+      }
+    ]
+  },
+  {
+    "version": "1.6",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "#server-status zeigt jetzt den Servermodus: grün = online, orange = Wartung, blau = Entwicklung"
+      }
+    ]
+  },
+  {
+    "version": "1.7",
+    "date": "28.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Wochen-Recap: jeden Sonntag um 18 Uhr die Top-Spieler, der meistabgebaute Block, Mob-Kills und Fun Facts in #mc-chat"
+      },
+      {
+        "type": "neu",
+        "text": "Events: Admins kündigen Events per Formular an, mit „Bin dabei“-Button und DM-Erinnerung 15 Minuten vorher"
+      },
+      {
+        "type": "verbessert",
+        "text": "Verständlichere Beschreibungen für /link, /verify, /stats, /shop, /shops, /alarm und /ah"
+      }
+    ]
+  },
+  {
+    "version": "1.8",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Verknüpfen: neuer „Hilfe“-Button mit kurzer Erklärung, und die Fortschrittsanzeige bleibt eine Nachricht statt immer neuer"
+      }
+    ]
+  },
+  {
+    "version": "1.9",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Shop, Auktionshaus und Preisalarme sagen jetzt klar: Kaufen direkt in Discord kommt bald, bis dahin geht es ingame"
+      },
+      {
+        "type": "neu",
+        "text": "/menu und /hilfe: alle Funktionen per Button, ohne Tippen - inklusive Spieler- und Shop-Auswahl"
+      },
+      {
+        "type": "verbessert",
+        "text": "/stats schlägt beim Tippen verknüpfte Spielernamen vor"
+      }
+    ]
+  },
+  {
+    "version": "1.10",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "/alarm add öffnet ein Formular, und in /alarm list kannst du Alarme per Menü löschen oder neu anlegen"
+      },
+      {
+        "type": "verbessert",
+        "text": "/voice limit zum Auswählen und /voice name als Formular"
+      },
+      {
+        "type": "verbessert",
+        "text": "Parkour-Bestenliste zum Durchblättern mit ◀ ▶"
+      },
+      {
+        "type": "verbessert",
+        "text": "Kürzere, verständlichere Befehlsbeschreibungen"
+      }
+    ]
+  },
+  {
+    "version": "1.11",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "/invite: persönlicher Einmal-Einladungslink (24 h) für Spieler mit Minecraft-Rolle, max. 2 offene Links gleichzeitig"
+      },
+      {
+        "type": "neu",
+        "text": "„Meine Einladungen“ zeigt per Button, welche Links offen sind und wer über deinen Link gekommen ist"
+      },
+      {
+        "type": "neu",
+        "text": "Wer über deinen Link kommt und sein Minecraft-Konto verknüpft, zählt als deine Einladung (Belohnung ingame folgt)"
+      },
+      {
+        "type": "verbessert",
+        "text": "/menu hat jetzt einen Button „Freunde einladen“"
+      }
+    ]
+  },
+  {
+    "version": "1.12",
+    "date": "29.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Kaufen per Discord: in /shop, /shops und /ah über das Menü \"Kaufen ...\" – Menge wählen (Teilkauf), Gesamtpreis bestätigen, abholen ingame mit /abholen"
+      },
+      {
+        "type": "neu",
+        "text": "Preisalarm-DMs haben jetzt einen Button \"Jetzt kaufen\""
+      },
+      {
+        "type": "verbessert",
+        "text": "Preisschutz: Steigt der Preis vor dem Bestätigen, wird nichts gekauft; Doppelklicks kaufen nie doppelt"
+      }
+    ]
+  },
+{
+  "version": "1.13",
+  "date": "29.10.2026",
+  "requires": "market_views",
+  "changes": [
+    {
+      "type": "neu",
+      "text": "/markt: Servermarkt im Börsenstil - Top-Gewinner und -Verlierer der letzten 24 h mit Preis, ▲/▼ und Volumen"
+    },
+    {
+      "type": "neu",
+      "text": "Kurscharts pro Item mit 1T/7T/30T/90T, Item-Suche per Formular oder Menü"
+    },
+    {
+      "type": "neu",
+      "text": "Direkt aus dem Chart: Preisalarm setzen oder bei Spielershops kaufen"
+    }
+  ]
+}
+]

@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack. bot\ NICHT anfassen. Lies STATUS.md (task18 offen Punkte).
+Rest von task18 fertig: /shop Uebersicht mit Spielerkoepfen, Untermenue Preis/Menge aendern, Shift-/Rechtsklick, Verkaufsbenachrichtigungen (auch offline beim Join), Views v_shop_listings/v_shop_events, Tabelle shop_events, GRANT SELECT an creepy_ro (Root-PW aus craftcore-db Logs, nie ausgeben), STATUS.md Abschnitt Discord-Schnittstelle Shops. Tests, bauen, Lobby+Survival neu starten.

@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack, Plugin plugins-src\craftcore. bot\ NICHT anfassen. NUR /trade. Lies STATUS.md.
+/trade <spieler>, Anfrage annehmen, gemeinsame GUI, beide muessen bestaetigen, jede Aenderung setzt Bestaetigung zurueck, 3s Countdown. Austausch nur auf dem Main-Thread in einem Tick, abbrechen bei Logout/Tod/Distanz/Weltwechsel, Items zurueck. Kein Dupe ueber Shift-Klick, Drag, Hotbar-Taste, Inventar schliessen. Tests, bauen, Survival neu starten, STATUS.md.

@@ -1,0 +1,119 @@
+"""Changelog: postet neue Eintraege aus changelog.json in CHANGELOG_CHANNEL_ID (einmalig, Status in data/)."""
+import json, logging, os
+from pathlib import Path
+import discord
+
+log = logging.getLogger("changelog")
+SRC = Path(__file__).with_name("changelog.json")
+STATE = Path("/app/data/changelog-posted.json")
+GROUPS = (("neu", "✨ Neu"), ("verbessert", "🔧 Verbessert"), ("fix", "🐛 Fix"))
+
+
+def embed(entry):
+    e = discord.Embed(title="\U0001F916 Discord \u00b7 " + f"Update v{entry['version']} — {entry['date']}", color=0x57F287)
+    for key, label in GROUPS:
+        items = [c["text"] for c in entry["changes"] if c["type"] == key]
+        if items:
+            e.add_field(name=label, value="\n".join("• " + t for t in items)[:1024], inline=False)
+    e.set_footer(text="Creepy · Changelog")
+    return e
+
+
+async def post_new(bot, force_version=None):
+    cid = os.getenv("CHANGELOG_CHANNEL_ID", "").strip()
+    if not cid:
+        return 0
+    entries = json.loads(SRC.read_text(encoding="utf-8"))
+    posted = set(json.loads(STATE.read_text())) if STATE.exists() else set()
+    channel = bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
+    n = 0
+    for entry in entries:
+        v = entry["version"]
+        if (force_version and v != force_version) or (not force_version and v in posted):
+            continue
+        if entry.get("requires") == "ah_data" and not force_version:
+            try:
+                import shops
+                if not shops.query("SELECT 1 FROM v_ah_listings LIMIT 1"):
+                    continue
+            except Exception:
+                continue
+        if entry.get("requires") == "shop_views" and not force_version:
+            try:
+                import shops
+                shops.query("SELECT 1 FROM v_shop_events LIMIT 1")
+            except Exception:
+                continue  # erst posten, wenn die Shop-Views existieren
+        if entry.get("requires") == "market_views" and not force_version:
+            try:
+                import shops
+                shops.query("SELECT 1 FROM v_market LIMIT 1")
+                shops.query("SELECT 1 FROM v_market_history LIMIT 1")
+            except Exception:
+                continue  # erst posten, wenn die Markt-Views existieren
+        await channel.send(embed=embed(entry))
+        posted.add(v)
+        STATE.write_text(json.dumps(sorted(posted)))
+        n += 1
+        log.info("Changelog v%s gepostet", v)
+    return n
+
+MC_SRC = Path("/app/mc/changelog-mc.json")
+
+
+def _fields(e, head, items):
+    for key, label in GROUPS:
+        lines = [c["text"] for c in items if c.get("type") == key]
+        chunk, part = [], 0
+        for t in lines + [None]:
+            if t is None or sum(len(x) + 3 for x in chunk) + len(t) + 3 > 1000:
+                if chunk:
+                    e.add_field(name=f"{head} \u00b7 {label}" + (" (2)" if part else ""), value="\n".join("\u2022 " + x for x in chunk), inline=False)
+                    part += 1
+                chunk = []
+            if t is not None:
+                chunk.append(t)
+
+
+def mc_embed(entry):
+    e = discord.Embed(title=f"Was ist neu auf dem Server \u2013 {entry['date']}", color=0xFFAA00)
+    _fields(e, "\u26CF\uFE0F Minecraft", entry.get("changes", []))
+    if entry.get("discord"):
+        e.add_field(name="\U0001F916 Discord", value="\n".join("\u2022 " + t for t in entry["discord"])[:1024], inline=False)
+    e.set_footer(text="Creepy \u00b7 Changelog")
+    return e
+
+
+async def post_mc(bot):
+    cid = os.getenv("CHANGELOG_CHANNEL_ID", "").strip()
+    if not cid or not MC_SRC.exists():
+        return 0
+    try:
+        entries = json.loads(MC_SRC.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("changelog-mc.json ist kein g\u00fcltiges JSON - \u00fcbersprungen")
+        return 0
+    posted = set(json.loads(STATE.read_text())) if STATE.exists() else set()
+    channel = bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
+    n = 0
+    for entry in entries:
+        key = "mc:" + str(entry["version"])
+        if key in posted:
+            continue
+        await channel.send(embed=mc_embed(entry))
+        posted.add(key)
+        STATE.write_text(json.dumps(sorted(posted)))
+        n += 1
+        log.info("MC-Changelog %s gepostet", entry["version"])
+    return n
+
+
+async def watch(bot, every=60):
+    import asyncio
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await post_mc(bot)
+        except Exception:
+            log.exception("MC-Changelog fehlgeschlagen")
+        await asyncio.sleep(every)

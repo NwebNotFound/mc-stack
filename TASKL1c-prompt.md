@@ -1,0 +1,2 @@
+﻿Lies STATUS.md. NUR diesen einen kleinen Punkt VOLLSTAENDIG im Code umsetzen, bauen, testen. Nicht bei Analyse aufhoeren. bot\ nicht anfassen. KEIN Neustart: neue Jar nach data\<server>\plugins\update\ legen, in STATUS.md 'wartet auf Neustart' notieren.
+AUFTRAG L1c: Shop/AH Teilkauf: Stueckpreis-Berechnung aus L1b in Shop und AH einbauen. Kauf-GUI mit Mengenwahl (1, 8, 16, 32, 64, Alles); Kauf in einer DB-Transaktion: Restmenge reduzieren, Geld buchen, Item ins Abholfach. Migration alter Angebote: Stueckpreis = Gesamtpreis/Menge auf 0,01 aufgerundet, vorher DB-Backup.

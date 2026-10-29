@@ -1,0 +1,5 @@
+# Seconds; 0 disables the respective action. Use kick-seconds: 300 on VIP servers.
+mark-seconds: 300
+kick-seconds: 1800
+check-interval-seconds: 5
+announce: true

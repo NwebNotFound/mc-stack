@@ -1,0 +1,4 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack. bot\ NICHT anfassen. Lies STATUS.md und die vollstaendige Spezifikation in TASK22-npc-mine-prompt.md (alle AENDERUNGEN haben Vorrang). Mach NUR den folgenden Teil, den aber vollstaendig und lauffaehig; Tests, bauen, betroffene Server neu starten, STATUS.md aktualisieren.
+Teil B: Builder-Editor. Bauwelt minerush_build, /mr tools mit Werkzeugleiste und Markern, Spawnpunkt-GUI, Speichern und Validieren von Raeumen, /mr room test/list/load/delete. Der Generator nutzt die gespeicherten Raeume. Dazu MINERUSH-GUIDE.md.
+
+RECHTE: LuckPerms laeuft mit server=lobby bzw. server=survival. Gruppe builder hat Baurechte NUR mit Kontext server=lobby. Gib builder in der Bauwelt die noetigen Rechte (Creative, WorldEdit, /mr-Editor) ausschliesslich mit Kontext server=survival world=minerush_build, niemals global oder fuer das normale Survival.

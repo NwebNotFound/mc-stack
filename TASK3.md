@@ -1,0 +1,5 @@
+﻿Fortsetzung 3 (von Luna, auf Nils' Wunsch). Arbeite in diesem Ordner weiter, lies STATUS.md zuerst.
+1. Stelle sicher, dass velocity, lobby und survival laufen und Simple Voice Chat korrekt konfiguriert ist (Plugin geladen, UDP 24454 korrekt gemappt/erreichbar, voicechat-server.properties sinnvoll; hinter Velocity korrekt). Pruefe per Status-Ping und Logs.
+2. Portabilitaet: Mach das Setup leicht auf anderen Geraeten installierbar: install.ps1 (Windows) und install.sh (Linux/macOS), die Docker pruefen, .env aus .env.example erzeugen, zufaellige Secrets generieren, Ordner anlegen und `docker compose up -d` ausfuehren. Keine Geheimnisse im Repo; .gitignore pruefen. Kurze README.md (deutsch) mit Schritt-fuer-Schritt fuer Laien. Optional ein backup-/export-Skript, um Welten auf ein anderes Geraet umzuziehen.
+3. playit und cloudflared bleiben im compose als Profile vorbereitet; sie werden aktiviert, sobald Keys in .env stehen (das macht spaeter jemand anders). Dokumentiere in STATUS.md genau, welche Variablen in .env eingetragen werden muessen.
+4. STATUS.md aktualisieren. Keine Geheimnisse ausgeben. Nichts kaufen, keine Fritzbox-Portfreigaben.

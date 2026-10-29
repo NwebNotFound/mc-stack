@@ -1,0 +1,5 @@
+name: VoiceSculk
+version: 1.0.0
+main: de.mcstack.voicesculk.VoiceSculk
+api-version: '26.3'
+depend: [voicechat]

@@ -1,0 +1,16 @@
+plugins { id 'java' }
+java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+repositories { mavenCentral() }
+dependencies {
+    compileOnly fileTree(dir: '../../data/survival/libraries', include: '**/*.jar')
+    compileOnly files('../../config/lobby-plugins/Vault-1.7.3.jar')
+    implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.6'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test { useJUnitPlatform() }
+jar { duplicatesStrategy = DuplicatesStrategy.EXCLUDE; from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }; exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA' }
+
+dependencies { testImplementation 'com.h2database:h2:2.3.232' }
+
+dependencies { testImplementation fileTree(dir: '../../data/survival/libraries', include: '**/*.jar'); testImplementation files('../../config/lobby-plugins/Vault-1.7.3.jar') }

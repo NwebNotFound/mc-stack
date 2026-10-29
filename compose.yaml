@@ -1,0 +1,223 @@
+name: mc-stack
+
+x-paper-environment: &paper-environment
+  EULA: "TRUE"
+  TYPE: PAPER
+  VERSION: "${MINECRAFT_VERSION:-LATEST}"
+  ONLINE_MODE: "FALSE"
+  ENFORCE_SECURE_PROFILE: "FALSE"
+  ENABLE_WHITELIST: "TRUE"
+  ENFORCE_WHITELIST: "TRUE"
+  ENABLE_RCON: "TRUE"
+  RCON_PASSWORD: "${RCON_PASSWORD:?RCON_PASSWORD fehlt in .env}"
+  RCON_PORT: "25575"
+  ENABLE_QUERY: "FALSE"
+  CFG_FORWARDING_SECRET_FILE: /run/secrets/forwarding_secret
+  REPLACE_ENV_DURING_SYNC: "TRUE"
+  REPLACE_ENV_IN_PLACE: "FALSE"
+  SYNC_SKIP_NEWER_IN_DESTINATION: "FALSE"
+  COPY_CONFIG_DEST: /data
+  TZ: Europe/Berlin
+  CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_DB_PASSWORD:?CRAFTCORE_DB_PASSWORD fehlt}"
+  LUCKPERMS_STORAGE_METHOD: mariadb
+  LUCKPERMS_DATA_ADDRESS: craftcore-db:3306
+  LUCKPERMS_DATA_DATABASE: luckperms
+  LUCKPERMS_DATA_USERNAME: "${LUCKPERMS_DB_USER:?LUCKPERMS_DB_USER fehlt}"
+  LUCKPERMS_DATA_PASSWORD: "${LUCKPERMS_DB_PASSWORD:?LUCKPERMS_DB_PASSWORD fehlt}"
+  LUCKPERMS_MESSAGING_SERVICE: sql
+
+x-paper: &paper
+  image: itzg/minecraft-server:latest
+  restart: unless-stopped
+  stop_grace_period: 2m
+  networks: [minecraft]
+  secrets: [forwarding_secret]
+  healthcheck:
+    test: ["CMD", "mc-health"]
+    interval: 15s
+    timeout: 10s
+    retries: 10
+    start_period: 5m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  craftcore-db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: craftcore
+      MARIADB_USER: craftcore
+      MARIADB_PASSWORD: "${CRAFTCORE_DB_PASSWORD:?CRAFTCORE_DB_PASSWORD fehlt}"
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - craftcore-db:/var/lib/mysql
+    networks: [minecraft]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  lobby:
+    <<: *paper
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
+    environment:
+      <<: *paper-environment
+      MEMORY: 1G
+      CRAFTCORE_SERVER: Lobby
+      MOTD: MC Stack Lobby
+      MODE: adventure
+      DIFFICULTY: peaceful
+      VIEW_DISTANCE: "6"
+      SIMULATION_DISTANCE: "4"
+      SPAWN_PROTECTION: "0"
+      LEVEL_TYPE: minecraft:flat
+      GENERATOR_SETTINGS: '{"biome":"minecraft:plains","layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"structures":{}}'
+      GENERATE_STRUCTURES: "FALSE"
+      COPY_PLUGINS_SRC: /lobby-plugins,/bot-plugin
+    volumes:
+      - ./data/lobby:/data
+      - ./config/lobby-paper:/config:ro
+      - ./config/lobby-plugins:/lobby-plugins:ro
+      - bot-plugin:/bot-plugin:ro
+      - bot-pending:/link-pending:ro
+    expose:
+      - "25565/tcp"
+      - "25575/tcp"
+
+  survival:
+    <<: *paper
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
+    environment:
+      <<: *paper-environment
+      MEMORY: 4G
+      CRAFTCORE_SERVER: Survival
+      MOTD: MC Stack Survival
+      MODE: survival
+      FORCE_GAMEMODE: "TRUE"
+      DIFFICULTY: normal
+      VIEW_DISTANCE: "10"
+      SIMULATION_DISTANCE: "6"
+      MODRINTH_PROJECTS: "paper:simple-voice-chat"
+      MODRINTH_DOWNLOAD_DEPENDENCIES: required
+      COPY_PLUGINS_SRC: /plugins,/bot-plugin
+    volumes:
+      - ./data/survival:/data
+      - ./config/paper:/config:ro
+      - ./config/survival-plugins:/plugins:ro
+      - bot-plugin:/bot-plugin:ro
+    ports:
+      - "127.0.0.1:24454:24454/udp"
+    expose:
+      - "25565/tcp"
+      - "25575/tcp"
+      - "24454/udp"
+
+  velocity:
+    image: itzg/mc-proxy:latest
+    restart: unless-stopped
+    environment:
+      TYPE: VELOCITY
+      CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_DB_PASSWORD:?CRAFTCORE_DB_PASSWORD fehlt}"
+      VELOCITY_VERSION: LATEST
+      MEMORY: 512m
+      SERVER_PORT: "25565"
+      ENABLE_RCON: "FALSE"
+      REPLACE_ENV_DURING_SYNC: "FALSE"
+      SYNC_SKIP_NEWER_IN_DESTINATION: "FALSE"
+      TZ: Europe/Berlin
+      LUCKPERMS_STORAGE_METHOD: mariadb
+      LUCKPERMS_DATA_ADDRESS: craftcore-db:3306
+      LUCKPERMS_DATA_DATABASE: luckperms
+      LUCKPERMS_DATA_USERNAME: "${LUCKPERMS_DB_USER:?LUCKPERMS_DB_USER fehlt}"
+      LUCKPERMS_DATA_PASSWORD: "${LUCKPERMS_DB_PASSWORD:?LUCKPERMS_DB_PASSWORD fehlt}"
+      LUCKPERMS_MESSAGING_SERVICE: sql
+    ports:
+      - "127.0.0.1:25565:25565/tcp"
+    networks: [minecraft]
+    secrets: [forwarding_secret]
+    volumes:
+      - ./data/velocity:/server
+      - ./config/velocity:/config:ro
+    depends_on:
+      lobby:
+        condition: service_healthy
+      survival:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "mc-monitor", "status", "--host", "127.0.0.1", "--port", "25565"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  playit:
+    image: ghcr.io/playit-cloud/playit-agent:latest
+    profiles: [playit]
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: "${SECRET_KEY:-}"
+    networks: [minecraft]
+    depends_on:
+      velocity:
+        condition: service_healthy
+
+  bot:
+    build: ./bot
+    profiles: [bot]
+    restart: unless-stopped
+    env_file:
+      - path: ./bot/.env
+        required: false
+    environment:
+      RCON_PASSWORD: "${RCON_PASSWORD:?RCON_PASSWORD fehlt in .env}"
+      CRAFTCORE_DB_HOST: craftcore-db
+      CREEPY_INV_DB_PASSWORD: "${CREEPY_INV_DB_PASSWORD:-}"
+      MC_INGEST_TOKEN: "${MC_INGEST_TOKEN:-}"
+    networks: [minecraft]
+    volumes:
+      - ./bot/data:/app/data
+      - ./changelog-mc.json:/app/mc/changelog-mc.json:ro
+      - ./data/lobby:/minecraft/lobby:ro
+      - ./data/survival:/minecraft/survival:ro
+      - bot-pending:/link-pending
+      - bot-plugin:/plugin-output
+    depends_on:
+      velocity:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [cloudflare]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"
+    networks: [minecraft]
+
+networks:
+  minecraft:
+    driver: bridge
+
+volumes:
+  craftcore-db:
+  bot-plugin:
+  bot-pending:
+
+secrets:
+  forwarding_secret:
+    file: ./secrets/forwarding.secret

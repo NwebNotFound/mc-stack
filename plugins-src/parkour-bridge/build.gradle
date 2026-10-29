@@ -1,0 +1,12 @@
+plugins { id 'java' }
+java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+repositories { mavenCentral() }
+dependencies {
+ compileOnly fileTree(dir: '../../data/lobby/libraries', include: '**/*.jar')
+ compileOnly files('../../data/lobby/plugins/Lobby Parkour-26.3-v1.4.1.jar')
+ implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.6'
+ testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+ testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test { useJUnitPlatform() }
+jar { duplicatesStrategy = DuplicatesStrategy.EXCLUDE; from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }; exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA' }

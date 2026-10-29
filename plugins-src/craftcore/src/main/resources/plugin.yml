@@ -1,0 +1,81 @@
+name: CraftCore
+version: 0.1.1
+main: de.mcstack.craftcore.CraftCore
+api-version: '26.3'
+depend: [Vault]
+commands:
+  cclink:
+    description: Discord-Verknuepfung setzen (Konsole)
+  stats:
+    description: Statistik und kosmetische Abzeichen
+  challenges:
+    description: Tages- und Wochenaufgaben
+  servermode:
+    description: Servermodus setzen (nur OP)
+    usage: /servermode <dev|online|wartung>
+  menu:
+    description: Zentrales Men?
+  help:
+    description: Kategorien und Hilfe
+  abholen:
+    description: Offene Lieferungen abholen
+  balance:
+    description: CP-Kontostand
+    aliases: [bal]
+  pay:
+    description: CP an Spieler senden
+    usage: /pay <Spieler> <Betrag>
+  team:
+    description: Teamverwaltung
+    usage: /team create|invite|join|leave|kick|info|promote|demote
+
+  claim:
+    description: Chunk beanspruchen oder auflisten
+  unclaim:
+    description: Chunk freigeben
+  spawn:
+    description: Zum Lobby-Spawn teleportieren
+  home:
+    description: Zu einem Zuhause teleportieren
+  tpteam:
+    description: Teleport zu Teammitgliedern auf Survival
+  vip:
+    description: VIP-Menue
+  sethome:
+    description: Zuhause setzen
+
+  bank:
+    aliases: [money]
+    description: Bank und Warenhandel
+  market:
+    description: Marktpreise und Trend
+
+  shop:
+    description: Spielershops
+    usage: /shop help
+
+  ah:
+    description: Auktionshaus
+    usage: /ah
+
+  trade:
+    description: Handel zwischen Spielern
+    usage: /trade <spieler>|accept
+
+  npc:
+    description: Lobby-NPC setzen
+    usage: /npc set bank|ah
+    permission: craftcore.npc.set
+  mr:
+    description: MineRush Loot-Editor
+    permission: craftcore.minerush.edit
+permissions:
+  craftcore.minerush.edit:
+    description: MineRush bearbeiten
+    default: op
+  craftcore.npc.set:
+    description: NPCs setzen
+    default: op
+  craftcore.end.bypass:
+    description: End-Sperre fuer Ops umgehen
+    default: op

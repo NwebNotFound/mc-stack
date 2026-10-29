@@ -1,0 +1,54 @@
+﻿# secrets
+.env
+*.env
+.env.*
+!.env.example
+**/.env
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+forwarding.secret
+**/forwarding.secret
+**/playit*.toml
+**/cloudflared/
+*credentials*.json
+*token*
+# data / worlds / db
+data/
+world*/
+**/world*/
+*.db
+*.db-*
+*.sqlite*
+**/mysql/
+**/mariadb/
+**/usercache.json
+**/banned-*.json
+**/ops.json
+**/whitelist.json
+# plugin data folders (keep only top-level plugin config yml)
+config/*-plugins/*/
+*.jar
+!**/gradle/wrapper/*.jar
+# build
+**/build/
+**/target/
+**/.gradle/
+node_modules/
+__pycache__/
+*.pyc
+# backups / logs
+backups/
+*.bak*
+*.bak-*
+logs/
+*.log
+codex-*.txt
+.craft-*.txt
+tools/*.exe
+# website copy lives in its own repo
+website/
+site/
+web/

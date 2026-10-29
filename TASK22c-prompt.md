@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack. bot\ NICHT anfassen. Lies STATUS.md und die vollstaendige Spezifikation in TASK22-npc-mine-prompt.md (alle AENDERUNGEN haben Vorrang). Mach NUR den folgenden Teil, den aber vollstaendig und lauffaehig; Tests, bauen, betroffene Server neu starten, STATUS.md aktualisieren.
+Teil C: Bosse. Faehigkeits-Bibliothek nach AENDERUNG 8, Souls-Mechaniken (Ausweichrolle, Ausdauer, Stagger, Punish-Fenster, Telegraphing), Boss-Editor /mr boss create und /mr mob create als GUI und 3 fertige Beispielbosse.

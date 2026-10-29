@@ -1,0 +1,9 @@
+name: ParkourBridge
+version: 1.0.0
+main: de.mcstack.parkour.ParkourBridge
+api-version: '26.3'
+depend: [Lobby-Parkour]
+commands:
+  parkour:
+    description: Parkour verlassen oder Bestenliste platzieren
+    usage: /parkour leave|setboard

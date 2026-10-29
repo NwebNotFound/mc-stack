@@ -1,0 +1,1 @@
+cd C:\Users\nilsw\mc-stack; Get-Content -Raw TASK-R3-prompt.md | & 'C:\Users\nilsw\AppData\Local\OpenAI\Codex\bin\08d187884f2330d1\codex.exe' exec --skip-git-repo-check -m gpt-6.1-terra -c model_reasoning_effort=high -s danger-full-access - *> codex-taskR3-log.txt

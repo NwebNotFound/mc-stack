@@ -1,0 +1,2 @@
+﻿Lies STATUS.md. NUR diesen Punkt VOLLSTAENDIG im Code umsetzen, bauen, testen. Nicht bei Analyse aufhoeren; kleine Restrisiken dokumentieren statt abbrechen. bot\ nicht anfassen. KEIN Neustart: Jar nach data\<server>\plugins\update\, STATUS.md 'wartet auf Neustart'. Einfach halten, GUI-first.
+AUFTRAG L10: Anti-Schnell-reich: Zusaetzlich zur Stufe pro Material ein Gesamt-Tageslimit fuer Verkaufserloese an Bank/Markt pro Spieler (Config, Start 1.500 CP/Tag, Reset 05:00); im Markt-GUI verbleibendes Tageslimit anzeigen. Bank-Kurse nicht aendern.

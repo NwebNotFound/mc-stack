@@ -1,0 +1,7 @@
+# Minimum interval between vibrations for each speaker in milliseconds.
+cooldown-ms: 1000
+# Maximum distance from the speaker to a sensor's center, in blocks.
+radius: 8
+# Whether whisper and group microphone packets can cause vibrations.
+whisper-triggers: false
+group-triggers: false

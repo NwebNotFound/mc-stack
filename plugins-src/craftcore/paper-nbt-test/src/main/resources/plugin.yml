@@ -1,0 +1,4 @@
+name: NbtProbe
+version: '1'
+main: NbtProbe
+api-version: '26.3'

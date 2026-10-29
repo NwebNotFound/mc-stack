@@ -1,0 +1,11 @@
+name: DiscordLink
+version: '1.0'
+main: dev.nwebnotfound.link.LinkPlugin
+api-version: '1.21'
+commands:
+  linkwhitelist:
+    description: UUID-basierte Whitelist für den Bot
+    permission: discordlink.whitelist
+permissions:
+  discordlink.whitelist:
+    default: op

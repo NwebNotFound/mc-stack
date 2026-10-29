@@ -1,0 +1,44 @@
+﻿# CP je Rohstoff; explizite Werte haben Vorrang vor Rezepten.
+base:
+  DIRT: 0.1
+  COBBLESTONE: 0.1
+  STONE: 0.2
+  SAND: 0.2
+  GRAVEL: 0.2
+  CLAY_BALL: 0.3
+  OAK_LOG: 1.0
+  SPRUCE_LOG: 1.0
+  BIRCH_LOG: 1.0
+  JUNGLE_LOG: 1.0
+  ACACIA_LOG: 1.0
+  DARK_OAK_LOG: 1.0
+  MANGROVE_LOG: 1.0
+  CHERRY_LOG: 1.0
+  COAL: 1.0
+  CHARCOAL: 1.0
+  IRON_INGOT: 8.0
+  IRON_BLOCK: 72.0
+  IRON_NUGGET: 0.96
+  COPPER_INGOT: 3.0
+  GOLD_INGOT: 12.0
+  GOLD_BLOCK: 108.0
+  GOLD_NUGGET: 1.35
+  REDSTONE: 1.0
+  LAPIS_LAZULI: 2.0
+  DIAMOND: 100.0
+  EMERALD: 30.0
+  NETHERITE_INGOT: 1500.0
+  NETHERITE_SCRAP: 360.0
+  QUARTZ: 2.0
+  STRING: 1.0
+  LEATHER: 3.0
+  BONE: 1.0
+  WHEAT: 0.5
+  SUGAR_CANE: 0.5
+fallback:
+  bloecke: 3.0
+  materialien: 10.0
+  ausruestung: 25.0
+  nahrung: 5.0
+  technik: 15.0
+  default: 10.0

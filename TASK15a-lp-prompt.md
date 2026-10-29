@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack. bot\ NICHT anfassen. NUR LuckPerms-Migration, nichts anderes.
+LuckPerms auf Lobby und Survival von lokaler H2 auf gemeinsame MariaDB (Container craftcore-db, eigene Datenbank luckperms, eigener DB-User, Zugang nur in .env) umstellen; LuckPerms-Velocity installieren und an dieselbe DB haengen; Messaging-Service sql aktivieren. Vorher /lp export auf Lobby, danach /lp import, pruefen dass NwebNotFound in builder ist und OP/Gruppen erhalten sind. Gruppe vip anlegen. Lobby, Survival, Velocity neu starten, Logs pruefen, STATUS.md.

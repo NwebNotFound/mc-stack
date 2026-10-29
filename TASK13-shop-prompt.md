@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack, Plugin plugins-src\craftcore. bot\ NICHT anfassen. NUR Spielershops. Lies STATUS.md.
+/shop (GUI aller Angebote), /shop sell <preis> (Item in der Hand wird angeboten), /shop <spieler>, /shop cancel. Items liegen als Escrow in der DB (Journal-Muster wie die Bank in task12: erst Item entfernen + Journal-Zeile, dann Listing; Kauf: CP-Transfer und Listing-Status atomar in einer Tx, dann Auslieferung, offene Auslieferungen beim Join). Atomarer Status-Wechsel gegen Doppelkauf. Tests, bauen, Survival neu starten, STATUS.md.

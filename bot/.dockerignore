@@ -1,0 +1,6 @@
+.env
+data
+__pycache__
+*.pyc
+plugin/target
+codex-bot-log.txt

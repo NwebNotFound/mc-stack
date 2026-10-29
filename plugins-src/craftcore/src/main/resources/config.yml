@@ -1,0 +1,130 @@
+claim-cost: 100.0
+home-slot-prices:
+  2: 2000
+  3: 5000
+  4: 12000
+  5: 25000
+teleport-seconds: 10
+grave-despawn-minutes: 1440
+
+market:
+  base-factor: 0.5
+  sell-factor: 0.25
+  buy-factor: 1.5
+  minimum-factor: 0.2
+  maximum-factor: 3.0
+  # Absolute Grenzen des dynamischen Kurses in CP.
+  min-price:
+    IRON_INGOT: 2
+    IRON_BLOCK: 18
+    RAW_IRON: 2.5
+    GOLD_INGOT: 3
+    DIAMOND: 250
+    DIAMOND_BLOCK: 2250
+    NETHERITE_INGOT: 3750
+    EMERALD: 7.5
+    REDSTONE: 0.25
+    OAK_LOG: 0.25
+    STONE: 0.05
+    BREAD: 0.4125
+    COOKED_BEEF: 1.375
+    RAW_IRON_BLOCK: 3.72
+  max-price:
+    IRON_INGOT: 5.07
+    IRON_BLOCK: 108
+    RAW_IRON: 2.5
+    GOLD_INGOT: 6.03
+    DIAMOND: 1500
+    DIAMOND_BLOCK: 13500
+    NETHERITE_INGOT: 22500
+    EMERALD: 19.83
+    REDSTONE: 0.67
+    OAK_LOG: 1.5
+    STONE: 0.07
+    BREAD: 0.87
+    COOKED_BEEF: 3.03
+    COAL: 0.67
+    COAL_BLOCK: 5.43
+    COPPER_BLOCK: 16.23
+    COPPER_INGOT: 1.99
+    EMERALD_BLOCK: 405.03
+    GLASS: 0.15
+    GOLD_BLOCK: 162.03
+    GOLD_NUGGET: 2.03
+    HAY_BLOCK: 2.55
+    IRON_NUGGET: 1.35
+    LAPIS_BLOCK: 10.83
+    LAPIS_LAZULI: 1.35
+    OAK_PLANKS: 0.39
+    REDSTONE_BLOCK: 13.35
+    STICK: 0.11
+    WHEAT: 0.35
+  pressure-factor: 0.01
+  recovery-per-hour: 0.01
+  reset-zone: Europe/Berlin
+  reset-hour: 5
+  daily-limit: 512
+  # Stueck pro Material und Markttag; je Discord-Verknuepfung oder UUID.
+  daily-buy-limit: 512
+  daily-buy-limits: {}
+  # Gesamte Verkaufserloese pro Spieler und Markttag in CP.
+  daily-revenue-limit: 1500.0
+  tier1-after: 64
+  tier1-factor: 0.5
+  tier2-after: 256
+  tier2-factor: 0.2
+  # Unkaufbare Gegenstaende bleiben im Spielerhandel und ggf. Bankverkauf zulaessig.
+  unbuyable: [ELYTRA, NETHERITE_INGOT, NETHERITE_SCRAP, NETHERITE_BLOCK, NETHERITE_SWORD, NETHERITE_PICKAXE, NETHERITE_AXE, NETHERITE_SHOVEL, NETHERITE_HOE, NETHERITE_HELMET, NETHERITE_CHESTPLATE, NETHERITE_LEGGINGS, NETHERITE_BOOTS, NETHERITE_UPGRADE_SMITHING_TEMPLATE, TOTEM_OF_UNDYING, DRAGON_EGG, BEACON, NETHER_STAR, HEAVY_CORE, TRIDENT, ENCHANTED_GOLDEN_APPLE, MACE, DRAGON_HEAD, SHULKER_SHELL, DIAMOND, DIAMOND_BLOCK, DIAMOND_ORE, DEEPSLATE_DIAMOND_ORE, DIAMOND_SWORD, DIAMOND_PICKAXE, DIAMOND_AXE, DIAMOND_SHOVEL, DIAMOND_HOE, DIAMOND_HELMET, DIAMOND_CHESTPLATE, DIAMOND_LEGGINGS, DIAMOND_BOOTS, DIAMOND_HORSE_ARMOR, ANCIENT_DEBRIS, SHULKER_BOX, ENCHANTED_BOOK, EXPERIENCE_BOTTLE, HEART_OF_THE_SEA, WHITE_SHULKER_BOX, ORANGE_SHULKER_BOX, MAGENTA_SHULKER_BOX, LIGHT_BLUE_SHULKER_BOX, YELLOW_SHULKER_BOX, LIME_SHULKER_BOX, PINK_SHULKER_BOX, GRAY_SHULKER_BOX, LIGHT_GRAY_SHULKER_BOX, CYAN_SHULKER_BOX, PURPLE_SHULKER_BOX, BLUE_SHULKER_BOX, BROWN_SHULKER_BOX, GREEN_SHULKER_BOX, RED_SHULKER_BOX, BLACK_SHULKER_BOX]
+  # Basis und absolute Untergrenze in CP pro Stueck, auch nach Tagesstaffel.
+  valuable-base:
+    DIAMOND: 500.0
+    DIAMOND_BLOCK: 4500.0
+    NETHERITE_INGOT: 7500.0
+    NETHERITE_SCRAP: 1800.0
+    NETHERITE_BLOCK: 67500.0
+    BEACON: 12000.0
+    NETHER_STAR: 10000.0
+    ELYTRA: 15000.0
+  price-floor:
+    DIAMOND: 100.0
+    DIAMOND_BLOCK: 900.0
+    NETHERITE_INGOT: 1500.0
+    NETHERITE_SCRAP: 360.0
+    NETHERITE_BLOCK: 13500.0
+    BEACON: 2400.0
+    NETHER_STAR: 2000.0
+    ELYTRA: 3000.0
+  unsellable: [COBBLESTONE, COBBLED_DEEPSLATE, DIRT, COARSE_DIRT, ROOTED_DIRT, NETHERRACK, ROTTEN_FLESH, KELP, DRIED_KELP, GRAVEL, SAND]
+
+auction:
+  duration-hours: 48
+  fee-basis-points: 500
+
+# Drei zufaellige Aufgaben je Zeitraum; identische Konfiguration auf beiden Backends.
+challenges:
+  zone: Europe/Berlin
+  reset-hour: 5
+  daily:
+    sheep: {type: KILL_SHEEP, title: "5 Schafe toeten", goal: 5, cp: 30, points: 10}
+    nether: {type: WALK_NETHER, title: "1000 Bloecke im Nether laufen", goal: 1000, cp: 40, points: 10}
+    overworld: {type: WALK_NORMAL, title: "2000 Bloecke in der Overworld laufen", goal: 2000, cp: 40, points: 10}
+    iron: {type: MINE_IRON, title: "64 Eisenerz abbauen", goal: 64, cp: 50, points: 10}
+    zombies: {type: KILL_ZOMBIE, title: "20 Zombies toeten", goal: 20, cp: 40, points: 10}
+    fish: {type: FISH, title: "10 Fische fangen", goal: 10, cp: 30, points: 10}
+    trade: {type: TRADE, title: "5-mal mit Dorfbewohnern handeln", goal: 5, cp: 20, points: 10}
+  weekly:
+    sheep: {type: KILL_SHEEP, title: "30 Schafe toeten", goal: 30, cp: 150, points: 50}
+    nether: {type: WALK_NETHER, title: "5000 Bloecke im Nether laufen", goal: 5000, cp: 200, points: 50}
+    overworld: {type: WALK_NORMAL, title: "10000 Bloecke in der Overworld laufen", goal: 10000, cp: 200, points: 50}
+    iron: {type: MINE_IRON, title: "256 Eisenerz abbauen", goal: 256, cp: 300, points: 50}
+    zombies: {type: KILL_ZOMBIE, title: "100 Zombies toeten", goal: 100, cp: 200, points: 50}
+    fish: {type: FISH, title: "50 Fische fangen", goal: 50, cp: 200, points: 50}
+    trade: {type: TRADE, title: "30-mal mit Dorfbewohnern handeln", goal: 30, cp: 150, points: 50}
+
+invites:
+  reward-hours: 2
+  reward-cp: 500
+
+end-lock:
+  enabled: true
+  message: '&cDas End ist noch gesperrt - es wird spaeter als Event freigeschaltet!'

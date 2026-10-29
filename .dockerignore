@@ -1,0 +1,9 @@
+.env
+.env.*
+secrets/
+data/
+logs/
+tools/
+*.log
+codex-log.txt
+backups/

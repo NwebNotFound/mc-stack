@@ -1,0 +1,3 @@
+# Rueckkehr, wenn der Spieler diese Anzahl Bloecke unter dem letzten Checkpoint ist.
+fall-distance-below-checkpoint: 4.0
+# Mit /parkour setboard setzen. Koordinaten werden in dieser Datei gespeichert.

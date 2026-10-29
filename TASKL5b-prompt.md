@@ -1,0 +1,8 @@
+﻿AUFTRAG L5b (UMSETZEN, NICHT NUR PRUEFEN). Lies STATUS.md (Befund aus L5). bot\ nicht anfassen. Keine Kosten. Vor Neustart Backup. Am Ende bauen, testen, auf Lobby+Survival ausrollen, neu starten, STATUS.md aktualisieren. Perfektion ist NICHT das Ziel: ein restliches theoretisches Risiko im Millisekundenfenster eines harten Absturzes ist fuer 15 Freunde akzeptabel; dokumentiere es, aber BAUE die Loesung.
+1) Tabelle pending_deliveries(id, player_uuid, item_nbt, amount, source, created_at, status offen/geliefert). Alle Kaeufe/Auszahlungen von Items (Shop, AH, Bank-Kauf, abgelaufene AH-Angebote) schreiben die Lieferung in DERSELBEN DB-Transaktion wie die Geldbuchung. Kein direktes addItem mehr.
+2) /abholen (und automatisch beim Join + Hinweis): liefert offene Lieferungen ins Inventar, nur soweit Platz ist, setzt sie in der DB auf geliefert und ruft direkt danach player.saveData(). Lieferung per UPDATE ... WHERE status='offen' (betroffene Zeilen pruefen), damit sie nie doppelt kommt.
+3) Verkauf/Listen: Items zuerst aus dem Inventar entfernen, dann DB-Commit; bei DB-Fehler Items sofort zurueckgeben (bzw. als Lieferung eintragen).
+4) /pay, Bank und Vault-Buchungen: SELECT ... FOR UPDATE bzw. atomare UPDATE balance=balance-? WHERE balance>=? in einer Transaktion.
+5) Trade: angebotene Items beim Schliessen, Disconnect und Plugin-Disable zurueckgeben (notfalls als Lieferung).
+6) Windows-Aufgabe MCStack-Backup taeglich 04:50: Welten + mariadb-dump nach backups\<datum>, 7 Tage behalten. Im Modus online statt Dev-Reset nur sauberer Neustart.
+Tests fuer Doppel-Lieferung und Ueberziehung.

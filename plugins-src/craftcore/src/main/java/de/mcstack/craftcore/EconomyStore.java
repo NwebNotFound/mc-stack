@@ -1,0 +1,6 @@
+package de.mcstack.craftcore;
+import java.sql.*;
+final class EconomyStore {
+ static boolean change(Connection c,String id,long delta)throws SQLException {try(PreparedStatement q=c.prepareStatement("INSERT IGNORE INTO accounts(uuid,balance) VALUES(?,0)")){q.setString(1,id);q.executeUpdate();}long b;try(PreparedStatement q=c.prepareStatement("SELECT balance FROM accounts WHERE uuid=? FOR UPDATE")){q.setString(1,id);try(ResultSet r=q.executeQuery()){if(!r.next())throw new SQLException("Konto fehlt");b=r.getLong(1);}}long n=Math.addExact(b,delta);if(n<0)return false;try(PreparedStatement q=c.prepareStatement("UPDATE accounts SET balance=? WHERE uuid=?")){q.setLong(1,n);q.setString(2,id);q.executeUpdate();}return true;}
+ static boolean transfer(Connection c,String from,String to,long amount)throws SQLException {if(amount<=0||from.equals(to))return false;for(String id:from.compareTo(to)<0?new String[]{from,to}:new String[]{to,from}){try(PreparedStatement q=c.prepareStatement("INSERT IGNORE INTO accounts(uuid,balance) VALUES(?,0)")){q.setString(1,id);q.executeUpdate();}try(PreparedStatement q=c.prepareStatement("SELECT balance FROM accounts WHERE uuid=? FOR UPDATE")){q.setString(1,id);try(ResultSet r=q.executeQuery()){if(!r.next())throw new SQLException("Konto fehlt");}}}if(!change(c,from,-amount))return false;change(c,to,amount);return true;}
+}

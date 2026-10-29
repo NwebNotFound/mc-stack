@@ -1,0 +1,2 @@
+﻿Arbeitsverzeichnis C:\Users\nilsw\mc-stack. bot\ NICHT anfassen. Lies STATUS.md und die vollstaendige Spezifikation in TASK22-npc-mine-prompt.md (alle AENDERUNGEN haben Vorrang). Mach NUR den folgenden Teil, den aber vollstaendig und lauffaehig; Tests, bauen, betroffene Server neu starten, STATUS.md aktualisieren.
+Teil D: Loot-Tabellen mit /mr loot edit als GUI und YAML, Seltenheitsstufen, Puzzle-Etagen (ca. 2 pro Run), MineRush-Challenges und Leaderboard pro Partygroesse.

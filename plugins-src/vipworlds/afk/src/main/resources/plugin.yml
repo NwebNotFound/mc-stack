@@ -1,0 +1,5 @@
+name: VipWorldsAFK
+version: 1.0.0
+main: dev.mcstack.afk.AfkPlugin
+api-version: '1.21'
+description: Configurable inactivity handling for Paper servers

@@ -1,0 +1,8 @@
+# The image copies this to /data/config and resolves the mounted secret.
+proxies:
+  bungee-cord:
+    online-mode: false
+  velocity:
+    enabled: true
+    online-mode: true
+    secret: '${CFG_FORWARDING_SECRET}'

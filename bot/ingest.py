@@ -1,0 +1,609 @@
+"""Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
+import asyncio, json, logging, os, time
+import aiohttp
+
+log = logging.getLogger("creepy.ingest")
+URL = os.getenv("MC_INGEST_URL", "https://nwebnotfound.dev/api/mc-ingest")
+INTERVAL = 300
+STAT_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
+RENAME = {"playtime_s": "playtime"}
+
+
+def build_links(rows, has_role):
+    """rows: (discord_id, uuid, name, state); has_role: callable(discord_id)->bool"""
+    out = []
+    for did, uuid, name, state in rows[:200]:
+        out.append({"discord_id": str(did), "mc_name": name, "mc_uuid": uuid,
+                    "has_role": bool(has_role(did)), "verified": state in ("active", "adding")})
+    return out
+
+
+def build_stats(cols, rows):
+    """cols: Spaltennamen aus v_player_stats; nur bekannte Felder, playtime_s -> playtime."""
+    out = {}
+    for row in rows[:200]:
+        r = dict(zip(cols, row))
+        uuid = r.get("uuid")
+        if not uuid:
+            continue
+        s = {}
+        for f in STAT_FIELDS:
+            v = r.get(f)
+            if v is None:
+                continue
+            try:
+                v = float(v)
+                v = int(v) if v.is_integer() else round(v, 2)
+            except (TypeError, ValueError):
+                continue
+            s[RENAME.get(f, f)] = v
+        out[str(uuid)] = s
+    return out
+
+
+LB_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
+
+
+def _num(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(v) if v.is_integer() else round(v, 2)
+
+
+def build_leaderboards(cols, rows):
+    """Top 10 absteigend je Feld; NULL ignoriert; playtime_s -> playtime."""
+    out = {}
+    for f in LB_FIELDS:
+        entries = []
+        for row in rows:
+            r = dict(zip(cols, row))
+            name, v = r.get("mc_name") or r.get("name"), _num(r.get(f))
+            if name and v is not None:
+                entries.append({"name": str(name)[:16], "value": v})
+        entries.sort(key=lambda e: e["value"], reverse=True)
+        if entries:
+            out[RENAME.get(f, f)] = entries[:10]
+    return out
+
+
+LB_KEYS = ("money", "playtime", "blocks_mined", "kills", "kd", "distance")
+MAX_DETAILS = 16 * 1024
+
+
+def fallback_leaderboards(cols, rows):
+    """Aus v_player_stats: money, playtime, blocks_mined, kills, kd (kills/deaths)."""
+    lb = build_leaderboards(cols, rows)
+    lb.pop("deaths", None)
+    kd = []
+    for row in rows:
+        r = dict(zip(cols, row))
+        k, d, name = _num(r.get("kills")), _num(r.get("deaths")), r.get("mc_name")
+        if name and k is not None and d is not None:
+            kd.append({"name": str(name)[:16], "value": round(k / max(d, 1), 2)})
+    kd.sort(key=lambda e: e["value"], reverse=True)
+    if kd:
+        lb["kd"] = kd[:10]
+    return lb
+
+
+def view_leaderboards(cols, rows):
+    """v_leaderboards (board|category, period all|week, rank, uuid, name|mc_name, value) -> (all, week)."""
+    res = {"all": {}, "week": {}}
+    for row in rows:
+        r = dict(zip(cols, row))
+        cat = str(r.get("board") or r.get("category") or "").lower()
+        per = {"weekly": "week", "total": "all"}.get(str(r.get("period") or "").lower(), str(r.get("period") or "").lower())
+        v, name = _num(r.get("value")), r.get("name") or r.get("mc_name")
+        if cat in LB_KEYS and per in res and name and v is not None:
+            res[per].setdefault(cat, []).append((_num(r.get("rank")) or 999, {"name": str(name)[:16], "value": v}))
+    out = []
+    for per in ("all", "week"):
+        d = {}
+        for cat, lst in res[per].items():
+            lst.sort(key=lambda t: (-t[1]["value"], t[0]))
+            d[cat] = [e for _, e in lst[:10]]
+        out.append(d)
+    return out[0], out[1]
+
+
+DETAIL_MAPS = {"blocks_mined": "mined", "mined": "mined", "blocks_placed": "placed", "placed": "placed",
+               "kills_entity": "killed", "killed": "killed", "deaths_entity": "deaths_by", "deaths_by": "deaths_by",
+               "crafted": "crafted", "playtime_by_world": "playtime_by_world", "distance_cm": "distance_m", "distance_m": "distance_m"}
+
+
+def map_details(d):
+    """Crafts details-Keys auf INGEST.md abbilden (blocks_mined->mined, kills_entity->killed, deaths_entity->deaths_by,
+    distance_cm->distance_m in Metern), IDs ohne minecraft:, max. 25 groesste je Map, Zahlen >= 0."""
+    out = {}
+    for k, v in d.items():
+        key = DETAIL_MAPS.get(k)
+        if key and isinstance(v, dict):
+            m = {}
+            for i, n in v.items():
+                n = _num(n)
+                if n is None or n < 0:
+                    continue
+                if k == "distance_cm":
+                    n = _num(n / 100)
+                m[_item(i)] = n
+            m = dict(sorted(m.items(), key=lambda e: -e[1])[:25])
+            out.setdefault(key, {}).update(m)
+        elif not isinstance(v, (dict, list)):
+            n = _num(v)
+            if n is not None and n >= 0:
+                out[k] = n
+    return out
+
+
+def parse_details(raw):
+    """details-JSON absichern: dict, <=16 KB, sonst None."""
+    if raw is None:
+        return None
+    try:
+        d = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    d = map_details(d)
+    if len(json.dumps(d, separators=(",", ":"))) > MAX_DETAILS:
+        log.info("details > 16 KB verworfen")
+        return None
+    return d
+
+# ---------- Markt (Phase 4) ----------
+MARKET_FIELDS = ("buy_price", "sell_price", "base_price", "volume_24h_qty", "volume_24h_cp", "trades_24h", "change_24h_pct", "updated_at")
+HIST_FIELDS = ("avg_price", "min_price", "max_price", "volume_qty")
+HIST_MAX_ROWS = 60000
+MAX_BYTES = 7_500_000  # Puffer unter 8 MB
+BACKFILL_S = 90 * 86400
+_hist_state = {"since": None}  # Stundenbeginn des letzten erfolgreichen History-Pushs
+
+
+def _item(v):
+    v = str(v or "").strip().lower()
+    return v[10:] if v.startswith("minecraft:") else v
+
+
+def _ts(v):
+    if hasattr(v, "timestamp"):
+        return int(v.timestamp())
+    n = _num(v)
+    if n is None:
+        return None
+    return int(n // 1000) if n > 10_000_000_000 else int(n)
+
+
+def build_market(cols, rows):
+    out, seen = [], set()
+    for row in rows:
+        r = dict(zip(cols, row))
+        it = _item(r.get("item"))
+        if not it or it in seen:
+            continue
+        seen.add(it)
+        e = {"item": it}
+        for f in MARKET_FIELDS:
+            v = _ts(r.get(f)) if f == "updated_at" else _num(r.get(f))
+            if v is not None:
+                e[f] = v
+        out.append(e)
+        if len(out) >= 2000:
+            break
+    return out
+
+
+def build_history(cols, rows, since, now):
+    """Zeilen mit hour_ts >= since (und nicht aelter als 90 T), nach Zeit sortiert."""
+    lo = max(since, now - BACKFILL_S)
+    out = []
+    for row in rows:
+        r = dict(zip(cols, row))
+        it, ts = _item(r.get("item")), _ts(r.get("hour_ts"))
+        if not it or ts is None or ts < lo or ts > now + 3600:
+            continue
+        e = {"item": it, "hour_ts": ts}
+        for f in HIST_FIELDS:
+            v = _num(r.get(f))
+            if v is not None:
+                e[f] = v
+        out.append(e)
+    out.sort(key=lambda e: (e["hour_ts"], e["item"]))
+    return out
+
+
+def chunk_history(entries, max_rows=HIST_MAX_ROWS, max_bytes=MAX_BYTES):
+    chunks, cur, size = [], [], 30
+    for e in entries:
+        n = len(json.dumps(e, separators=(",", ":"))) + 1
+        if cur and (len(cur) >= max_rows or size + n > max_bytes):
+            chunks.append(cur)
+            cur, size = [], 30
+        cur.append(e)
+        size += n
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+# ---------- servers ----------
+import re
+SERVER_KEYS = (("lobby", "LOBBY_HOST", "lobby"), ("survival", "SURVIVAL_HOST", "survival"),
+               ("vip1", "VIP1_HOST", None), ("vip2", "VIP2_HOST", None), ("vip3", "VIP3_HOST", None))
+_COLOR = re.compile(r"\u00a7.")
+
+
+def parse_list(out):
+    m = re.search(r"There are (\d+) of a max of (\d+) players online:?(.*)", _COLOR.sub("", out or ""), re.S)
+    if not m:
+        return None
+    names = [n.strip() for n in m.group(3).split(",") if n.strip()]
+    return {"players": names, "max": int(m.group(2))}
+
+
+def parse_tps(out):
+    m = re.search(r"TPS from last[^:]*:\s*\*?([\d.]+)", _COLOR.sub("", out or ""))
+    return min(float(m.group(1)), 20.0) if m else None
+
+
+def log_uptime(path, now=None):
+    try:
+        first = open(path, encoding="utf-8", errors="replace").readline()
+        hh, mm, ss = map(int, re.match(r"\[(\d+):(\d+):(\d+)\]", first).groups())
+    except Exception:
+        return None
+    now = now or time.time()
+    t = time.localtime(now)
+    start = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, hh, mm, ss, 0, 0, -1))
+    if start > now:
+        start -= 86400
+    return int(now - start)
+
+
+def server_entry(list_out, tps_out, mode=None, uptime=None, version=None):
+    info = parse_list(list_out) if list_out is not None else None
+    if not info:
+        e = {"online": False, "players": []}
+    else:
+        e = {"online": True, "players": info["players"], "max": info["max"]}
+        tps = parse_tps(tps_out)
+        if tps is not None:
+            e["tps"] = tps
+        if uptime is not None:
+            e["uptime_seconds"] = uptime
+        if version:
+            e["version"] = version
+    if mode:
+        e["mode"] = mode
+    return e
+
+
+def _rcon(host, cmd):
+    import bot as _b
+    try:
+        return _b.rcon(host, cmd)
+    except Exception:
+        return None
+
+
+def _version(host):
+    try:
+        from mcstatus import JavaServer
+        st = JavaServer.lookup(f"{host}:25565").status()
+        return re.sub(r"^\D+", "", st.version.name) or st.version.name
+    except Exception:
+        return None
+
+
+def collect_servers(mode=None):
+    out = {}
+    for key, env, default in SERVER_KEYS:
+        host = os.getenv(env, default or "")
+        if not host:
+            continue
+        lst = _rcon(host, "list")
+        if lst is None and default is None:
+            continue  # VIP-Welt nicht vorhanden
+        tps = _rcon(host, "tps") if lst is not None else None
+        up = log_uptime(f"/minecraft/{key}/logs/latest.log") if lst is not None else None
+        ver = _version(host) if lst is not None else None
+        out[key] = server_entry(lst, tps, mode, up, ver)
+    return out
+
+# ---------- Phase 5: shops / auctions ----------
+def _ms(v):
+    if hasattr(v, "timestamp"):
+        return int(v.timestamp() * 1000)
+    n = _num(v)
+    if n is None:
+        return None
+    return int(n) if n > 10_000_000_000 else int(n * 1000)
+
+
+def build_shops(cols, rows):
+    """v_shop_listings -> ein Shop pro Verkaeufer (id = seller_uuid), ein Item-Eintrag pro Angebot mit listing_id; price = Cent pro Stueck."""
+    import buy
+    shops = {}
+    for row in rows:
+        r = dict(zip(cols, row))
+        sid = str(r.get("seller_uuid") or r.get("seller") or "").lower()
+        it = _item(r.get("item_material") or r.get("material"))
+        amount = int(_num(r.get("amount")) or 0)
+        if not sid or not it or amount <= 0 or r.get("price_cents") is None:
+            continue
+        unit = buy.unit_cents(r["price_cents"], amount)
+        s = shops.setdefault(sid, {"id": sid, "owner_uuid": sid, "owner_name": str(r.get("seller_name") or ""),
+                                   "name": f"Shop von {r.get('seller_name') or '?'}", "items": {}})
+        lid = r.get("id") or r.get("listing_id")
+        if lid is None:
+            continue
+        s["items"][str(lid)] = {"listing_id": str(lid), "item": it, "price": unit, "stock": amount, "mode": "sell"}
+    now = int(time.time() * 1000)
+    out = []
+    for s in shops.values():
+        s["items"] = sorted(s["items"].values(), key=lambda e: (e["item"], e["price"], e["listing_id"]))
+        s["updated_at"] = now
+        out.append(s)
+    return out
+
+
+A_ALIASES = {"id": ("id", "auction_id"), "seller_uuid": ("seller_uuid", "seller"), "seller_name": ("seller_name",),
+             "item": ("item", "material", "item_material"), "amount": ("menge", "amount"), "nbt_summary": ("nbt_summary",),
+             "min_price": ("min_price", "min_price_cents", "start_price_cents"), "current_bid": ("current_bid", "current_bid_cents"),
+             "current_bidder_name": ("current_bidder_name",), "current_bidder": ("current_bidder",), "bid_count": ("bid_count",),
+             "ends_at": ("ends_at", "ends_at_ms", "expires_at_ms"), "status": ("status",)}
+
+
+def norm(u):
+    u = str(u or "").lower().replace("-", "")
+    return f"{u[:8]}-{u[8:12]}-{u[12:16]}-{u[16:20]}-{u[20:]}" if len(u) == 32 else u
+
+
+def _pick(r, keys):
+    for k in keys:
+        if r.get(k) is not None:
+            return r[k]
+    return None
+
+
+def _raw(v):
+    """ganze Cent / ms als int, NULL bleibt None"""
+    if v is None or isinstance(v, (bool, int, str)):
+        return v
+    if hasattr(v, "timestamp"):
+        return int(v.timestamp() * 1000)
+    n = _num(v)
+    return int(n) if n is not None and n == int(n) else (n if n is not None else str(v))
+
+
+def raw_auctions(au, ab, names=None):
+    """Top-Level v_auctions / v_auction_bids fuer den Ingest: alle aktuellen Zeilen (auch leer), Spalten 1:1, NULL bleibt null."""
+    names = {str(k).lower(): v for k, v in (names or {}).items()}
+    auctions = []
+    for row in au[1]:
+        r = {c: _raw(v) for c, v in zip(au[0], row)}
+        for c in ("id", "seller", "current_bidder"):
+            if r.get(c) is not None:
+                r[c] = str(r[c]).lower() if c != "id" else str(r[c])
+        if r.get("seller") and names.get(r["seller"]):
+            r["seller_name"] = names[r["seller"]]
+        if r.get("current_bidder") and names.get(r["current_bidder"]):
+            r["current_bidder_name"] = names[r["current_bidder"]]
+        auctions.append(r)
+    bids = []
+    for row in (ab[1] if ab else ()):
+        r = {c: _raw(v) for c, v in zip(ab[0], row)}
+        for c in ("id", "auction_id"):
+            if r.get(c) is not None:
+                r[c] = str(r[c])
+        if r.get("bidder") is not None:
+            r["bidder"] = str(r["bidder"]).lower()
+        bids.append(r)
+    return auctions, bids
+
+
+def build_auctions(cols, rows, bcols=None, brows=(), names=None):
+    """v_auctions + v_auction_bids -> INGEST-Schema; UUIDs (seller/current_bidder/bidder) per names {uuid: name} aufloesen."""
+    names = {str(k).lower(): v for k, v in (names or {}).items()}
+    nm = lambda u: names.get(str(u or "").lower(), "")
+    bids = {}
+    for row in brows or ():
+        b = dict(zip(bcols, row))
+        aid = str(_pick(b, ("auction_id",)) or "")
+        amt = _num(_pick(b, ("amount", "amount_cents")))
+        if aid and amt is not None:
+            bids.setdefault(aid, []).append({"name": str(_pick(b, ("name", "bidder_name")) or nm(b.get("bidder"))), "amount": int(amt),
+                                             "at": _ms(_pick(b, ("at", "created_at", "created_at_ms")))})
+    out = []
+    for row in rows:
+        r = dict(zip(cols, row))
+        a = {k: _pick(r, ks) for k, ks in A_ALIASES.items()}
+        if a["id"] is None or not a["item"]:
+            continue
+        a["id"] = str(a["id"]); a["item"] = _item(a["item"])
+        for k in ("amount", "min_price", "current_bid", "bid_count"):
+            if a[k] is not None:
+                a[k] = int(_num(a[k]) or 0)
+        a["ends_at"] = _ms(a["ends_at"])
+        a["seller_uuid"] = str(a["seller_uuid"]).lower() if a["seller_uuid"] else None
+        a["seller_name"] = a["seller_name"] or nm(a["seller_uuid"]) or None
+        cb = a.pop("current_bidder")
+        a["current_bidder_name"] = a["current_bidder_name"] or nm(cb) or None
+        st = str(a["status"] or "active").lower()
+        st = {"open": "active", "running": "active", "canceled": "cancelled", "expired": "ended", "sold": "ended", "closed": "ended"}.get(st, st)
+        a["status"] = st if st in ("active", "ended", "cancelled") else "active"
+        if a["status"] == "active" and a.get("ends_at") and a["ends_at"] < time.time() * 1000:
+            a["status"] = "ended"
+        a = {k: v for k, v in a.items() if v is not None}
+        bl = sorted(bids.get(a["id"], []), key=lambda b: -b["amount"])
+        a["bids"] = [{k: v for k, v in b.items() if v is not None} for b in bl]
+        out.append(a)
+    return out
+
+
+def fetch_rows(view):
+    """(cols, rows) aus einer View, None wenn nicht lesbar."""
+    return _fetch(view)
+
+
+def _fetch(view):
+    import pymysql
+    pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+    if not pw:
+        return None
+    try:
+        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
+                              password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
+    except Exception:
+        return None
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM " + view)
+            return [d[0] for d in cur.description], cur.fetchall()
+    except Exception as e:
+        log.info("%s nicht verfuegbar (%s)", view, type(e).__name__)
+        return None
+    finally:
+        con.close()
+
+
+def build_payload(bot):
+    rows = bot.db.execute("SELECT discord_id, uuid, name, state FROM links WHERE state != 'pending'").fetchall()
+    guild = bot.get_guild(int(bot.cfg["GUILD_ID"]))
+    rid = int(bot.cfg["PLAYER_ROLE_ID"])
+
+    def has_role(did):
+        m = guild.get_member(int(did)) if guild else None
+        return bool(m and any(r.id == rid for r in m.roles))
+
+    payload = {"links": build_links(rows, has_role), "links_full": True}
+    return payload
+
+
+async def push_once(bot, session=None):
+    token = os.getenv("MC_INGEST_TOKEN", "").strip()
+    if not token:
+        log.warning("MC_INGEST_TOKEN fehlt - kein Push")
+        return None
+    payload = build_payload(bot)
+    res = await asyncio.to_thread(fetch_rows, "v_player_stats")
+    if res:
+        stats = build_stats(*res)
+        if stats:
+            payload["players_stats"] = stats
+        lbv = await asyncio.to_thread(fetch_rows, "v_leaderboards")
+        if lbv:
+            lb_all, lb_week = view_leaderboards(*lbv)
+            if lb_week:
+                payload["leaderboards_weekly"] = lb_week
+        else:
+            lb_all = fallback_leaderboards(*res)
+        if lb_all:
+            payload["leaderboards"] = lb_all
+        ext = await asyncio.to_thread(fetch_rows, "v_player_stats_ext")
+        if ext and stats:
+            for row in ext[1]:
+                r = dict(zip(ext[0], row))
+                d = parse_details(r.get("details"))
+                if d and str(r.get("uuid")) in stats:
+                    stats[str(r.get("uuid"))]["details"] = d
+    try:
+        mode = await asyncio.to_thread(bot.server_mode)
+    except Exception:
+        mode = None
+    servers = await asyncio.to_thread(collect_servers, mode)
+    if servers:
+        payload["servers"] = servers
+    sh = await asyncio.to_thread(fetch_rows, "v_shop_listings")
+    if sh:
+        payload["shops"] = build_shops(*sh)
+    au = await asyncio.to_thread(fetch_rows, "v_auctions")
+    if au:
+        ab = await asyncio.to_thread(fetch_rows, "v_auction_bids")
+        names = {str(u).lower(): n for u, n in bot.db.execute("SELECT uuid, name FROM links WHERE name IS NOT NULL").fetchall()}
+        names.update({norm(u): n for u, n in names.items()})
+        payload["auctions"] = build_auctions(*au, *(ab or (None, ())), names=names)
+        payload["v_auctions"], payload["v_auction_bids"] = raw_auctions(au, ab, names)
+    mk = await asyncio.to_thread(fetch_rows, "v_market")
+    if mk:
+        payload["market"] = build_market(*mk)
+    own = session is None
+    session = session or aiohttp.ClientSession()
+    try:
+        result = await _post(session, token, payload, "Ingest-Push")
+        await push_history(session, token)
+        return result
+    finally:
+        if own:
+            await session.close()
+
+
+async def _post(session, token, payload, label):
+    async with session.post(URL, json=payload, headers={"x-ingest-token": token},
+                            timeout=aiohttp.ClientTimeout(total=120)) as r:
+        body = (await r.text())[:300]
+        if r.status < 300:
+            log.info("%s HTTP %s: %s", label, r.status, body)
+        else:
+            log.warning("%s HTTP %s: %s", label, r.status, body)
+        return r.status, body
+
+
+async def push_history(session, token, now=None):
+    """Erster Lauf: Backfill 90 T in Teilen; danach nur Stunden seit letztem Erfolg inkl. laufender Stunde."""
+    hist = await asyncio.to_thread(fetch_rows, "v_market_history")
+    if not hist:
+        return None
+    now = int(now or time.time())
+    since = _hist_state["since"] if _hist_state["since"] is not None else 0
+    entries = build_history(*hist, since, now)
+    ok = True
+    for i, chunk in enumerate(chunk_history(entries)):
+        st, _ = await _post(session, token, {"market_history": chunk}, "Markt-History %d" % (i + 1))
+        if st >= 300:
+            ok = False
+            break
+    if ok:
+        _hist_state["since"] = now - now % 3600
+    return ok
+
+SERVERS_INTERVAL = 60
+
+
+async def push_servers(bot, session):
+    token = os.getenv("MC_INGEST_TOKEN", "").strip()
+    if not token:
+        return None
+    try:
+        mode = await asyncio.to_thread(bot.server_mode)
+    except Exception:
+        mode = None
+    servers = await asyncio.to_thread(collect_servers, mode)
+    if not servers:
+        return None
+    return await _post(session, token, {"servers": servers}, "Servers-Push")
+
+
+async def servers_loop(bot):
+    await bot.wait_until_ready()
+    async with aiohttp.ClientSession() as session:
+        while not bot.is_closed():
+            try:
+                await push_servers(bot, session)
+            except Exception as e:
+                log.warning("Servers-Push fehlgeschlagen: %s", type(e).__name__)
+            await asyncio.sleep(SERVERS_INTERVAL)
+
+
+async def loop(bot):
+    asyncio.create_task(servers_loop(bot))
+    import relay
+    asyncio.create_task(relay.loop(bot))
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await push_once(bot)
+        except Exception as e:
+            log.warning("Ingest-Push fehlgeschlagen: %s", type(e).__name__)
+        await asyncio.sleep(INTERVAL)

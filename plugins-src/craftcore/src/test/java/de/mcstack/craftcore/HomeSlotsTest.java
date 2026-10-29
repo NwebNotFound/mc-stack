@@ -1,0 +1,10 @@
+package de.mcstack.craftcore;
+import java.sql.*;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+class HomeSlotsTest {
+ Connection setup(String name)throws Exception {Connection c=DriverManager.getConnection("jdbc:h2:mem:"+name+";MODE=MySQL;DB_CLOSE_DELAY=-1");try(Statement s=c.createStatement()){s.execute("CREATE TABLE homes(server VARCHAR(32),uuid VARCHAR(36),name VARCHAR(16))");s.execute("CREATE TABLE accounts(uuid VARCHAR(36) PRIMARY KEY,balance BIGINT)");s.execute("INSERT INTO accounts VALUES('p',3000000)");}HomeSlots.start(c);c.setAutoCommit(false);return c;}
+ long value(Connection c,String sql)throws Exception{try(ResultSet r=c.createStatement().executeQuery(sql)){assertTrue(r.next());return r.getLong(1);}}
+ @Test void purchaseStaleInsufficientAndLimit()throws Exception {try(Connection c=setup("slots1")){assertEquals(1,HomeSlots.lock(c,"survival","p"));assertTrue(HomeSlots.buy(c,"survival","p",1,200000).startsWith("Home-Slot gekauft"));assertTrue(HomeSlots.buy(c,"survival","p",1,200000).startsWith("Angebot"));assertEquals(2800000,value(c,"SELECT balance FROM accounts WHERE uuid='p'"));assertEquals("Nicht genug CP.",HomeSlots.buy(c,"survival","p",2,4000000));assertEquals(2,HomeSlots.lock(c,"survival","p"));assertTrue(HomeSlots.buy(c,"survival","p",2,500000).startsWith("Home-Slot gekauft"));assertTrue(HomeSlots.buy(c,"survival","p",3,1200000).startsWith("Home-Slot gekauft"));assertTrue(HomeSlots.buy(c,"survival","p",4,100000).startsWith("Home-Slot gekauft"));assertTrue(HomeSlots.buy(c,"survival","p",5,100000).startsWith("Angebot"));}}
+ @Test void rollbackAndExistingHomes()throws Exception {try(Connection c=setup("slots2")){try(Statement s=c.createStatement()){s.execute("INSERT INTO homes VALUES('survival','p','a'),('survival','p','b'),('survival','p','c')");}c.commit();assertEquals(3,HomeSlots.lock(c,"survival","p"));HomeSlots.buy(c,"survival","p",3,1200000);c.rollback();assertEquals(3000000,value(c,"SELECT balance FROM accounts WHERE uuid='p'"));assertEquals(3,HomeSlots.lock(c,"survival","p"));assertEquals(1,HomeSlots.lock(c,"other","p"));}}
+}

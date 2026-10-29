@@ -1,0 +1,12 @@
+name: LobbyJoinSpawn
+version: 1.0.0
+main: de.mcstack.lobbyjoinspawn.LobbyJoinSpawn
+api-version: '1.21'
+softdepend: [CraftCore]
+commands:
+  setlobbyspawn:
+    description: Setzt den Lobby-Spawn an die eigene Position.
+    permission: lobbyjoinspawn.set
+permissions:
+  lobbyjoinspawn.set:
+    default: op

@@ -1,0 +1,6 @@
+settings:
+  bungeecord: false
+advancements:
+  disable-saving: true
+  disabled:
+  - '*'

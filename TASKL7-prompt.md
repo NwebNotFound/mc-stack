@@ -1,0 +1,8 @@
+﻿AUFTRAG L7 (VOLLSTAENDIG umsetzen, bauen, testen, ausrollen; bot\ nicht anfassen; vor Neustart Backup; STATUS.md aktualisieren):
+1) Survival: Spieler spawnen beim ersten Join und beim Respawn ohne Bett/Anker zufaellig in ca. 100 Bloecken um den Weltspawn auf sicherem Boden (gamerule spawnRadius 100 ist bereits gesetzt; pruefen und ggf. eigenen sicheren Zufallsspawn ergaenzen). FORCE_GAMEMODE ist in compose.yaml gesetzt: Survival mit `docker compose up -d survival` neu erstellen, damit es greift.
+2) Locator-Bar (Spieler-Marker auf der XP-Leiste, Vanilla 1.21.6+): Spieler sehen dort NUR ihre Team-Mitglieder (CraftCore-Teams), sonst niemanden. Umsetzung z.B. ueber die Attribute waypoint_transmit_range/waypoint_receive_range bzw. Paper-API/Pakete; bei Teamwechsel sofort aktualisieren. Ohne Team: keine Marker.
+3) Team-Einladungen und Party-Einladungen (MineRush-Party, falls vorhanden) funktionieren serveruebergreifend fuer Spieler auf allen Servern/Welten hinter Velocity (Lobby, Survival, VIP): Namen aus allen Servern in Tab-Completion, Einladung kommt beim Ziel als klickbare Nachricht an, Annahme von jedem Server aus. Ueber die gemeinsame MariaDB und/oder Velocity-Plugin-Messaging.
+
+SPAWN-REGELN: Nur auf festem, natuerlichem Boden mit freiem Himmel (hoechster Block per Heightmap MOTION_BLOCKING_NO_LEAVES). NICHT auf Blaettern, nicht in Baeumen, nicht im Boden/in Hoehlen, nicht in Wasser oder Lava; zwei Luftbloecke ueber dem Fuss. Sonst neuen Punkt suchen.
+
+NEUSTART-REGEL (gilt ab sofort, ueberschreibt alle anderen Angaben): KEIN Neustart von Lobby, Survival oder Velocity. Nur bauen, testen und die neue Jar nach data\<server>\plugins\update\ legen (Paper uebernimmt sie beim naechsten Neustart). In STATUS.md notieren 'wartet auf Neustart'.

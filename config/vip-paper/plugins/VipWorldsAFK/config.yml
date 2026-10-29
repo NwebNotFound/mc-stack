@@ -1,0 +1,10 @@
+﻿# VIP-Server: Kick nach fuenf Minuten ohne Aktivitaet.
+mark-seconds: 0
+kick-seconds: 300
+check-interval-seconds: 5
+announce: false
+
+# Zusaetzliche Sicherung der geladenen Welten und Online-Spieler.
+save-interval-seconds: 300
+save-on-empty: true
+save-on-disable: true

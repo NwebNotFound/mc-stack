@@ -1,0 +1,4 @@
+﻿Lies STATUS.md. NUR diesen Punkt VOLLSTAENDIG im Code umsetzen, bauen, testen. Nicht bei Analyse aufhoeren; kleine Restrisiken dokumentieren statt abbrechen. bot\ nicht anfassen. KEIN Neustart: Jar nach data\<server>\plugins\update\, STATUS.md 'wartet auf Neustart'. Einfach halten, GUI-first.
+AUFTRAG L8: Warps ersetzen durch Teleport zu Teammitglied: /tpteam (bzw. Eintrag im /menu statt Warps) zeigt GUI mit Kopf der Online-Teammitglieder auf Survival; Klick sendet Anfrage, Ziel nimmt per Klick an; 3 s Stillstehen, 5 Min Cooldown, nicht im Kampf (10 s nach Schaden). Warp-Eintrag im Menue entfernen.
+
+ZUSAETZLICH: Nils meldet 'das Team-Feature ist weg'. Pruefe /team (Erstellen, Einladen, Verlassen, Menue) auf Survival und Lobby, repariere es und stelle sicher, dass es im /menu sichtbar ist. Gibt es kein /fly, ergaenze einfaches /fly nur fuer Permission craftcore.fly (Gruppe builder, nur server=lobby). Alles intuitiv: klare Meldungen, klickbare Buttons.
