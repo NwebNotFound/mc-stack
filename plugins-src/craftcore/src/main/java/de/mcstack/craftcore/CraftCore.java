@@ -77,7 +77,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Challenges(this,server).start();
       motivation=new Motivation(this); motivation.start();
       InviteRewards.start(this,SpawnRoute.isSurvival(server));
-      tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");return null;});
+      tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");exec(c,"CREATE OR REPLACE SQL SECURITY DEFINER VIEW v_rcon_purchase_result AS SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response FROM rcon_purchases");TestRun.prepare(c);return null;});
+      try { try (Connection grant=connection()) { if(!PurchaseViewGrant.apply(grant)) getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich"); } }
+      catch(Exception ex) { getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       Deliveries.start(this);
       SaleNotices.start(this);
       WebsiteStats.start(this);
@@ -184,6 +186,12 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(!line.prefix().equals(text)) line.prefix(text);
   }
   private Player target(String name) { return Bukkit.getPlayerExact(name); }
+  private static ShopBuyDispatch.Caller commandCaller(CommandSender sender) {
+    if(sender instanceof RemoteConsoleCommandSender) return ShopBuyDispatch.Caller.RCON;
+    if(sender instanceof ConsoleCommandSender) return ShopBuyDispatch.Caller.CONSOLE;
+    if(sender instanceof Player) return ShopBuyDispatch.Caller.PLAYER;
+    return ShopBuyDispatch.Caller.OTHER;
+  }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
     if (command.getName().equals("ah") && args.length>0 && args[0].equalsIgnoreCase("bid")) {
       RealAuctions.Request request=RealAuctions.parse(args);
@@ -196,18 +204,38 @@ public final class CraftCore extends JavaPlugin implements Listener {
       try {String uuid=UUID.fromString(args[1]).toString(); tx(c->{try(PreparedStatement st=c.prepareStatement("INSERT INTO discord_links(uuid,discord_id) VALUES (?,?) ON DUPLICATE KEY UPDATE discord_id=VALUES(discord_id)")){st.setString(1,uuid);st.setString(2,args[2]);st.executeUpdate();}return null;});sender.sendMessage("OK");}
       catch(Exception ex){getLogger().warning("cclink: "+ex.getClass().getSimpleName());sender.sendMessage("ERR INVALID");} return true;
     }
+    if(command.getName().equals("testrun")) {
+      TestRun.Sender who=sender instanceof RemoteConsoleCommandSender ? TestRun.Sender.RCON : sender instanceof ConsoleCommandSender ? TestRun.Sender.CONSOLE : sender instanceof Player ? TestRun.Sender.PLAYER : TestRun.Sender.OTHER;
+      long cents=-1;
+      if(args.length>=2 && args[1].matches("[0-9]+")) { try { cents=Long.parseLong(args[1]); } catch(NumberFormatException ex) { cents=-1; } }
+      Boolean configured=getConfig().contains("testrun.enabled") ? getConfig().getBoolean("testrun.enabled") : null;
+      TestRun.Result result=TestRun.decide(TestRun.enabled(configured), who, args.length>0 ? args[0] : "", cents, args.length>=3 ? args[2] : "");
+      String id=result.credit() ? TestRun.cacheId(result) : "";
+      TestRun.Dispatch dispatch=TestRun.dispatch(result, result.credit() ? ShopBuyDispatch.lookup(id, System.currentTimeMillis()) : null);
+      if(dispatch.start() && ShopBuyDispatch.beginId(id)) {
+        getServer().getScheduler().runTaskAsynchronously(this,()->{
+          String response=null;
+          try { response=tx(c->TestRun.apply(c,result)) ? "OK" : "ERR INVALID"; }
+          catch(Exception ex){getLogger().warning("testrun: "+ex.getClass().getSimpleName());}
+          finally { ShopBuyDispatch.finishId(id, response); }
+        });
+      }
+      sender.sendMessage(dispatch.line());
+      return true;
+    }
     if ((command.getName().equals("shop") || command.getName().equals("ah")) && args.length>0 && args[0].equalsIgnoreCase("buy")) {
-      if (!(sender instanceof org.bukkit.command.ConsoleCommandSender || sender instanceof org.bukkit.command.RemoteConsoleCommandSender) || !SpawnRoute.isSurvival(server)) { sender.sendMessage("ERR INVALID"); return true; }
-      RconPurchase.Request request=RconPurchase.parse(command.getName(),args);
-      if(request==null){sender.sendMessage("ERR INVALID");return true;}
-      getServer().getScheduler().runTaskAsynchronously(this,()->{
-        String response;
-        try { response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
-          ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item)); stack.setAmount(amount); return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
-        },getConfig().getInt("auction.fee-basis-points",500))); }
-        catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);response="ERR INVALID";}
-        sender.sendMessage(response);
-      });
+      ShopBuyDispatch.Caller who=commandCaller(sender);
+      ShopBuyDispatch.complete(who, SpawnRoute.isSurvival(server), command.getName(), args, ShopBuyDispatch::stored, request -> {
+        if(!ShopBuyDispatch.begin(request)) return;
+        getServer().getScheduler().runTaskAsynchronously(this,()->{
+          String response=null;
+          try { response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
+            ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item)); stack.setAmount(amount); return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
+          },getConfig().getInt("auction.fee-basis-points",500))); }
+          catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);}
+          finally { ShopBuyDispatch.finish(request, response); }
+        });
+      }, sender::sendMessage);
       return true;
     }
     if(!(sender instanceof Player p)) { sender.sendMessage("Nur fÃƒÂ¼r Spieler."); return true; }

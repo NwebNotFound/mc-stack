@@ -37,6 +37,7 @@ final class RealAuctions {
   try(PreparedStatement s=c.prepareStatement("SELECT seller,min_price,current_bid,current_bidder,ends_at,status FROM auctions WHERE id=? FOR UPDATE")){s.setLong(1,req.auction());try(ResultSet r=s.executeQuery()){if(!r.next())return "ERR NOT_FOUND";seller=r.getString(1);min=r.getLong(2);current=r.getLong(3);old=r.getString(4);end=r.getLong(5);status=r.getString(6);}}
   if(!status.equals("OPEN")||end<=now)return "ERR NOT_FOUND";
   if(seller.equals(req.bidder())){alert(c,req,now,"SELF_BID");return "ERR SELF_BID";}
+  if(TestRun.fakeUuid(req.bidder())!=null && TestRun.fakeUuid(seller)==null)return "ERR INVALID";
   // Lock both link rows in deterministic order, preventing cclink updates during the check.
   String first=seller.compareTo(req.bidder())<0?seller:req.bidder(),second=first.equals(seller)?req.bidder():seller;
   String a=DiscordRevenue.owner(c,first,true),b=DiscordRevenue.owner(c,second,true);

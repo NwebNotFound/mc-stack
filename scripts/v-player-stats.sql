@@ -7,3 +7,9 @@ FROM craftcore.known_players p
 LEFT JOIN craftcore.accounts a ON a.uuid = p.uuid
 LEFT JOIN craftcore.player_stats s ON s.uuid = p.uuid;
 GRANT SELECT ON craftcore.v_player_stats TO 'creepy_ro'@'%';
+
+-- Idempotent shop/ah buy replies. creepy_ro must not read rcon_purchases itself.
+CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_rcon_purchase_result AS
+SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response
+FROM craftcore.rcon_purchases;
+GRANT SELECT ON craftcore.v_rcon_purchase_result TO 'creepy_ro'@'%';

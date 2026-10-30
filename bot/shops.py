@@ -17,13 +17,22 @@ class NotReady(Exception):
     pass
 
 
+def db_password():
+    """creepy_ro's own password, or the CraftCore writer password when that is unset."""
+    return os.getenv("CREEPY_DB_PASSWORD") or os.getenv("CRAFTCORE_DB_PASSWORD", "")
+
+
+def db_user():
+    return os.getenv("CRAFTCORE_DB_USER", "creepy_ro")
+
+
 def query(sql, args=()):
     import pymysql
-    pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+    pw = db_password()
     if not pw:
         raise NotReady()
     try:
-        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
+        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=db_user(),
                               password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
     except Exception:
         raise NotReady()

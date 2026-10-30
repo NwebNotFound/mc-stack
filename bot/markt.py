@@ -19,11 +19,12 @@ class NotReady(Exception):
 def q(sql, args=()):
     """(cols, rows); NotReady wenn DB/View fehlt."""
     import pymysql
-    pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+    import shops
+    pw = shops.db_password()
     if not pw:
         raise NotReady()
     try:
-        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
+        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(),
                               password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
     except Exception:
         raise NotReady()
