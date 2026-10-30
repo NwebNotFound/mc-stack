@@ -1,5 +1,7 @@
 package de.mcstack.craftcore;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
@@ -8,11 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OrderFulfillmentTest {
   private Connection db() throws SQLException {
-    Connection c = DriverManager.getConnection("jdbc:h2:mem:ful_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1");
-    try (Statement s = c.createStatement()) {
-      s.execute("CREATE TABLE pending_deliveries(id VARCHAR(36) PRIMARY KEY, player_uuid VARCHAR(36), amount INT, source VARCHAR(32), status VARCHAR(16), created_at TIMESTAMP)");
-      s.execute("CREATE TABLE rcon_purchases(idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8), buyer VARCHAR(36), qty INT, response VARCHAR(80), created_at BIGINT)");
-    }
+    Connection c = schema();
     OrderFulfillment.migrate(c);
     return c;
   }
@@ -28,7 +26,7 @@ class OrderFulfillmentTest {
   }
   @Test void openDeliveryIsReadyAndPickupCollectsIt() throws Exception {
     try (Connection c = db()) {
-      purchase(c, "web-1", "shop", "buyer", 4, "OK 4 100 0", 1);
+      purchase(c, "web-1", "shop", "buyer", 4, "OK 4 100 0", recent(1_000));
       delivery(c, "d1", "buyer", 4, "shop_journal", "offen", "2026-10-30 10:00:00");
       assertEquals(1, OrderFulfillment.backfill(c));
       assertEquals(0, OrderFulfillment.backfill(c));
@@ -55,9 +53,10 @@ class OrderFulfillmentTest {
   }
   @Test void pairsPurchasesInTimeOrderAndIgnoresErrors() throws Exception {
     try (Connection c = db()) {
-      purchase(c, "web-a", "shop", "buyer", 2, "OK 2 1 0", 1);
-      purchase(c, "web-b", "shop", "buyer", 2, "OK 2 1 0", 2);
-      purchase(c, "web-err", "shop", "buyer", 2, "ERR NO_FUNDS", 3);
+      long now = System.currentTimeMillis();
+      purchase(c, "web-a", "shop", "buyer", 2, "OK 2 1 0", now - 3_000);
+      purchase(c, "web-b", "shop", "buyer", 2, "OK 2 1 0", now - 2_000);
+      purchase(c, "web-err", "shop", "buyer", 2, "ERR NO_FUNDS", now - 1_000);
       delivery(c, "early", "buyer", 2, "shop_journal", "offen", "2026-10-30 09:00:00");
       delivery(c, "late", "buyer", 2, "shop_journal", "offen", "2026-10-30 09:05:00");
       assertEquals(2, OrderFulfillment.backfill(c));
@@ -66,7 +65,7 @@ class OrderFulfillmentTest {
         assertTrue(r.next()); assertEquals("web-b", r.getString(1)); assertEquals("late", r.getString(2));
         assertFalse(r.next());
       }
-      purchase(c, "web-done", "ah", "buyer", 3, "OK 3 9 0", 4);
+      purchase(c, "web-done", "ah", "buyer", 3, "OK 3 9 0", now - 500);
       delivery(c, "taken", "buyer", 3, "ah_journal", "geliefert", "2026-10-30 11:00:00");
       assertEquals(1, OrderFulfillment.backfill(c));
       assertRow(c, "web-done", "collected");
@@ -74,7 +73,7 @@ class OrderFulfillmentTest {
   }
   @Test void inFlightPurchaseLinksWhileTheResponseIsStillEmpty() throws Exception {
     try (Connection c = db()) {
-      purchase(c, "web-live", "shop", "buyer", 1, "", 5);
+      purchase(c, "web-live", "shop", "buyer", 1, "", recent(1_000));
       delivery(c, "open", "buyer", 1, "shop_journal", "offen", "2026-10-30 12:00:00");
       assertEquals(1, OrderFulfillment.backfill(c));
       assertRow(c, "web-live", "ready");
@@ -89,11 +88,68 @@ class OrderFulfillmentTest {
       OrderFulfillment.mark(c, "web-f", "refunded");
       assertRow(c, "web-f", "refunded");
       assertThrows(IllegalArgumentException.class, () -> OrderFulfillment.mark(c, "web-x", "offen"));
+      assertTrue(OrderFulfillment.TRIGGER_SQL.startsWith("CREATE OR REPLACE TRIGGER"));
+      assertFalse(OrderFulfillment.TRIGGER_SQL.contains("DROP TRIGGER"));
       assertTrue(OrderFulfillment.TRIGGER_SQL.contains("response=''"));
       assertTrue(OrderFulfillment.TRIGGER_SQL.contains("'ready'"));
       assertTrue(OrderFulfillment.TRIGGER_SQL.contains("INSERT IGNORE"));
+      String sql = OrderFulfillment.backfillSql("MariaDB");
+      assertTrue(sql.contains("LEFT JOIN order_fulfillment"));
+      assertTrue(sql.contains("f.request_id IS NULL"));
+      assertTrue(sql.contains("r.created_at>=?"));
     }
   }
+  @Test void backfillIgnoresRowsOlderThanSevenDays() throws Exception {
+    try (Connection c = db()) {
+      purchase(c, "web-old", "shop", "buyer", 1, "OK 1 1 0", System.currentTimeMillis() - OrderFulfillment.BACKFILL_WINDOW_MILLIS - 60_000);
+      delivery(c, "old", "buyer", 1, "shop_journal", "offen", "2026-10-01 10:00:00");
+      assertEquals(0, OrderFulfillment.backfill(c));
+      purchase(c, "web-new", "shop", "buyer", 1, "OK 1 1 0", recent(1_000));
+      delivery(c, "fresh", "buyer", 1, "shop_journal", "offen", "2026-10-30 10:00:00");
+      assertEquals(1, OrderFulfillment.backfill(c));
+      assertEquals(0, OrderFulfillment.backfill(c));
+      assertRow(c, "web-new", "ready");
+    }
+  }
+  @Test void createTriggerFailureStillStartsAndBackfills() throws Exception {
+    try (Connection raw = schema()) {
+      purchase(raw, "web-trig", "shop", "buyer", 2, "OK 2 1 0", recent(1_000));
+      delivery(raw, "box", "buyer", 2, "shop_journal", "offen", "2026-10-30 10:00:00");
+      List<String> warnings = new ArrayList<>();
+      OrderFulfillment.startup(denyTrigger(raw), warnings::add);
+      assertFalse(warnings.isEmpty());
+      assertTrue(warnings.get(0).contains("Backfill"));
+      assertTrue(warnings.get(0).contains("TRIGGER command denied"));
+      assertRow(raw, "web-trig", "ready");
+    }
+  }
+  private static Connection schema() throws SQLException {
+    Connection c = DriverManager.getConnection("jdbc:h2:mem:ful_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1");
+    try (Statement s = c.createStatement()) {
+      s.execute("CREATE TABLE pending_deliveries(id VARCHAR(36) PRIMARY KEY, player_uuid VARCHAR(36), amount INT, source VARCHAR(32), status VARCHAR(16), created_at TIMESTAMP)");
+      s.execute("CREATE TABLE rcon_purchases(idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8), buyer VARCHAR(36), qty INT, response VARCHAR(80), created_at BIGINT)");
+    }
+    return c;
+  }
+  private static Connection denyTrigger(Connection raw) {
+    return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class[]{Connection.class}, (proxy, method, args) -> {
+      if ("createStatement".equals(method.getName()) || "prepareStatement".equals(method.getName())) {
+        Object stmt = method.invoke(raw, args);
+        Class<?> type = "prepareStatement".equals(method.getName()) ? PreparedStatement.class : Statement.class;
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class[]{type}, (sp, sm, sargs) -> {
+          if (sargs != null && sargs.length > 0 && sargs[0] instanceof String sql && sql.toUpperCase(Locale.ROOT).contains("TRIGGER") && sm.getName().startsWith("execute"))
+            throw new SQLException("TRIGGER command denied");
+          return invoke(sm, stmt, sargs);
+        });
+      }
+      return invoke(method, raw, args);
+    });
+  }
+  private static Object invoke(java.lang.reflect.Method method, Object target, Object[] args) throws Throwable {
+    try { return method.invoke(target, args); }
+    catch (InvocationTargetException e) { if (e.getCause() != null) throw e.getCause(); throw e; }
+  }
+  private static long recent(long ageMillis) { return System.currentTimeMillis() - ageMillis; }
   private static void assertRow(Connection c, String requestId, String status) throws SQLException {
     try (PreparedStatement q = c.prepareStatement("SELECT request_id, status, updated_at FROM v_order_fulfillment WHERE request_id=?")) {
       q.setString(1, requestId);
