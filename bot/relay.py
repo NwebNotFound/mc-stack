@@ -11,6 +11,10 @@ MAX_PENDING_ATTEMPTS = 5
 MAX_PENDING_AGE = 15 * 60
 MAX_ADMIN_AGE = 60 * 60
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+BANK_KEY_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,64}$")  # Website INGEST.md bank_buy
+BANK_ITEM_RE = re.compile(r"^(minecraft:)?[a-z0-9_]{1,64}$")
+BANK_MAX_AMOUNT = 2304
+PENDING_PATH = "mc-shop-orders/pending?types=shop,bank_buy"  # ohne Filter liefert die Website nur shop
 DB_PATH = "/app/data/links.sqlite3"
 _state = {"bid_active": False, "probe_at": 0}
 
@@ -43,7 +47,7 @@ def pending_due(db, rid, now):
     return (row[1] or 0) <= now
 
 
-def stored_order(key):
+def stored_order(key, order_type="shop"):
     """Read v_rcon_purchase_result. Blocking; call via asyncio.to_thread.
 
     ('accepted', None) or ('rejected', CODE) when the view has a final reply.
@@ -51,10 +55,13 @@ def stored_order(key):
     NULL or PENDING. None when the database cannot be read.
     """
     import shops
-    if not KEY_RE.match(str(key or "")):
+    bank = order_type == "bank_buy"
+    if not (BANK_KEY_RE if bank else KEY_RE).match(str(key or "")):
         return "missing"
+    sql = ("SELECT response FROM bank_buy_orders WHERE request_id=%s" if bank  # bank_buy: Ergebnis im Plugin-Journal
+           else "SELECT response FROM v_rcon_purchase_result WHERE idem_key=%s")
     try:
-        rows = shops.query("SELECT response FROM v_rcon_purchase_result WHERE idem_key=%s", (str(key),))
+        rows = shops.query(sql, (str(key),))
     except shops.NotReady:
         return None
     if not rows:
@@ -111,7 +118,7 @@ FINAL = frozenset(("collected", "failed", "refunded"))
 
 def record_fulfillment(db, rid, status):
     """Idempotent: True nur bei neuem Status; nach finalem Status kommt nichts mehr."""
-    if status not in FULFILL or not KEY_RE.match(str(rid or "")):
+    if status not in FULFILL or not (KEY_RE.match(str(rid or "")) or BANK_KEY_RE.match(str(rid or ""))):
         return False
     have = {r[0] for r in db.execute("SELECT status FROM web_fulfillment_v2 WHERE request_id=?", (rid,))}
     if status in have or have & FINAL:
@@ -235,9 +242,54 @@ def _listings():
     return shops.query("SELECT id, seller_uuid, material, amount, price_cents FROM v_shop_listings")
 
 
+def bank_command(u, item, amount, rid):
+    return f"shop buy bank {u} {item} {int(amount)} {rid}"
+
+
+def handle_bank_order(db, rcon, host, o):
+    """Order-Typ bank_buy: Bankkauf im Plugin (gleiche Pruefungen wie Shop, Preis beim Ausfuehren). Idempotent pro request_id."""
+    import buy
+    rid = str(o.get("request_id") or o.get("id") or "")
+    if not BANK_KEY_RE.match(rid):
+        return "rejected", "INVALID"
+    u = norm_uuid(o.get("mc_uuid") or o.get("buyer_uuid"))
+    did = linked_discord(db, u) if u else None
+    if did is None or (o.get("mc_uuid") and o.get("buyer_uuid") and norm_uuid(o["mc_uuid"]) != norm_uuid(o["buyer_uuid"])):
+        return "rejected", "LINK_MISMATCH"
+    item = str(o.get("item") or "").strip().lower()
+    try:
+        amount = int(o.get("amount") if o.get("amount") is not None else o.get("qty"))
+    except (TypeError, ValueError):
+        return "rejected", "INVALID"
+    if not BANK_ITEM_RE.match(item) or not 1 <= amount <= BANK_MAX_AMOUNT:
+        return "rejected", "INVALID"
+    item = item.removeprefix("minecraft:")
+    row = db.execute("SELECT response FROM dc_purchases WHERE idem_key=?", (rid,)).fetchone()
+    p = buy.parse_reply(row[0]) if row and row[0] else None
+    if not p or p[0] not in ("ok", "err"):
+        db.execute("INSERT OR IGNORE INTO dc_purchases (idem_key, discord_id, uuid, kind, listing_id, qty, max_cents, created) VALUES (?,?,?,?,?,?,?,?)",
+                   (rid, did, u, "bank", item, amount, 0, int(time.time())))
+        db.commit()
+        reply = rcon(host, bank_command(u, item, amount, rid))
+        p = buy.parse_reply(reply)
+        if p[0] in ("ok", "err"):
+            db.execute("UPDATE dc_purchases SET response=?, done=? WHERE idem_key=?", (str(reply).strip(), int(time.time()), rid))
+            db.commit()
+    if p[0] == "ok":
+        return "accepted", None
+    if p[0] == "err":
+        return "rejected", p[1]
+    return None, None
+
+
 def handle_order(db, rcon, host, o):
     """Fuehrt eine Order aus (blockierend). Rueckgabe (status, reason) oder (None, None) fuer spaeter."""
     import buy
+    kind = str(o.get("type") or "shop")
+    if kind == "bank_buy":
+        return handle_bank_order(db, rcon, host, o)
+    if kind != "shop":
+        return "rejected", "UNSUPPORTED_TYPE"
     rid = str(o.get("idem_key") or o.get("request_id") or o.get("id") or "")
     if not KEY_RE.match(rid):
         return "rejected", "INVALID"
@@ -340,7 +392,7 @@ async def process(bot, session, token, kind, items, handler, now=None):
                 attempts = prev[0] if prev else 0
                 created = prev[1] if prev and prev[1] else now
                 if attempts + 1 >= MAX_PENDING_ATTEMPTS or now - created >= MAX_PENDING_AGE:
-                    found = await asyncio.to_thread(stored_order, rid)
+                    found = await asyncio.to_thread(stored_order, rid, str(it.get("type") or "shop"))
             status, reason = observe(db, rid, kind, status, reason, now, found)
             if status is None:
                 continue  # Server nicht bereit - naechste Runde, bis zum Versuchslimit
@@ -373,7 +425,7 @@ async def run_once(bot, session):
     if not token:
         return None
     import buy
-    st, orders = await _get(session, token, "mc-shop-orders/pending")
+    st, orders = await _get(session, token, PENDING_PATH)
     await process(bot, session, token, "order", orders, handle_order)
     await sync_fulfillment(bot, session, token)
     if time.time() - _state["probe_at"] > PROBE_EVERY:
