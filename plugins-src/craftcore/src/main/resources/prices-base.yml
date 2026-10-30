@@ -7,7 +7,7 @@
 
 # Stichtag, ab dem diese Preise gelten (ISO-8601 mit Zone). PLATZHALTER - wird beim Deploy gesetzt.
 # Stichtag der neuen Basispreise (ISO 8601 mit Zone). 1970-01-01T00:00:00Z waere "nicht gesetzt". Landet in price_meta bzw. v_price_meta.effective_from (DATETIME, UTC).
-effective_from: "2026-10-30T15:00:00+01:00"
+effective_from: "2026-10-30T14:05:00+01:00"
 
 # Hochzaehlen bei jeder neuen Preisliste: das Plugin ersetzt dann die Datei im Datenordner (Backup prices-base.yml.bak).
 version: 2

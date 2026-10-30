@@ -45,7 +45,7 @@ class PriceMetaTest {
     assertNotEquals(PriceMeta.PLACEHOLDER, odt.toInstant());
     assertTrue(odt.getYear() > 1970);
     assertEquals(odt.toInstant(), PriceMeta.effectiveFromOrPlaceholder(RecipeArbitrageTest.prices(), null));
-    assertEquals(java.time.Instant.parse("2026-10-30T14:00:00Z"), odt.toInstant());
+    assertEquals(java.time.Instant.parse("2026-10-30T13:05:00Z"), odt.toInstant());
   }
   @Test void viewExposesUtcDatetimeAndPlaceholderMeansEmpty() throws Exception {
     try (Connection c = h2(); Statement s = c.createStatement()) {
