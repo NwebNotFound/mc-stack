@@ -58,6 +58,10 @@ commands:
     description: Auktionshaus
     usage: /ah
 
+  testrun:
+    description: Test-CP nur fuer Konten ...c0de0001 und ...c0de0002 (Konsole/RCON)
+    usage: /testrun <uuid> <cent>
+
   trade:
     description: Handel zwischen Spielern
     usage: /trade <spieler>|accept

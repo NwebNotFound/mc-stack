@@ -1,16 +1,27 @@
 plugins { id 'java' }
 java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
-repositories { mavenCentral() }
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+def serverLibs = fileTree(dir: '../../data/survival/libraries', include: '**/*.jar')
+def vaultJar = file('../../config/lobby-plugins/Vault-1.7.3.jar')
 dependencies {
-    compileOnly fileTree(dir: '../../data/survival/libraries', include: '**/*.jar')
-    compileOnly files('../../config/lobby-plugins/Vault-1.7.3.jar')
+    if (!serverLibs.files.isEmpty()) {
+        compileOnly serverLibs
+        testImplementation serverLibs
+    } else {
+        compileOnly 'io.papermc.paper:paper-api:26.3.build.231-stable'
+        testImplementation 'io.papermc.paper:paper-api:26.3.build.231-stable'
+    }
+    if (vaultJar.exists()) {
+        compileOnly files(vaultJar)
+        testImplementation files(vaultJar)
+    }
     implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.6'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'com.h2database:h2:2.3.232'
 }
 test { useJUnitPlatform() }
 jar { duplicatesStrategy = DuplicatesStrategy.EXCLUDE; from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }; exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA' }
-
-dependencies { testImplementation 'com.h2database:h2:2.3.232' }
-
-dependencies { testImplementation fileTree(dir: '../../data/survival/libraries', include: '**/*.jar'); testImplementation files('../../config/lobby-plugins/Vault-1.7.3.jar') }

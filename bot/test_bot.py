@@ -474,6 +474,17 @@ class RelayTests(unittest.TestCase):
         self.assertFalse(relay.probe_reply_active("Nur f\u00fcr Spieler."))
         self.assertTrue(relay.probe_reply_active("ERR NOT_FOUND"))
 
+    def test_pending_execution_reply_is_not_final_and_can_retry(self):
+        import relay, buy
+        self.assertEqual(relay.parse("wird ausgeführt"), (None, None))
+        self.assertNotIn(buy.parse_reply("wird ausgeführt")[0], ("ok", "err"))
+        con = self.db()
+        replies = ["wird ausgeführt", "OK 1 10 0"]
+        o = {"request_id": "r-pend", "buyer_uuid": self.U, "qty": 1, "unit_price": 10, "listing_id": "aaaaaaaa-0000-0000-0000-000000000001"}
+        self.assertEqual(relay.handle_order(con, lambda h, c: replies.pop(0), "h", o), (None, None))
+        self.assertIsNone(con.execute("SELECT response FROM dc_purchases WHERE idem_key='r-pend'").fetchone()[0])
+        self.assertEqual(relay.handle_order(con, lambda h, c: replies.pop(0), "h", o), ("accepted", None))
+
 
 class IngestP5Tests(unittest.TestCase):
     def test_shops(self):

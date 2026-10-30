@@ -184,6 +184,16 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(!line.prefix().equals(text)) line.prefix(text);
   }
   private Player target(String name) { return Bukkit.getPlayerExact(name); }
+  private static ShopBuyDispatch.Caller commandCaller(CommandSender sender) {
+    if(sender instanceof RemoteConsoleCommandSender) return ShopBuyDispatch.Caller.RCON;
+    if(sender instanceof ConsoleCommandSender) return ShopBuyDispatch.Caller.CONSOLE;
+    if(sender instanceof Player) return ShopBuyDispatch.Caller.PLAYER;
+    return ShopBuyDispatch.Caller.OTHER;
+  }
+  private void reply(CommandSender sender, ShopBuyDispatch.Caller caller, String line) {
+    if(ShopBuyDispatch.delivery(caller, getServer().isPrimaryThread())==ShopBuyDispatch.Delivery.PRIMARY_THREAD) getServer().getScheduler().runTask(this,()->sender.sendMessage(line));
+    else sender.sendMessage(line);
+  }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
     if (command.getName().equals("ah") && args.length>0 && args[0].equalsIgnoreCase("bid")) {
       RealAuctions.Request request=RealAuctions.parse(args);
@@ -196,18 +206,27 @@ public final class CraftCore extends JavaPlugin implements Listener {
       try {String uuid=UUID.fromString(args[1]).toString(); tx(c->{try(PreparedStatement st=c.prepareStatement("INSERT INTO discord_links(uuid,discord_id) VALUES (?,?) ON DUPLICATE KEY UPDATE discord_id=VALUES(discord_id)")){st.setString(1,uuid);st.setString(2,args[2]);st.executeUpdate();}return null;});sender.sendMessage("OK");}
       catch(Exception ex){getLogger().warning("cclink: "+ex.getClass().getSimpleName());sender.sendMessage("ERR INVALID");} return true;
     }
+    if(command.getName().equals("testrun")) {
+      TestRun.Sender who=sender instanceof RemoteConsoleCommandSender ? TestRun.Sender.RCON : sender instanceof ConsoleCommandSender ? TestRun.Sender.CONSOLE : sender instanceof Player ? TestRun.Sender.PLAYER : TestRun.Sender.OTHER;
+      long cents=-1;
+      if(args.length==2 && args[1].matches("[0-9]+")) { try { cents=Long.parseLong(args[1]); } catch(NumberFormatException ex) { cents=-1; } }
+      Boolean configured=getConfig().contains("testrun.enabled") ? getConfig().getBoolean("testrun.enabled") : null;
+      TestRun.Result result=TestRun.decide(TestRun.enabled(configured), who, args.length>0 ? args[0] : "", cents);
+      if(!result.credit()) { sender.sendMessage(result.reply()); return true; }
+      try { sender.sendMessage(tx(c->TestRun.apply(c,result)) ? result.reply() : "ERR INVALID"); }
+      catch(Exception ex) { getLogger().warning("testrun: "+ex.getClass().getSimpleName()); sender.sendMessage("ERR INVALID"); }
+      return true;
+    }
     if ((command.getName().equals("shop") || command.getName().equals("ah")) && args.length>0 && args[0].equalsIgnoreCase("buy")) {
-      if (!(sender instanceof org.bukkit.command.ConsoleCommandSender || sender instanceof org.bukkit.command.RemoteConsoleCommandSender) || !SpawnRoute.isSurvival(server)) { sender.sendMessage("ERR INVALID"); return true; }
-      RconPurchase.Request request=RconPurchase.parse(command.getName(),args);
-      if(request==null){sender.sendMessage("ERR INVALID");return true;}
-      getServer().getScheduler().runTaskAsynchronously(this,()->{
-        String response;
-        try { response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
+      ShopBuyDispatch.Caller who=commandCaller(sender);
+      // The purchase line has to be sent before this method returns. RCON only
+      // keeps messages from the command call; a later async line is not the result.
+      ShopBuyDispatch.complete(who, SpawnRoute.isSurvival(server), command.getName(), args, request -> {
+        try { return tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
           ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item)); stack.setAmount(amount); return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
         },getConfig().getInt("auction.fee-basis-points",500))); }
-        catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);response="ERR INVALID";}
-        sender.sendMessage(response);
-      });
+        catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);return "ERR INVALID";}
+      }, line -> reply(sender, who, line));
       return true;
     }
     if(!(sender instanceof Player p)) { sender.sendMessage("Nur fÃƒÂ¼r Spieler."); return true; }
