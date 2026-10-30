@@ -33,6 +33,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private TeamInvites teamInvites;
   private Motivation motivation;
   private PlayerStats playerStats;
+  private InventorySync inventorySync;
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
@@ -65,7 +66,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute("CREATE TABLE IF NOT EXISTS members (uuid CHAR(36) PRIMARY KEY, team_id BIGINT NOT NULL, role VARCHAR(8) NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE)");
         InviteStore.prepareSchema(c);
       }
-      if (SpawnRoute.isSurvival(server) || server.equalsIgnoreCase("lobby")) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); }
+      if (InventorySync.tracks(server)) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); inventorySync=new InventorySync(this,server); inventorySync.start(); }
       teamInvites=new TeamInvites(this,server); teamInvites.start();
       saveDefaultConfig();
       for (OfflinePlayer known : Bukkit.getOfflinePlayers()) if (known.hasPlayedBefore() && known.getName()!=null) tx(c->{exec(c,"INSERT IGNORE INTO known_players(uuid,name) VALUES (?,?)",known.getUniqueId().toString(),known.getName()); return null;});
@@ -83,6 +84,11 @@ public final class CraftCore extends JavaPlugin implements Listener {
       Deliveries.start(this);
       SaleNotices.start(this);
       WebsiteStats.start(this);
+      tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
+      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment")) {
+        try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
+        catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
+      }
       new Market(this).start();
       new Shop(this).start();
       new Auction(this).start();
@@ -98,7 +104,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(playerStats!=null)playerStats.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];
@@ -244,6 +250,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       switch(command.getName()) {
         case "vip": userMenu.open(p,command.getName()); break;
         case "abholen": Deliveries.collect(this,p); break;
+        case "feedback": p.sendMessage(Feedback.line()); break;
         case "balance": p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
         case "pay": {
           if(args.length!=2){UserMenu.help(p,"pay"); break;}

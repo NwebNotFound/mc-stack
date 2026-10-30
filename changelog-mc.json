@@ -1,5 +1,23 @@
 [
   {
+    "version": "2026-10-30",
+    "date": "30.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "Dein Inventar wird fuer die Website gespeichert, wenn du gehst, und alle fuenf Minuten solange du online bist."
+      },
+      {
+        "type": "neu",
+        "text": "Dein CP-Kontostand ist auf der Website sichtbar."
+      },
+      {
+        "type": "neu",
+        "text": "Mit /feedback oeffnest du den Link fuer Feedback und Bugs."
+      }
+    ]
+  },
+  {
     "version": "2026-10-29",
     "date": "29.10.2026",
     "changes": [
