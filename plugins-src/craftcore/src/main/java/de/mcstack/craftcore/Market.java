@@ -74,7 +74,8 @@ final class Market implements Listener {
   static long cents(org.bukkit.configuration.Configuration cfg, Material m, double current, boolean buy) {
     double floor=cfg.getDouble("market.price-floor."+m.name(),0);
     long cents=PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble(buy?"market.buy-factor":"market.sell-factor",buy?1.5:0.25)),floor);
-    if(!buy && !unbuyable(cfg,m)) cents=PriceModel.cappedSell(cents,PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble("market.buy-factor",1.5)),floor),cfg.getDouble("market.max-sell-ratio",0.35));
+    // Ankauf-Grenze gilt fuer alle Items, auch nicht kaufbare (Netherite, Shulker, Kauf-Sperre).
+    if(!buy) cents=PriceModel.cappedSell(cents,PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble("market.buy-factor",1.5)),floor),cfg.getDouble("market.max-sell-ratio",0.35));
     return cents;
   }
   Price price(Connection c, Material m, boolean trade, boolean buy) throws SQLException {
