@@ -477,13 +477,21 @@ class RelayTests(unittest.TestCase):
     def test_pending_execution_reply_is_not_final_and_can_retry(self):
         import relay, buy
         self.assertEqual(relay.parse("wird ausgeführt"), (None, None))
+        self.assertEqual(relay.parse("PENDING r-pend"), (None, None))
         self.assertNotIn(buy.parse_reply("wird ausgeführt")[0], ("ok", "err"))
+        self.assertEqual(buy.parse_reply("PENDING r-pend"), ("pending",))
         con = self.db()
-        replies = ["wird ausgeführt", "OK 1 10 0"]
+        calls = []
+        replies = ["PENDING r-pend", "OK 1 10 0"]
+        def rcon(h, c):
+            calls.append(c)
+            return replies.pop(0)
         o = {"request_id": "r-pend", "buyer_uuid": self.U, "qty": 1, "unit_price": 10, "listing_id": "aaaaaaaa-0000-0000-0000-000000000001"}
-        self.assertEqual(relay.handle_order(con, lambda h, c: replies.pop(0), "h", o), (None, None))
+        self.assertEqual(relay.handle_order(con, rcon, "h", o), (None, None))
         self.assertIsNone(con.execute("SELECT response FROM dc_purchases WHERE idem_key='r-pend'").fetchone()[0])
-        self.assertEqual(relay.handle_order(con, lambda h, c: replies.pop(0), "h", o), ("accepted", None))
+        self.assertEqual(relay.handle_order(con, rcon, "h", o), ("accepted", None))
+        self.assertEqual(calls[0], calls[1])
+        self.assertTrue(calls[0].endswith(" r-pend"))
 
 
 class IngestP5Tests(unittest.TestCase):

@@ -1,39 +1,45 @@
 package de.mcstack.craftcore;
 
-import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
-/** Shop and AH buys answer on the calling command before it returns. */
+/** First reply is PENDING. A later call with the same purchase returns the stored OK or ERR. */
 final class ShopBuyDispatch {
   enum Caller { PLAYER, CONSOLE, RCON, OTHER }
-  enum Delivery { IMMEDIATE, PRIMARY_THREAD }
-  @FunctionalInterface interface Buyer { String buy(RconPurchase.Request request) throws Exception; }
+  @FunctionalInterface interface Stored { String get(RconPurchase.Request request); }
+  @FunctionalInterface interface Start { void start(RconPurchase.Request request); }
+  private static final ConcurrentHashMap<String, String> DONE = new ConcurrentHashMap<>();
+  private static final Set<String> RUNNING = ConcurrentHashMap.newKeySet();
 
-  static Delivery delivery(Caller caller, boolean commandOnPrimaryThread) {
-    return caller == Caller.PLAYER && !commandOnPrimaryThread ? Delivery.PRIMARY_THREAD : Delivery.IMMEDIATE;
+  static String cacheId(RconPurchase.Request request) {
+    return request.key() + "\n" + request.kind() + "\n" + request.buyer() + "\n" + request.listing() + "\n" + request.qty() + "\n" + request.max();
   }
 
-  static String complete(Caller caller, boolean survival, String command, String[] args, Buyer buyer, Consumer<String> send) {
-    String line = outcome(caller, survival, command, args, buyer);
+  static String stored(RconPurchase.Request request) { return DONE.get(cacheId(request)); }
+
+  static boolean begin(RconPurchase.Request request) { return RUNNING.add(cacheId(request)); }
+
+  static void finish(RconPurchase.Request request, String line) {
+    RUNNING.remove(cacheId(request));
+    if (line == null) return;
+    String trimmed = line.trim();
+    if (trimmed.startsWith("OK ") || trimmed.startsWith("ERR ")) DONE.put(cacheId(request), trimmed);
+  }
+
+  static String complete(Caller caller, boolean survival, String command, String[] args, Stored stored, Start start, Consumer<String> send) {
+    String line;
+    if ((caller != Caller.CONSOLE && caller != Caller.RCON) || !survival) line = "ERR INVALID";
+    else {
+      RconPurchase.Request request = RconPurchase.parse(command, args);
+      if (request == null) line = "ERR INVALID";
+      else {
+        String known = stored.get(request);
+        if (known != null && (known.startsWith("OK ") || known.startsWith("ERR "))) line = known.trim();
+        else { start.start(request); line = "PENDING " + request.key(); }
+      }
+    }
     send.accept(line);
     return line;
-  }
-
-  private static String outcome(Caller caller, boolean survival, String command, String[] args, Buyer buyer) {
-    if ((caller != Caller.CONSOLE && caller != Caller.RCON) || !survival) return "ERR INVALID";
-    RconPurchase.Request request = RconPurchase.parse(command, args);
-    if (request == null) return "ERR INVALID";
-    String line;
-    try { line = buyer.buy(request); }
-    catch (Exception ex) { return "ERR INVALID"; }
-    if (line == null) return "ERR INVALID";
-    String trimmed = line.trim();
-    if (trimmed.isEmpty() || pending(trimmed) || !(trimmed.startsWith("OK ") || trimmed.startsWith("ERR "))) return "ERR INVALID";
-    return trimmed;
-  }
-
-  private static boolean pending(String line) {
-    String low = line.toLowerCase(Locale.ROOT);
-    return low.contains("wird ausgeführt") || low.contains("wird ausgefuehrt");
   }
 }

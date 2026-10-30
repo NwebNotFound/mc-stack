@@ -60,7 +60,7 @@ commands:
 
   testrun:
     description: Test-CP nur fuer Konten ...c0de0001 und ...c0de0002 (Konsole/RCON)
-    usage: /testrun <uuid> <cent>
+    usage: /testrun <uuid> <cent> <idem_key>
 
   trade:
     description: Handel zwischen Spielern

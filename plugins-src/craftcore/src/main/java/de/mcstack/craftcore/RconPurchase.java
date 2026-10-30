@@ -53,6 +53,7 @@ final class RconPurchase {
     long total;
     try { total=UnitPrice.total(UnitPrice.fromTotal(price,available),req.qty()); } catch(ArithmeticException | IllegalArgumentException e) { return "ERR INVALID"; }
     if(total>req.max()) return "ERR PRICE_CHANGED";
+    if (TestRun.fakeUuid(req.buyer()) != null && TestRun.fakeUuid(seller) == null) return "ERR INVALID";
     String rest=req.qty()==available?item:remaining.encode(item,available-req.qty());
     String result=PartialPurchase.buy(c,table,req.listing(),req.buyer(),UUID.randomUUID().toString(),price,item,available,req.qty(),rest,now,feeBasisPoints);
     if(result!=null) {

@@ -60,6 +60,8 @@ def parse(reply):
     m = re.match(r"^ERR ([A-Z_]+)", t)
     if m:
         return "rejected", m[1]
+    if re.match(r"^PENDING\b", t):
+        return None, None
     return None, None
 
 

@@ -13,7 +13,7 @@ class TestRunTest {
 
   @Test void disabledHookRefusesConsoleAndRcon() {
     for (TestRun.Sender sender : new TestRun.Sender[] {TestRun.Sender.CONSOLE, TestRun.Sender.RCON}) {
-      TestRun.Result result = TestRun.decide(false, sender, FAKE1, 100);
+      TestRun.Result result = TestRun.decide(false, sender, FAKE1, 100, "off");
       assertFalse(result.credit());
       assertEquals("ERR DISABLED", result.reply());
     }
@@ -36,32 +36,57 @@ class TestRunTest {
   }
 
   @Test void enabledCreditsOnlyTheFakeAccountsFromConsoleOrRcon() {
-    TestRun.Result first = TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, 25);
-    TestRun.Result second = TestRun.decide(true, TestRun.Sender.RCON, FAKE2.toUpperCase(), 40);
+    TestRun.Result first = TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, 25, "k1");
+    TestRun.Result second = TestRun.decide(true, TestRun.Sender.RCON, FAKE2.toUpperCase(), 40, "k2");
     assertTrue(first.credit());
     assertEquals(FAKE1, first.uuid());
     assertEquals(25, first.cents());
     assertEquals("OK", first.reply());
     assertTrue(second.credit());
     assertEquals(FAKE2, second.uuid());
-    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 25).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, "00000000-0000-0000-0000-0000c0de0003", 25).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, "00000000-0000-0000-0000-c0de00010000", 25).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 25).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.OTHER, FAKE1, 25).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 0).credit());
-    assertFalse(TestRun.decide(true, TestRun.Sender.RCON, "c0de0001", 10).credit());
-    assertEquals("ERR INVALID", TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 25).reply());
-    assertEquals("ERR INVALID", TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 25).reply());
+    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 25, "k3").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, "00000000-0000-0000-0000-0000c0de0003", 25, "k4").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.CONSOLE, "00000000-0000-0000-0000-c0de00010000", 25, "k5").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 25, "k6").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.OTHER, FAKE1, 25, "k7").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 0, "k8").credit());
+    assertFalse(TestRun.decide(true, TestRun.Sender.RCON, "c0de0001", 10, "k9").credit());
+    assertEquals("ERR INVALID", TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 25, "k3").reply());
+    assertEquals("ERR INVALID", TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 25, "k6").reply());
+  }
+
+  @Test void oneCallCannotCreditMoreThanOneMillionCents() {
+    assertTrue(TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, TestRun.MAX_PER_CALL, "cap").credit());
+    TestRun.Result over = TestRun.decide(true, TestRun.Sender.RCON, FAKE1, TestRun.MAX_PER_CALL + 1, "over");
+    assertFalse(over.credit());
+    assertEquals("ERR INVALID", over.reply());
+  }
+
+  @Test void repeatedCreditsStopAtTheTotalAndTheSameKeyDoesNotCreditTwice() throws Exception {
+    try (Connection c = DriverManager.getConnection("jdbc:h2:mem:testruncap;MODE=MySQL")) {
+      c.createStatement().execute("CREATE TABLE accounts(uuid VARCHAR(36) PRIMARY KEY, balance BIGINT NOT NULL)");
+      TestRun.prepare(c);
+      assertTrue(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 600_000, "once")));
+      assertTrue(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 600_000, "once")));
+      assertEquals(600_000, balance(c, FAKE1));
+      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 500_000, "again")));
+      assertEquals(600_000, balance(c, FAKE1));
+      assertTrue(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, 400_000, "fill")));
+      assertEquals(TestRun.MAX_TOTAL, balance(c, FAKE1));
+      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, 1, "past")));
+      assertEquals(TestRun.MAX_TOTAL, balance(c, FAKE1));
+      assertEquals(0, balance(c, REAL));
+    }
   }
 
   @Test void applyCreditsOnlyAnAcceptedFakeAccount() throws Exception {
     try (Connection c = DriverManager.getConnection("jdbc:h2:mem:testrun;MODE=MySQL")) {
       c.createStatement().execute("CREATE TABLE accounts(uuid VARCHAR(36) PRIMARY KEY, balance BIGINT NOT NULL)");
-      assertTrue(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 40)));
-      assertFalse(TestRun.apply(c, TestRun.decide(false, TestRun.Sender.CONSOLE, FAKE2, 40)));
-      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 40)));
-      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 40)));
+      TestRun.prepare(c);
+      assertTrue(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 40, "a1")));
+      assertFalse(TestRun.apply(c, TestRun.decide(false, TestRun.Sender.CONSOLE, FAKE2, 40, "a2")));
+      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.CONSOLE, REAL, 40, "a3")));
+      assertFalse(TestRun.apply(c, TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 40, "a4")));
       assertEquals(40, balance(c, FAKE1));
       assertEquals(0, balance(c, FAKE2));
       assertEquals(0, balance(c, REAL));

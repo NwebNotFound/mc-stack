@@ -27,6 +27,8 @@ def parse_reply(text):
     m = re.fullmatch(r"ERR ([A-Z_]+)", t)
     if m:
         return ("err", m[1])
+    if re.fullmatch(r"PENDING [A-Za-z0-9_-]{1,64}", t):
+        return ("pending",)
     low = t.lower()
     if not t or "unknown" in low or "unbekannt" in low or "usage" in low:
         return ("soon",)
@@ -194,7 +196,7 @@ class ConfirmView(discord.ui.View):
             # Server nicht erreichbar / Befehl noch nicht da: gleicher Key, erneut moeglich
             for c in self.children:
                 c.disabled = False
-            await interaction.edit_original_response(content=SOON if p[0] == "soon" else ERRORS["INVALID"], view=self)
+            await interaction.edit_original_response(content=SOON if p[0] in ("soon", "pending") else ERRORS["INVALID"], view=self)
 
     @discord.ui.button(label="Abbrechen", emoji="\u2716\ufe0f", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
