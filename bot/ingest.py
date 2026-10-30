@@ -483,6 +483,36 @@ def build_price_reset(res):
         return None
 
 
+PARKOUR_MAX = 1000
+
+
+def build_parkour(cols, rows):
+    """Bestzeit pro Spieler und Kurs aus parkour_times: [{course, mc_uuid, mc_name, time_ms, set_at}] (set_at ISO-UTC)."""
+    best = {}
+    for row in rows or ():
+        r = dict(zip(cols, row))
+        course = str(r.get("course") or "").strip().lower()
+        uuid = str(r.get("uuid") or "").strip().lower()
+        ms = _num(r.get("best_ms"))
+        if not course or not uuid or ms is None or ms <= 0:
+            continue
+        v = r.get("updated_at")
+        try:
+            if isinstance(v, str):
+                v = datetime.datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=datetime.timezone.utc)
+            set_at = v.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (v.microsecond // 1000)
+        except Exception:
+            set_at = None
+        e = {"course": course, "mc_uuid": uuid, "mc_name": str(r.get("name") or "")[:16], "time_ms": int(ms), "set_at": set_at}
+        old = best.get((course, uuid))
+        if old is None or e["time_ms"] < old["time_ms"]:
+            best[(course, uuid)] = e
+    out = sorted(best.values(), key=lambda e: (e["course"], e["time_ms"], e["set_at"] or "", e["mc_uuid"]))
+    return [{k: v for k, v in e.items() if v is not None} for e in out][:PARKOUR_MAX]
+
+
 def fetch_rows(view):
     """(cols, rows) aus einer View, None wenn nicht lesbar."""
     return _fetch(view)
@@ -632,6 +662,9 @@ async def push_once(bot, session=None):
     reset = build_price_reset(pm) if pm else None
     if reset:
         payload["price_reset_at"] = reset
+    pk = await asyncio.to_thread(fetch_rows, "parkour_times")
+    if pk:
+        payload["parkour"] = build_parkour(*pk)
     own = session is None
     session = session or aiohttp.ClientSession()
     try:
