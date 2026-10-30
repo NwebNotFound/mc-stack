@@ -552,7 +552,11 @@ class Bot(discord.Client):
             return None
 
     # ---------- Parkour ----------
-    def parkour_rows(self):
+    def parkour_rows(self, course=None):
+        import parkour
+        return parkour.rank(self.parkour_raw(), course)
+
+    def parkour_raw(self):
         import pymysql
         import shops
         pw = shops.db_password()
@@ -565,8 +569,14 @@ class Bot(discord.Client):
             return []
         try:
             with con.cursor() as cur:
-                cur.execute("SELECT uuid, name, best_ms FROM parkour_times WHERE best_ms > 0 ORDER BY best_ms ASC, updated_at ASC")
-                return [(i + 1, r[1], int(r[2]), str(r[0])) for i, r in enumerate(cur.fetchall())]
+                try:
+                    cur.execute("SELECT uuid, name, best_ms, updated_at, course FROM parkour_times WHERE best_ms > 0")
+                    raw = list(cur.fetchall())
+                except pymysql.err.OperationalError:
+                    # alte Tabelle ohne Spalte `course`
+                    cur.execute("SELECT uuid, name, best_ms, updated_at FROM parkour_times WHERE best_ms > 0")
+                    raw = [tuple(r) + (None,) for r in cur.fetchall()]
+                return raw
         except pymysql.err.ProgrammingError:
             return []  # Tabelle existiert (noch) nicht
         finally:
@@ -1204,10 +1214,19 @@ def register(bot):
     lb = app_commands.Group(name="leaderboard", description="Bestenlisten")
 
     @lb.command(name="parkour", description="Parkour-Bestenliste zum Durchbl\u00e4ttern, mit deinem Platz")
-    async def lb_parkour(interaction: discord.Interaction):
-        import stats_card
+    async def _pk_courses(interaction: discord.Interaction, current: str):
+        import parkour
+        raw = await asyncio.to_thread(bot.parkour_raw)
+        cur = (current or "").lower()
+        return [app_commands.Choice(name=c, value=c) for c in parkour.courses(raw) if cur in c][:25]
+
+    @app_commands.describe(kurs="Nur diesen Kurs zeigen (leer = beste Zeit je Spieler über alle Kurse)")
+    @app_commands.autocomplete(kurs=_pk_courses)
+    async def lb_parkour(interaction: discord.Interaction, kurs: str | None = None):
+        import stats_card, parkour
         await interaction.response.defer()
-        rows = await asyncio.to_thread(bot.parkour_rows)
+        raw = await asyncio.to_thread(bot.parkour_raw)
+        rows = parkour.rank(raw, kurs)
         top = [(r, n, ms) for r, n, ms, _ in rows[:10]]
         link = bot.db.execute("SELECT uuid FROM links WHERE discord_id=? AND state='active'", (interaction.user.id,)).fetchone()
         me = None
@@ -1217,8 +1236,10 @@ def register(bot):
                 me = mine[:3]
         note = "" if not link else ("" if any(x[3].replace("-", "") == link[0].replace("-", "") for x in rows) else "-# Du hast noch keine Zeit – ab in die Lobby!")
         import gui
-        pager = gui.LbPager("Parkour", rows, me)
-        await interaction.followup.send(note or None, file=await pager.file(), view=pager if pager.pages > 1 else discord.utils.MISSING)
+        cs = parkour.courses(raw)
+        pager = gui.LbPager(f"Parkour \u2013 {parkour.norm_course(kurs)}" if kurs else "Parkour", rows, me, courses=cs, raw=raw, selected=kurs)
+        show_view = pager.pages > 1 or len(cs) > 1
+        await interaction.followup.send(note or None, file=await pager.file(), view=pager if show_view else discord.utils.MISSING)
 
     tree.add_command(lb)
     import shops
