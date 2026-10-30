@@ -25,8 +25,17 @@ final class ParkourSql {
   String c = parkourName.trim().toLowerCase(Locale.ROOT);
   return c.length() > 64 ? c.substring(0, 64) : c;
  }
- record Entry(String name, long ms) {}
- static String board(String course, List<Entry> entries) {
+ /** Y aus Lobby-Parkour-Ort "world,x,y,z,yaw,pitch"; null wenn unlesbar. */
+ static Double locY(String loc) {
+  if (loc == null) return null; String[] p = loc.split(",");
+  try { return p.length >= 4 ? Double.parseDouble(p[2].trim()) : null; } catch (NumberFormatException e) { return null; }
+ }
+ /** Rueckholgrenze: tiefster Kurspunkt minus Abstand (mind. 1); null ohne Kurspunkte. */
+ static Double floor(List<Double> ys, double distance) {
+  Double min = null; for (Double y : ys) if (y != null && (min == null || y < min)) min = y;
+  return min == null ? null : min - Math.max(1, distance);
+ }
+ record Entry(String name, long ms) {} static String board(String course, List<Entry> entries) {
   StringBuilder t = new StringBuilder("Parkour ").append(course).append(" - Top 10");
   for (int i = 0; i < Math.min(10, entries.size()); i++) t.append("\n").append(i + 1).append(". ").append(entries.get(i).name()).append("  ").append(TimeFormat.format(entries.get(i).ms()));
   if (entries.isEmpty()) t.append("\nNoch keine Bestzeiten");

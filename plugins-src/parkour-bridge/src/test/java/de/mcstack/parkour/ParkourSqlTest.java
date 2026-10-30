@@ -26,4 +26,11 @@ class ParkourSqlTest {
   assertEquals("Parkour a - Top 10\n1. x  0:00.001\n\nParkour b - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
   assertEquals("Parkour - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(Map.of()));
  }
+ @Test void floorIsLowestCoursePointMinusDistance() {
+  assertEquals(-48.0, ParkourSql.locY("world,107.0,-48.0,95.0,0.0,0.0"));
+  assertNull(ParkourSql.locY(null)); assertNull(ParkourSql.locY("kaputt")); assertNull(ParkourSql.locY("w,1,x,3"));
+  assertEquals(-52.0, ParkourSql.floor(Arrays.asList(-32.0, -48.0, -43.0, null), 4));
+  assertEquals(-33.0, ParkourSql.floor(List.of(-32.0), 0));
+  assertNull(ParkourSql.floor(List.of(), 4));
+ }
 }

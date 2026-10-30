@@ -48,10 +48,17 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try { Location l=checkpoint(s); if(l==null) { p.sendMessage("Parkour: Checkpoint nicht gefunden."); return; } l.setYaw(s.getLastCheckpointYaw()); l.setPitch(s.getLastCheckpointPitch()); p.setFallDistance(0); p.setVelocity(new Vector()); p.teleport(l); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
+ /** Kursboden: tiefster Punkt (Start, Checkpoints, Ziel) minus fall-distance-below-floor. Erst darunter wird zurueckgesetzt. */
+ private Double floorY(String parkourName) throws SQLException {
+  List<Double> ys=new ArrayList<>(); Connection c=ParkoursDatabase.getConnection();
+  try(PreparedStatement p=c.prepareStatement("SELECT start_cp,end_cp FROM parkours WHERE pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) { ys.add(ParkourSql.locY(r.getString(1))); ys.add(ParkourSql.locY(r.getString(2))); } } }
+  try(PreparedStatement p=c.prepareStatement("SELECT c.location FROM checkpoints c JOIN parkours k ON k.id=c.parkour_id WHERE k.pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) ys.add(ParkourSql.locY(r.getString(1))); } }
+  return ParkourSql.floor(ys,getConfig().getDouble("fall-distance-below-floor",getConfig().getDouble("fall-distance-below-checkpoint",4)));
+ }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void move(PlayerMoveEvent e) {
   if(e.getTo()==null || e.getFrom().getY()==e.getTo().getY()) return;
   ParkourSession s=ParkourSessionManager.getSession(e.getPlayer().getUniqueId()); if(s==null) return;
-  try { Location cp=checkpoint(s); if(cp!=null && cp.getWorld().equals(e.getTo().getWorld()) && e.getTo().getY()<cp.getY()-Math.max(1,getConfig().getDouble("fall-distance-below-checkpoint",4))) { e.setTo(cp); e.getPlayer().setFallDistance(0); e.getPlayer().setVelocity(new Vector()); } }
+  try { Location cp=checkpoint(s); Double floor=floorY(s.getParkourName()); if(cp!=null && floor!=null && cp.getWorld().equals(e.getTo().getWorld()) && e.getTo().getY()<floor) { e.setTo(cp); e.getPlayer().setFallDistance(0); e.getPlayer().setVelocity(new Vector()); } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void damage(EntityDamageEvent e) {
