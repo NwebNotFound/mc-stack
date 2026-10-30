@@ -60,11 +60,11 @@ def norm_uuid(u):
 def select(view):
     """(cols, rows); shops.NotReady wenn View fehlt / keine Rechte."""
     import shops, pymysql
-    pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+    pw = shops.db_password()
     if not pw:
         raise shops.NotReady()
     try:
-        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
+        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(),
                               password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
     except Exception:
         raise shops.NotReady()

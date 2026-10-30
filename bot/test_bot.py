@@ -9,6 +9,16 @@ import bot
 
 
 class BotTests(unittest.TestCase):
+    def test_creepy_password_does_not_require_the_writer_secret(self):
+        import shops
+        with patch.dict(os.environ, {"CREEPY_DB_PASSWORD": "ro-only", "CRAFTCORE_DB_PASSWORD": "writer", "CRAFTCORE_DB_USER": "creepy_ro"}, clear=False):
+            self.assertEqual(shops.db_password(), "ro-only")
+            self.assertEqual(shops.db_user(), "creepy_ro")
+        with patch.dict(os.environ, {"CREEPY_DB_PASSWORD": "", "CRAFTCORE_DB_PASSWORD": "writer"}, clear=False):
+            os.environ.pop("CRAFTCORE_DB_USER", None)
+            self.assertEqual(shops.db_password(), "writer")
+            self.assertEqual(shops.db_user(), "creepy_ro")
+
     def test_configuration_requires_token(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(ValueError, "DISCORD_TOKEN"):

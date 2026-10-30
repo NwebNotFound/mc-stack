@@ -533,11 +533,12 @@ class Bot(discord.Client):
     def server_mode(self):
         """Modus aus v_server_status (dev|online|wartung); None wenn DB nicht erreichbar."""
         import pymysql
-        pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+        import shops
+        pw = shops.db_password()
         if not pw:
             return None
         try:
-            con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"), password=pw, database="craftcore", connect_timeout=3, read_timeout=3)
+            con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(), password=pw, database="craftcore", connect_timeout=3, read_timeout=3)
             try:
                 with con.cursor() as cur:
                     cur.execute("SELECT mode FROM v_server_status LIMIT 1")
@@ -553,11 +554,12 @@ class Bot(discord.Client):
     # ---------- Parkour ----------
     def parkour_rows(self):
         import pymysql
-        pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+        import shops
+        pw = shops.db_password()
         if not pw:
             return []
         try:
-            con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"), password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
+            con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(), password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
         except Exception:
             log.warning("CraftCore-DB nicht erreichbar")
             return []

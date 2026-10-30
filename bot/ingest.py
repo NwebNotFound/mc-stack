@@ -449,11 +449,12 @@ def fetch_rows(view):
 
 def _fetch(view):
     import pymysql
-    pw = os.getenv("CRAFTCORE_DB_PASSWORD", "")
+    import shops
+    pw = shops.db_password()
     if not pw:
         return None
     try:
-        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
+        con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(),
                               password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
     except Exception:
         return None
