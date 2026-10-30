@@ -17,6 +17,26 @@ class PriceMetaTest {
     assertThrows(IllegalArgumentException.class, () -> PriceMeta.effectiveFrom(cfg));
     assertEquals(PriceMeta.PLACEHOLDER, PriceMeta.effectiveFrom(new YamlConfiguration()));
   }
+  /** Platzhalter oder kaputter Wert blockiert den Markt nicht: kein Fehler, View leer, change_24h normal. */
+  @Test void placeholderOrInvalidValueNeverBlocksMarket() throws Exception {
+    var cfg = new YamlConfiguration();
+    cfg.set("effective_from", "1970-01-01T00:00:00Z");
+    assertEquals(PriceMeta.PLACEHOLDER, PriceMeta.effectiveFromOrPlaceholder(cfg, null));
+    cfg.set("effective_from", "morgen");
+    assertEquals(PriceMeta.PLACEHOLDER, assertDoesNotThrow(() -> PriceMeta.effectiveFromOrPlaceholder(cfg, java.util.logging.Logger.getLogger("t"))));
+    assertEquals(PriceMeta.PLACEHOLDER, PriceMeta.effectiveFromOrPlaceholder(RecipeArbitrageTest.prices(), null));
+    try (Connection c = h2(); Statement s = c.createStatement()) {
+      s.execute("CREATE TABLE market_catalog (item VARCHAR(64) PRIMARY KEY,sell_price DECIMAL(20,2))");
+      s.execute("CREATE TABLE market_price_history (item VARCHAR(64),hour_ts BIGINT,avg_price DECIMAL(20,4))");
+      s.execute("INSERT INTO market_catalog VALUES('STONE',1.10)");
+      s.execute("INSERT INTO market_price_history SELECT 'STONE',FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600,1.00");
+      assertDoesNotThrow(() -> PriceMeta.store(c, PriceMeta.PLACEHOLDER));
+      assertDoesNotThrow(() -> PriceMeta.store(c, PriceMeta.PLACEHOLDER));
+      try (ResultSet r = s.executeQuery("SELECT " + WebsiteStats.CHANGE_24H_SQL + " FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 LEFT JOIN price_meta pm ON pm.id=1")) {
+        r.next(); assertEquals(10.0, r.getDouble(1), 1e-6);
+      }
+    }
+  }
   @Test void viewExposesUtcDatetimeAndPlaceholderMeansEmpty() throws Exception {
     try (Connection c = h2(); Statement s = c.createStatement()) {
       PriceMeta.store(c, PriceMeta.PLACEHOLDER);

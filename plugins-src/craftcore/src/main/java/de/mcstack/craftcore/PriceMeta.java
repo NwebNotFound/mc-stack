@@ -22,6 +22,16 @@ final class PriceMeta {
     try { return OffsetDateTime.parse(raw.trim()).toInstant(); }
     catch (DateTimeParseException e) { throw new IllegalArgumentException("effective_from ist kein ISO-8601-Zeitstempel mit Zone: " + raw); }
   }
+  /** Wie effectiveFrom, aber ungueltige Werte blockieren den Markt nie: Warnung und Platzhalter. */
+  static Instant effectiveFromOrPlaceholder(Configuration prices, java.util.logging.Logger log) {
+    try { return effectiveFrom(prices); }
+    catch (IllegalArgumentException e) { if (log != null) log.warning(e.getMessage() + " - behandle als nicht gesetzt"); return PLACEHOLDER; }
+  }
+  /** Speichert den Stichtag; Fehler werden geloggt, der Markt startet trotzdem. */
+  static boolean storeSafely(CraftCore core, Instant effectiveFrom) {
+    try { core.tx(c -> { store(c, effectiveFrom); return null; }); return true; }
+    catch (Exception e) { core.getLogger().warning("price_meta nicht geschrieben: " + e.getMessage()); return false; }
+  }
   static void ensureSchema(Statement s) throws SQLException {
     s.execute("CREATE TABLE IF NOT EXISTS price_meta (id TINYINT PRIMARY KEY, effective_from DATETIME NOT NULL, effective_from_epoch BIGINT NOT NULL)");
     s.execute(VIEW);

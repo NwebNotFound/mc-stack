@@ -1,3 +1,4 @@
+USE craftcore;
 -- Preis-Stichtag fuer den Ingest (PR craft/prices-base). NICHT automatisch ausfuehren.
 -- CraftCore legt price_meta und v_price_meta beim Start selbst an (PriceMeta.ensureSchema) und schreibt
 -- effective_from aus prices-base.yml (oberste Ebene, ISO-8601) als UTC hinein. Platzhalter 1970-01-01T00:00:00Z = leere View.

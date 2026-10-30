@@ -9,6 +9,9 @@
 # 1970-01-01T00:00:00Z = nicht gesetzt. Landet in price_meta bzw. v_price_meta.effective_from (DATETIME, UTC).
 effective_from: "1970-01-01T00:00:00Z"
 
+# Hochzaehlen bei jeder neuen Preisliste: das Plugin ersetzt dann die Datei im Datenordner (Backup prices-base.yml.bak).
+version: 2
+
 base:
   ABANDONED_CAMP_MAP: 10
   ACACIA_BOAT: 1.375

@@ -11,7 +11,6 @@ class UnbuyableSellCapTest {
     Material.NETHERITE_CHESTPLATE, Material.NETHERITE_HORSE_ARMOR, Material.SHULKER_BOX, Material.RED_SHULKER_BOX, Material.ENCHANTED_BOOK);
   @Test void unbuyableItemsAreCappedAtHalfLikeEveryOtherItem() {
     var cfg = RecipeArbitrageTest.liveCfg(); var prices = RecipeArbitrageTest.prices();
-    cfg.set("market.sell-factor", 1.5); // ungedeckelt waere Ankauf = Kaufpreis
     for (Material m : UNBUYABLE) {
       assertTrue(Market.unbuyable(cfg, m), m.name());
       double base = Market.quote(cfg, m, prices.getDouble("base." + m.name())).base();

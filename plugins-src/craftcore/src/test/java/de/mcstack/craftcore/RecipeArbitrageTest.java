@@ -29,8 +29,8 @@ class RecipeArbitrageTest {
   }
   static Material mat(String n) { Material m = Material.matchMaterial(n); assertNotNull(m, n); return m; }
   static YamlConfiguration prices() { return ArbitrageTest.load("prices-base.yml"); }
-  /** Ressourcen-Config mit den Live-Faktoren: Ankauf = 50 % des Kaufpreises. */
-  static YamlConfiguration liveCfg() { var cfg = ArbitrageTest.load("config.yml"); cfg.set("market.sell-factor", 0.75); cfg.set("market.max-sell-ratio", 0.5); return cfg; }
+  /** Echte config.yml aus den Plugin-Ressourcen, ohne Overrides. */
+  static YamlConfiguration liveCfg() { return ArbitrageTest.load("config.yml"); }
   static double p(YamlConfiguration prices, Material m) { assertTrue(prices.isSet("base." + m.name()), "kein expliziter Preis: " + m); return prices.getDouble("base." + m.name()); }
   static double cheapest(YamlConfiguration prices, List<Material> options) { return options.stream().mapToDouble(m -> p(prices, m)).min().orElseThrow(); }
   static long buy(YamlConfiguration cfg, YamlConfiguration prices, Material m) { return Market.cents(cfg, m, Market.quote(cfg, m, p(prices, m)).base(), true); }
@@ -110,6 +110,14 @@ class RecipeArbitrageTest {
     var cfg = liveCfg(); var prices = prices();
     for (String n : List.of("ENDER_PEARL", "SPONGE", "CHORUS_FRUIT", "POPPED_CHORUS_FRUIT", "PURPUR_BLOCK", "EXPERIENCE_BOTTLE", "WET_SPONGE", "DRAGON_EGG", "DRAGON_HEAD", "HEAVY_CORE", "ENCHANTING_TABLE", "NETHERITE_UPGRADE_SMITHING_TEMPLATE", "SADDLE", "HEART_OF_THE_SEA", "TRIDENT", "ECHO_SHARD", "TRIAL_KEY", "OMINOUS_TRIAL_KEY", "WITHER_SKELETON_SKULL", "SNIFFER_EGG", "MACE", "BREEZE_ROD", "NETHERITE_HORSE_ARMOR"))
       assertTrue(buy(cfg, prices, mat(n)) >= 1000, n + " Kauf " + buy(cfg, prices, mat(n)) + " ct");
+  }
+  @Test void realValuesCopperShulkerDiamond() {
+    var cfg = liveCfg(); var prices = prices();
+    assertEquals(0.75, cfg.getDouble("market.sell-factor")); assertEquals(0.5, cfg.getDouble("market.max-sell-ratio"));
+    double copper = (double) buy(cfg, prices, Material.IRON_INGOT) / sell(cfg, prices, Material.COPPER_INGOT);
+    assertTrue(copper >= 8 && copper <= 10, "Kupfer je Eisen " + copper);
+    assertEquals(30000, sell(cfg, prices, Material.SHULKER_BOX), 1500);
+    assertEquals(15000, sell(cfg, prices, Material.DIAMOND), 750);
   }
   @Test void effectiveFromIsTopLevelIso8601() {
     var prices = prices();
