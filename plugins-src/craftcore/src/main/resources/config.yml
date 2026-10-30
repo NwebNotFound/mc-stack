@@ -101,6 +101,16 @@ market:
   daily-limit: 512
   # Stueck pro Material und Markttag; je Discord-Verknuepfung oder UUID.
   daily-buy-limit: 512
+  # Dynamischer Bankkurs pro Item (Kauf und Ankauf mit demselben Faktor, Spread bleibt).
+  # Netto-Volumen im rollenden Fenster, log-gedaempft; Erholung Richtung 1.0 nach Uhrzeit (auch offline).
+  dynamic:
+    enabled: false
+    half-life-hours: 72
+    window-hours: 72
+    floor: 0.3
+    ceiling: 3.0
+    volume-scale: 64
+    strength: 0.25
   daily-buy-limits: {}
   # Gesamte Verkaufserloese pro Spieler und Markttag in CP.
   daily-revenue-limit: 1500.0

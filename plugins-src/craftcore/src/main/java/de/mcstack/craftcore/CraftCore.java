@@ -233,6 +233,25 @@ public final class CraftCore extends JavaPlugin implements Listener {
       sender.sendMessage(dispatch.line());
       return true;
     }
+    if (command.getName().equals("shop") && args.length>1 && args[0].equalsIgnoreCase("buy") && args[1].equalsIgnoreCase("bank")) {
+      // order type bank_buy from the web queue (relay): shop buy bank <mc_uuid> <item> <amount> <request_id>
+      if(!(sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender) || !SpawnRoute.isSurvival(server)) {sender.sendMessage("ERR INVALID");return true;}
+      BankBuy.Request request=BankBuy.parse(args); Market market=Market.instance;
+      if(request==null || market==null) {sender.sendMessage("ERR INVALID");return true;}
+      String id=BankBuy.cacheId(request); String done=ShopBuyDispatch.lookup(id,System.currentTimeMillis());
+      if(done!=null) {sender.sendMessage(done);return true;}
+      if(ShopBuyDispatch.beginId(id)) {
+        BankBuy.Env env=market.bankEnv();
+        getServer().getScheduler().runTaskAsynchronously(this,()->{
+          String response=null;
+          try { response=tx(c->BankBuy.execute(c,request,System.currentTimeMillis(),env)); }
+          catch(Exception ex){getLogger().warning("bank_buy: "+ex);}
+          finally { ShopBuyDispatch.finishId(id, response); }
+        });
+      }
+      sender.sendMessage("PENDING");
+      return true;
+    }
     if ((command.getName().equals("shop") || command.getName().equals("ah")) && args.length>0 && args[0].equalsIgnoreCase("buy")) {
       ShopBuyDispatch.Caller who=commandCaller(sender);
       ShopBuyDispatch.complete(who, SpawnRoute.isSurvival(server), command.getName(), args, ShopBuyDispatch::stored, request -> {
