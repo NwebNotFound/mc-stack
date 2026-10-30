@@ -1,29 +1,29 @@
-"""Bank-Direktkauf per Discord: Order `bank_buy` {item, amount, mc_uuid, request_id} in die Order-Queue.
+"""Bank-Direktkauf per Discord: Order `bank_buy` {item, amount, mc_uuid, request_id} in die gemeinsame
+Order-Queue der Website (POST /api/mc-shop-order, wie Shop-Orders; Bot = x-ingest-token + discord_id).
+Status wie bei Shop-Orders ueber v_order_fulfillment -> web_fulfillment_v2 (bestehender Relay-/Ack-Code).
 
-Die Queue (dc_orders) wird vom Relay-Loop abgearbeitet (RCON `bank buy <uuid> <item> <amount> <request_id>`,
-Serverseite baut Craft). Status danach wie bei Shop-Orders ueber v_order_fulfillment -> web_fulfillment_v2.
+Freigabe per BANK_BUY_ENABLED=1, erst wenn Website (Typ bank_buy in mc_shop_orders_pending) und
+Server (Ausfuehrung) das koennen. Vorher zeigt /markt den Button nicht.
 """
-import json, logging, re, time, uuid
+import logging, os, re, uuid
 import discord
 
 log = logging.getLogger("bank")
 ITEM_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 AMOUNTS = (1, 8, 16, 32, 64)
-MAX_AMOUNT = 2304  # 36 Stacks
+MAX_AMOUNT = 2304  # wie qty-Limit der Queue
 STATUS_TEXT = {
     None: "\u23f3 In der Warteschlange",
-    "accepted": "\u2705 Vom Server angenommen",
     "ready": "\U0001F4E6 Bereit - hol es ingame mit **/abholen** ab",
     "collected": "\u2705 Abgeholt",
     "failed": "\u274c Fehlgeschlagen - nichts abgebucht",
     "refunded": "\U0001F4B8 Erstattet",
-    "rejected": "\u274c Abgelehnt",
 }
+SOON = "\U0001F3E6 Bank-Kauf per Discord ist gleich verf\u00fcgbar. Bis dahin: ingame mit **/bank**."
 
 
-def init_db(db):
-    db.execute("CREATE TABLE IF NOT EXISTS dc_orders (request_id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, discord_id INTEGER NOT NULL, created INTEGER NOT NULL, status TEXT, reason TEXT)")
-    db.commit()
+def enabled():
+    return os.getenv("BANK_BUY_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def norm_item(item):
@@ -41,62 +41,54 @@ def make_order(item, amount, mc_uuid, request_id=None):
         raise ValueError("amount")
     if not it or not buy.UUID_RE.match(u) or not 1 <= amount <= MAX_AMOUNT:
         raise ValueError("ungueltige Bank-Order")
-    rid = request_id or "bank-" + uuid.uuid4().hex
+    rid = request_id or str(uuid.uuid4())
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid):
         raise ValueError("request_id")
     return {"type": "bank_buy", "item": it, "amount": amount, "mc_uuid": u, "request_id": rid}
 
 
-def enqueue(db, discord_id, order):
-    db.execute("INSERT OR IGNORE INTO dc_orders (request_id, kind, payload, discord_id, created) VALUES (?,?,?,?,?)",
-               (order["request_id"], order["type"], json.dumps(order), int(discord_id), int(time.time())))
-    db.commit()
-    return order["request_id"]
+def request_body(order, discord_id):
+    """Body fuer POST /api/mc-shop-order. mc_uuid nur informativ: die Website nimmt die UUID aus mc_links."""
+    return dict(order, discord_id=str(int(discord_id)))
 
 
-def command(o):
-    return f"bank buy {o['mc_uuid']} {o['item']} {int(o['amount'])} {o['request_id']}"
-
-
-def process_queue(db, rcon, host, limit=20):
-    """Offene bank_buy-Orders per RCON ausfuehren (blockierend). Rueckgabe [(rid, status, reason)]."""
-    import relay
-    done = []
-    rows = db.execute("SELECT request_id, payload FROM dc_orders WHERE kind='bank_buy' AND status IS NULL ORDER BY created LIMIT ?", (limit,)).fetchall()
-    for rid, payload in rows:
-        try:
-            o = make_order(**{k: v for k, v in json.loads(payload).items() if k != "type"})
-            status, reason = relay.parse(rcon(host, command(o)))
-        except ValueError:
-            status, reason = "rejected", "INVALID"
-        except Exception:
-            log.warning("bank buy %s: Server nicht erreichbar", rid)
-            break
-        if status is None:
-            continue  # PENDING / Befehl noch nicht da -> naechste Runde
-        db.execute("UPDATE dc_orders SET status=?, reason=? WHERE request_id=?", (status, reason, rid))
-        if status == "rejected":
-            relay.record_fulfillment(db, rid, relay.err_status(reason))
-        db.commit()
-        done.append((rid, status, reason))
-    return done
+async def submit(session, order, discord_id, base=None, token=None):
+    """('ok', request_id) | ('err', text) | ('soon', None). Schreibt in die gemeinsame Queue."""
+    import aiohttp, relay
+    token = token if token is not None else os.getenv("MC_INGEST_TOKEN", "").strip()
+    if not token:
+        return "soon", None
+    try:
+        async with session.post(f"{base or relay.BASE}/mc-shop-order", json=request_body(order, discord_id),
+                                headers={"x-ingest-token": token}, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            try:
+                data = await r.json(content_type=None)
+            except Exception:
+                data = {}
+            if r.status in (200, 202) and isinstance(data, dict) and data.get("ok"):
+                return "ok", str(data.get("request_id") or order["request_id"])
+            if r.status in (400, 403, 404, 409, 429) and isinstance(data, dict) and data.get("error"):
+                return "err", str(data["error"])[:200]
+            log.warning("bank_buy POST HTTP %s", r.status)
+            return "soon", None
+    except Exception as e:
+        log.warning("bank_buy POST fehlgeschlagen: %s", type(e).__name__)
+        return "soon", None
 
 
 def status_of(db, rid):
-    """Neuester Status: Fulfillment (v_order_fulfillment) vor Queue-Status."""
-    import relay
-    have = [r[0] for r in db.execute("SELECT status FROM web_fulfillment_v2 WHERE request_id=? ORDER BY updated, rowid", (rid,))]
+    have = {r[0] for r in db.execute("SELECT status FROM web_fulfillment_v2 WHERE request_id=?", (rid,))}
     for st in ("refunded", "failed", "collected", "ready"):
         if st in have:
-            return st, None
-    r = db.execute("SELECT status, reason FROM dc_orders WHERE request_id=?", (rid,)).fetchone()
-    return (r[0], r[1]) if r else (None, None)
+            return st
+    return None
 
 
 def status_text(db, rid):
-    st, reason = status_of(db, rid)
-    t = STATUS_TEXT.get(st, str(st))
-    return t + (f" (`{reason}`)" if reason and st == "rejected" else "")
+    try:
+        return STATUS_TEXT.get(status_of(db, rid), STATUS_TEXT[None])
+    except Exception:
+        return STATUS_TEXT[None]
 
 
 class StatusView(discord.ui.View):
@@ -110,7 +102,7 @@ class StatusView(discord.ui.View):
 
 
 async def place(bot, interaction, item, amount):
-    import buy
+    import aiohttp, buy
     u = buy.linked_uuid(bot, interaction.user.id)
     if not u:
         return await interaction.response.send_message("\U0001F517 Zum Kaufen musst du erst dein Minecraft-Konto mit `/link` verkn\u00fcpfen.", ephemeral=True)
@@ -118,14 +110,13 @@ async def place(bot, interaction, item, amount):
         o = make_order(item, amount, u)
     except ValueError:
         return await interaction.response.send_message("Bitte eine Menge von 1 bis %d w\u00e4hlen." % MAX_AMOUNT, ephemeral=True)
-    init_db(bot.db)
-    rid = enqueue(bot.db, interaction.user.id, o)
-    msg = f"\U0001F3E6 Bank-Kauf **{o['amount']}\u00d7 {buy.item_label(o['item'])}** ist in der Warteschlange.\nStatus: {status_text(bot.db, rid)}"
-    msg_obj = getattr(interaction, "message", None)
-    if msg_obj is not None and getattr(msg_obj.flags, "ephemeral", False) and not interaction.response.is_done():
-        await interaction.response.edit_message(content=msg, view=StatusView(bot, rid))
-    else:
-        await interaction.response.send_message(msg, view=StatusView(bot, rid), ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    async with aiohttp.ClientSession() as session:
+        st, val = await submit(session, o, interaction.user.id)
+    if st == "ok":
+        msg = f"\U0001F3E6 Bank-Kauf **{o['amount']}\u00d7 {buy.item_label(o['item'])}** ist bestellt.\nStatus: {status_text(bot.db, val)}"
+        return await interaction.followup.send(msg, view=StatusView(bot, val), ephemeral=True)
+    await interaction.followup.send(f"\u274c {val}" if st == "err" else SOON, ephemeral=True)
 
 
 class AmountModal(discord.ui.Modal, title="Wie viele bei der Bank kaufen?"):
@@ -158,6 +149,8 @@ class AmountSelect(discord.ui.Select):
 
 async def start(bot, interaction, item, price_text=""):
     import buy
+    if not enabled():
+        return await interaction.response.send_message(SOON, ephemeral=True)
     if not buy.linked_uuid(bot, interaction.user.id):
         return await interaction.response.send_message("\U0001F517 Zum Kaufen musst du erst dein Minecraft-Konto mit `/link` verkn\u00fcpfen.", ephemeral=True)
     if not norm_item(item):

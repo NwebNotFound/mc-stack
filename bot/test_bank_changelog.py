@@ -38,63 +38,70 @@ class ChangelogEmbedTests(unittest.TestCase):
             self.assertEqual(changelog.load_json(p)[0]["text"], "Äpfel")
 
 
-class BankBuyTests(unittest.TestCase):
-    def db(self):
-        d = sqlite3.connect(":memory:")
-        relay.init_db(d)
-        bank.init_db(d)
-        return d
+class FakeResp:
+    def __init__(self, status, data):
+        self.status, self.data = status, data
 
+    async def json(self, content_type=None):
+        return self.data
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class FakeSession:
+    def __init__(self, status, data):
+        self.resp, self.calls = FakeResp(status, data), []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.calls.append((url, json, headers))
+        return self.resp
+
+
+class BankBuyTests(unittest.TestCase):
     def test_make_order_format(self):
-        o = bank.make_order("minecraft:IRON_INGOT", 16, U, "bank-abc")
-        self.assertEqual(o, {"type": "bank_buy", "item": "iron_ingot", "amount": 16, "mc_uuid": U, "request_id": "bank-abc"})
-        self.assertEqual(bank.command(o), f"bank buy {U} iron_ingot 16 bank-abc")
+        o = bank.make_order("minecraft:IRON_INGOT", 16, U, "r-abc")
+        self.assertEqual(o, {"type": "bank_buy", "item": "iron_ingot", "amount": 16, "mc_uuid": U, "request_id": "r-abc"})
         for bad in (("iron ingot; op x", 1, U), ("iron_ingot", 0, U), ("iron_ingot", 99999, U), ("iron_ingot", 1, "nope")):
             with self.assertRaises(ValueError):
                 bank.make_order(*bad)
 
-    def test_queue_idempotent_and_status(self):
-        d = self.db()
-        o = bank.make_order("iron_ingot", 8, U, "bank-1")
-        bank.enqueue(d, 42, o)
-        bank.enqueue(d, 42, o)
-        self.assertEqual(d.execute("SELECT COUNT(*) FROM dc_orders").fetchone()[0], 1)
-        calls = []
-        rcon = lambda host, cmd: calls.append(cmd) or "PENDING bank-1"
-        self.assertEqual(bank.process_queue(d, rcon, "survival"), [])
-        self.assertEqual(bank.status_of(d, "bank-1"), (None, None))
-        rcon = lambda host, cmd: calls.append(cmd) or "OK 8 7200 0"
-        self.assertEqual(bank.process_queue(d, rcon, "survival"), [("bank-1", "accepted", None)])
-        self.assertEqual(bank.process_queue(d, rcon, "survival"), [])  # nicht doppelt
-        self.assertEqual(len(calls), 2)
-        relay.apply_fulfillment(d, [("bank-1", "ready", "2026-10-30 14:00:00")])
-        self.assertEqual(bank.status_of(d, "bank-1")[0], "ready")
-
-    def test_rejected_records_failed_and_not_acked_to_web(self):
-        d = self.db()
-        bank.enqueue(d, 1, bank.make_order("gold_ingot", 1, U, "bank-2"))
-        self.assertEqual(bank.process_queue(d, lambda h, c: "ERR NO_FUNDS", "s"), [("bank-2", "rejected", "NO_FUNDS")])
-        self.assertEqual(bank.status_of(d, "bank-2")[0], "failed")
+    def test_submit_posts_to_shared_queue(self):
         import asyncio
+        o = bank.make_order("iron_ingot", 8, U, "r-1")
+        s = FakeSession(202, {"ok": True, "request_id": "srv-1", "status": "pending"})
+        self.assertEqual(asyncio.run(bank.submit(s, o, 123456789012345678, base="https://x/api", token="t")), ("ok", "srv-1"))
+        url, body, headers = s.calls[0]
+        self.assertEqual(url, "https://x/api/mc-shop-order")
+        self.assertEqual(headers, {"x-ingest-token": "t"})
+        self.assertEqual(body, {"type": "bank_buy", "item": "iron_ingot", "amount": 8, "mc_uuid": U, "request_id": "r-1", "discord_id": "123456789012345678"})
+
+    def test_submit_errors(self):
+        import asyncio
+        o = bank.make_order("coal", 1, U)
+        self.assertEqual(asyncio.run(bank.submit(FakeSession(404, {"error": "Shop nicht gefunden"}), o, 1, base="b", token="t")), ("err", "Shop nicht gefunden"))
+        self.assertEqual(asyncio.run(bank.submit(FakeSession(500, {}), o, 1, base="b", token="t")), ("soon", None))
+        self.assertEqual(asyncio.run(bank.submit(FakeSession(202, {"ok": True}), o, 1, base="b", token="")), ("soon", None))
+
+    def test_status_via_fulfillment(self):
+        d = sqlite3.connect(":memory:")
+        relay.init_db(d)
+        self.assertIsNone(bank.status_of(d, "srv-1"))
+        relay.apply_fulfillment(d, [("srv-1", "ready", "2026-10-30 14:00:00")])
+        self.assertEqual(bank.status_of(d, "srv-1"), "ready")
+        relay.apply_fulfillment(d, [("srv-1", "collected", "2026-10-30 14:05:00")])
+        self.assertEqual(bank.status_of(d, "srv-1"), "collected")
+
+    def test_disabled_by_default(self):
+        import os
         from unittest import mock
-        sent = []
-
-        async def fake_ack(session, token, path, acks):
-            sent.append(acks)
-            return True
-        bot = mock.Mock(db=d)
-        with mock.patch.object(relay, "_ack", fake_ack), mock.patch.object(relay, "_fulfillment_rows", lambda since: []):
-            asyncio.run(relay.sync_fulfillment(bot, None, "t"))
-        self.assertEqual(sent, [])
-
-    def test_server_down_keeps_queue(self):
-        d = self.db()
-        bank.enqueue(d, 1, bank.make_order("coal", 1, U, "bank-3"))
-
-        def boom(h, c):
-            raise ConnectionRefusedError()
-        self.assertEqual(bank.process_queue(d, boom, "s"), [])
-        self.assertEqual(d.execute("SELECT status FROM dc_orders").fetchone()[0], None)
+        with mock.patch.dict(os.environ, {"BANK_BUY_ENABLED": ""}):
+            self.assertFalse(bank.enabled())
+        with mock.patch.dict(os.environ, {"BANK_BUY_ENABLED": "1"}):
+            self.assertTrue(bank.enabled())
 
 
 if __name__ == "__main__":

@@ -268,7 +268,8 @@ class ItemView(discord.ui.View):
         for r in RANGES:
             self.add_item(RangeButton(r, r == rng))
         self.add_item(discord.ui.Button(label="Auf der Website", url=f"{WEB}?item={e['item']}", emoji="\U0001F310", row=1))
-        if e.get("buy_price") is not None:
+        import bank
+        if bank.enabled() and e.get("buy_price") is not None:
             self.add_item(BankButton(bot, e))
 
     @discord.ui.button(label="Preisalarm", emoji="\U0001F514", style=discord.ButtonStyle.primary, row=1)
