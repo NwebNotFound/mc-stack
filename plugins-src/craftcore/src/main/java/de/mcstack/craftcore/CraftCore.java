@@ -68,7 +68,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       }
       if (InventorySync.tracks(server)) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); inventorySync=new InventorySync(this,server); inventorySync.start(); }
       teamInvites=new TeamInvites(this,server); teamInvites.start();
-      saveDefaultConfig();
+      saveDefaultConfig(); ResourceSync.sync(this);
       for (OfflinePlayer known : Bukkit.getOfflinePlayers()) if (known.hasPlayedBefore() && known.getName()!=null) tx(c->{exec(c,"INSERT IGNORE INTO known_players(uuid,name) VALUES (?,?)",known.getUniqueId().toString(),known.getName()); return null;});
       new ServerStatus(this).start();
       new Features(this).start();
