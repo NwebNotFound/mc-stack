@@ -1,5 +1,7 @@
 # Bei Aenderung vorhandener Werte hochzaehlen: dann uebernimmt das Plugin die Jar-Werte (Backup config.yml.bak).
 config-version: 2
+# Link fuer /feedback (klickbare Chatnachricht).
+feedback-url: "https://nwebnotfound.dev/feedback"
 claim-cost: 100.0
 home-slot-prices:
   2: 2000

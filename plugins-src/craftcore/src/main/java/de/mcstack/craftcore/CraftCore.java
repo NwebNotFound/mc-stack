@@ -254,7 +254,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       switch(command.getName()) {
         case "vip": userMenu.open(p,command.getName()); break;
         case "abholen": Deliveries.collect(this,p); break;
-        case "feedback": p.sendMessage(Feedback.line()); break;
+        case "feedback": p.sendMessage(Feedback.line(Feedback.url(getConfig()))); break;
         case "balance": p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
         case "pay": {
           if(args.length!=2){UserMenu.help(p,"pay"); break;}
