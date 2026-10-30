@@ -48,6 +48,17 @@ class InventorySyncTest {
       try (ResultSet r = c.createStatement().executeQuery("SELECT material FROM player_inventory WHERE uuid='"+lobbyOnly+"'")) { assertTrue(r.next()); assertEquals("COMPASS", r.getString(1)); assertFalse(r.next()); }
     }
   }
+  @Test void failingViewGrantDoesNotBreakStartup() throws Exception {
+    for (String view : List.of("v_player_inventory", "v_player_balance", "v_order_fulfillment")) {
+      assertEquals("GRANT SELECT ON craftcore."+view+" TO 'creepy_ro'@'%'", ReadGrants.sql(view));
+    }
+    try (Connection c = DriverManager.getConnection("jdbc:h2:mem:viewgrant_"+UUID.randomUUID()+";MODE=MySQL")) {
+      assertFalse(ReadGrants.apply(c, "v_player_inventory"));
+      assertFalse(ReadGrants.apply(c, "v_player_balance"));
+      assertFalse(ReadGrants.apply(c, "v_order_fulfillment"));
+      try (ResultSet r = c.createStatement().executeQuery("SELECT 1")) { assertTrue(r.next()); assertEquals(1, r.getInt(1)); }
+    }
+  }
   @Test void grantScriptMatchesReadGrant() throws Exception {
     Path script = Path.of("scripts/v-website-reads.sql");
     if (!Files.exists(script)) script = Path.of("../../scripts/v-website-reads.sql");

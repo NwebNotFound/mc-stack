@@ -27,7 +27,6 @@ final class OrderFulfillment {
     try (Statement s = c.createStatement()) {
       s.execute("CREATE TABLE IF NOT EXISTS order_fulfillment (request_id VARCHAR(64) NOT NULL PRIMARY KEY, delivery_id CHAR(36) NULL, status VARCHAR(16) NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX order_fulfillment_delivery (delivery_id), CONSTRAINT order_fulfillment_status CHECK (status IN ('ready','collected','failed','refunded')))");
       s.execute(VIEW);
-      ReadGrants.apply(s, "v_order_fulfillment");
     }
     installTrigger(c, warn);
   }

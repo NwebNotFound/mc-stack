@@ -34,7 +34,6 @@ final class InventorySync implements Listener {
       s.execute("CREATE TABLE IF NOT EXISTS player_inventory (uuid CHAR(36) NOT NULL, server VARCHAR(32) NOT NULL, slot INT NOT NULL, material VARCHAR(64) NOT NULL, amount INT NOT NULL, meta_summary VARCHAR(80) NOT NULL, updated_at TIMESTAMP NOT NULL, PRIMARY KEY(uuid, server, slot))");
       s.execute("CREATE TABLE IF NOT EXISTS player_inventory_sync (uuid CHAR(36) NOT NULL, server VARCHAR(32) NOT NULL, updated_at TIMESTAMP NOT NULL, PRIMARY KEY(uuid, server))");
       s.execute(VIEW);
-      ReadGrants.apply(s, "v_player_inventory");
     }
   }
   static String enchantSummary(String key, int level) {

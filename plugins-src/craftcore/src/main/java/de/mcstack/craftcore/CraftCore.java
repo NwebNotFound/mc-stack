@@ -84,7 +84,11 @@ public final class CraftCore extends JavaPlugin implements Listener {
       Deliveries.start(this);
       SaleNotices.start(this);
       WebsiteStats.start(this);
-      tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); try (Statement s=c.createStatement()) { for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment")) ReadGrants.applyLogged(s, view, message->getLogger().warning(message)); } return null;});
+      tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
+      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment")) {
+        try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
+        catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
+      }
       new Market(this).start();
       new Shop(this).start();
       new Auction(this).start();

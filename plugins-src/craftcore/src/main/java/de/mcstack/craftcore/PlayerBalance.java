@@ -52,7 +52,6 @@ final class PlayerBalance {
       if (column == null) s.execute(timestampDdl(product));
       else if (!h2 && needsAlter(column, true)) s.execute(MODIFY_TIMESTAMP);
       s.execute(VIEW);
-      ReadGrants.apply(s, "v_player_balance");
     }
   }
 }
