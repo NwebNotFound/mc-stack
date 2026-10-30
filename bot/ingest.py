@@ -1,5 +1,5 @@
 """Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
-import asyncio, json, logging, os, time
+import asyncio, datetime, json, logging, os, time
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
@@ -460,6 +460,29 @@ def build_auctions(cols, rows, bcols=None, brows=(), names=None):
     return out
 
 
+def build_price_reset(res):
+    """ISO-8601-UTC aus v_price_meta.effective_from, None wenn nicht sicher lesbar (Key dann weglassen)."""
+    try:
+        cols, rows = res
+        if not rows:
+            return None
+        v = dict(zip(cols, rows[0])).get("effective_from")
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            v = datetime.datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        if not isinstance(v, datetime.datetime):
+            return None
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=datetime.timezone.utc)
+        v = v.astimezone(datetime.timezone.utc)
+        if v.timestamp() <= 0:
+            return None
+        return v.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return None
+
+
 def fetch_rows(view):
     """(cols, rows) aus einer View, None wenn nicht lesbar."""
     return _fetch(view)
@@ -605,6 +628,10 @@ async def push_once(bot, session=None):
     mk = await asyncio.to_thread(fetch_rows, "v_market")
     if mk:
         payload["market"] = build_market(*mk)
+    pm = await asyncio.to_thread(fetch_rows, "v_price_meta")
+    reset = build_price_reset(pm) if pm else None
+    if reset:
+        payload["price_reset_at"] = reset
     own = session is None
     session = session or aiohttp.ClientSession()
     try:
