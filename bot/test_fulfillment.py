@@ -78,11 +78,11 @@ class IngestExtrasTests(unittest.TestCase):
         stats = {U1.replace("-", ""): {"kills": 3}}
         bal = (["uuid", "name", "balance_cp", "updated_at"], [(U1, "Nani", "9.00", None)])
         inv = (["uuid", "slot", "material", "amount", "meta_summary", "updated_at"],
-               [(U1, i, "minecraft:dirt", 1, None, None) for i in range(30, 0, -1)])
+               [(U1, i, "minecraft:dirt", 1, None, None) for i in range(70, 0, -1)])
         out = ingest.merge_player_extras(stats, bal, inv)
         p = out[U1.replace("-", "")]
         self.assertEqual(p["money"], 9)
-        self.assertEqual(len(p["inventory"]), 24)
+        self.assertEqual(len(p["inventory"]), 64)
         self.assertEqual(p["inventory"][0], {"slot": 1, "item": "dirt", "count": 1})
         self.assertNotIn("pickup", p)
         self.assertEqual(p["kills"], 3)

@@ -469,7 +469,7 @@ def _fetch(view):
         con.close()
 
 
-INV_MAX = 24
+INV_MAX = 64
 PLAYERS_MAX = 200
 
 
