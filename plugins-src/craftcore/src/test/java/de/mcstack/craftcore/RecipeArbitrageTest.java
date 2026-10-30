@@ -90,8 +90,9 @@ class RecipeArbitrageTest {
   }
   @Test void copperToIronRatioAndTiers() {
     var cfg = liveCfg(); var prices = prices();
-    double ratio = (double) sell(cfg, prices, Material.IRON_INGOT) / sell(cfg, prices, Material.COPPER_INGOT);
-    assertTrue(ratio >= 8 && ratio <= 10, "Kupfer je Eisen: " + ratio);
+    // Wie viele Kupferbarren muss ein Spieler an die Bank verkaufen, um 1 Eisenbarren zu kaufen?
+    double ratio = (double) buy(cfg, prices, Material.IRON_INGOT) / sell(cfg, prices, Material.COPPER_INGOT);
+    assertTrue(ratio >= 8 && ratio <= 10, "Kupferbarren je Eisenbarren: " + ratio);
     List<String> tiers = List.of("DIRT", "COPPER_INGOT", "IRON_INGOT", "GOLD_INGOT", "DIAMOND", "NETHERITE_INGOT");
     for (int i = 1; i < tiers.size(); i++) assertTrue(p(prices, mat(tiers.get(i - 1))) < p(prices, mat(tiers.get(i))), tiers.get(i));
     for (String n : List.of("SHULKER_BOX", "ELYTRA", "BEACON", "DRAGON_EGG", "DRAGON_HEAD", "HEAVY_CORE", "ENCHANTING_TABLE", "TOTEM_OF_UNDYING", "NETHER_STAR", "SHULKER_SHELL"))
@@ -107,7 +108,7 @@ class RecipeArbitrageTest {
   }
   @Test void valuableItemsNoLongerBelowTenCp() {
     var cfg = liveCfg(); var prices = prices();
-    for (String n : List.of("ENDER_PEARL", "SPONGE", "WET_SPONGE", "DRAGON_EGG", "DRAGON_HEAD", "HEAVY_CORE", "ENCHANTING_TABLE", "NETHERITE_UPGRADE_SMITHING_TEMPLATE", "SADDLE", "HEART_OF_THE_SEA", "TRIDENT", "ECHO_SHARD", "TRIAL_KEY", "OMINOUS_TRIAL_KEY", "WITHER_SKELETON_SKULL", "SNIFFER_EGG", "MACE", "BREEZE_ROD", "NETHERITE_HORSE_ARMOR"))
+    for (String n : List.of("ENDER_PEARL", "SPONGE", "CHORUS_FRUIT", "POPPED_CHORUS_FRUIT", "PURPUR_BLOCK", "EXPERIENCE_BOTTLE", "WET_SPONGE", "DRAGON_EGG", "DRAGON_HEAD", "HEAVY_CORE", "ENCHANTING_TABLE", "NETHERITE_UPGRADE_SMITHING_TEMPLATE", "SADDLE", "HEART_OF_THE_SEA", "TRIDENT", "ECHO_SHARD", "TRIAL_KEY", "OMINOUS_TRIAL_KEY", "WITHER_SKELETON_SKULL", "SNIFFER_EGG", "MACE", "BREEZE_ROD", "NETHERITE_HORSE_ARMOR"))
       assertTrue(buy(cfg, prices, mat(n)) >= 1000, n + " Kauf " + buy(cfg, prices, mat(n)) + " ct");
   }
   @Test void effectiveFromIsTopLevelIso8601() {
