@@ -164,6 +164,34 @@ def apply_fulfillment(db, rows):
     return n
 
 
+def bank_unresolved(db, rid):
+    """bank_buy-Orders, deren RCON-Versuch nur PENDING lieferte und die noch keinen Grund haben."""
+    row = db.execute("SELECT kind FROM dc_purchases WHERE idem_key=? AND (response IS NULL OR response NOT LIKE 'ERR%')", (rid,)).fetchone()
+    rel = db.execute("SELECT status FROM web_relay WHERE request_id=?", (rid,)).fetchone()
+    return bool(row and row[0] == "bank" and (rel is None or rel[0] is None) and BANK_KEY_RE.match(str(rid or "")))
+
+
+def resolve_bank_failure(db, rid, found, now=None):
+    """Plugin hat bank_buy auf failed gesetzt; Grund aus bank_buy_orders an Relay und Bot-Ergebnis uebernehmen."""
+    if not (isinstance(found, tuple) and found[0] == "rejected" and found[1]):
+        return None
+    reason = str(found[1])
+    now = int(time.time()) if now is None else int(now)
+    db.execute("UPDATE web_relay SET status='rejected', reason=?, next_try=0 WHERE request_id=? AND status IS NULL", (reason, rid))
+    db.execute("UPDATE dc_purchases SET response=?, done=? WHERE idem_key=? AND kind='bank' AND (response IS NULL OR response NOT LIKE 'ERR%')",
+               ("ERR " + reason, now, rid))
+    db.commit()
+    log.info("bank_buy %s -> failed %s", rid, reason)
+    return reason
+
+
+def fulfillment_reason(db, rid, status):
+    if status not in ("failed", "refunded"):
+        return None
+    r = db.execute("SELECT reason FROM web_relay WHERE request_id=? AND status='rejected'", (rid,)).fetchone()
+    return r[0] if r and r[0] else None
+
+
 async def sync_fulfillment(bot, session, token):
     db = bot.db
     try:
@@ -176,7 +204,16 @@ async def sync_fulfillment(bot, session, token):
     pend = db.execute("SELECT request_id, status FROM web_fulfillment_v2 WHERE acked=0 ORDER BY updated, rowid LIMIT 200").fetchall()
     if not pend:
         return []
-    acks = [{"id": rid, "status": st} for rid, st in pend]
+    for rid, st in pend:
+        if st == "failed" and bank_unresolved(db, rid):
+            resolve_bank_failure(db, rid, await asyncio.to_thread(stored_order, rid, "bank_buy"))
+    acks = []
+    for rid, st in pend:
+        a = {"id": rid, "status": st}
+        reason = fulfillment_reason(db, rid, st)
+        if reason:
+            a["reason"] = reason  # INGEST.md: Ack-Feld `reason`
+        acks.append(a)
     if await _ack(session, token, "mc-shop-orders/ack", acks):
         db.executemany("UPDATE web_fulfillment_v2 SET acked=1 WHERE request_id=? AND status=?", pend)
         db.commit()

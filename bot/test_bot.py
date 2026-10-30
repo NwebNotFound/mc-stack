@@ -477,6 +477,43 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0], f"shop buy {self.U} aaaaaaaa-0000-0000-0000-000000000001 1 10 r-1")
 
+    def test_bank_buy_pending_then_failed_no_funds_passes_reason(self):
+        import relay, shops, asyncio
+        con = self.db()
+        rid = "d95c8949-0000-4000-8000-000000000001"
+        o = {"id": rid, "request_id": rid, "type": "bank_buy", "item": "dirt", "amount": 1, "qty": 1,
+             "mc_uuid": self.U, "buyer_uuid": self.U, "shop_id": None, "listing_id": None}
+        sent = []
+        async def fake_ack(session, token, path, acks):
+            sent.append((path, list(acks))); return True
+        class Bot:
+            db = con
+        old_q, old_ack = shops.query, relay._ack
+        relay._ack = fake_ack
+        try:
+            # 1. Versuch: PENDING, danach listet die Website die Order nicht mehr
+            shops.query = lambda sql, args=(): []
+            self.assertEqual(relay.handle_order(con, lambda h, c: "PENDING bank", "h", o), (None, None))
+            self.assertEqual(relay.observe(con, rid, "order", None, None, 1000), (None, None))
+            # Plugin schreibt failed + Grund in bank_buy_orders
+            def query(sql, args=()):
+                if "v_order_fulfillment" in sql:
+                    return [(rid, "failed", "2026-10-30 14:40:00")]
+                if "bank_buy_orders" in sql:
+                    return [("ERR NO_FUNDS",)]
+                return []
+            shops.query = query
+            acks = asyncio.run(relay.sync_fulfillment(Bot(), None, "t"))
+            self.assertEqual(acks, [{"id": rid, "status": "failed", "reason": "NO_FUNDS"}])
+            self.assertEqual(sent[-1][0], "mc-shop-orders/ack")
+            self.assertEqual(con.execute("SELECT status, reason FROM web_relay WHERE request_id=?", (rid,)).fetchone(), ("rejected", "NO_FUNDS"))
+            self.assertEqual(con.execute("SELECT response FROM dc_purchases WHERE idem_key=?", (rid,)).fetchone()[0], "ERR NO_FUNDS")
+            # naechster Lauf ohne Website-Eintrag reicht rejected + Grund nach
+            later = asyncio.run(relay.process(Bot(), None, "t", "order", [], None, now=2000))
+            self.assertEqual(later, [{"id": rid, "status": "rejected", "reason": "NO_FUNDS"}])
+        finally:
+            shops.query, relay._ack = old_q, old_ack
+
     def test_bank_buy_stored_order_reads_bank_buy_orders(self):
         import relay, shops
         seen = []
