@@ -590,20 +590,99 @@ async def servers_loop(bot):
     async with aiohttp.ClientSession() as session:
         while not bot.is_closed():
             try:
-                await push_servers(bot, session)
+                async with _push_lock:
+                    await push_servers(bot, session)
             except Exception as e:
                 log.warning("Servers-Push fehlgeschlagen: %s", type(e).__name__)
             await asyncio.sleep(SERVERS_INTERVAL)
 
 
+# ---------- Sofort-Push bei Join/Leave ----------
+DEBOUNCE = 15
+PRESENCE_POLL = 2
+JOIN_LEAVE_RE = re.compile(r"\]: ([A-Za-z0-9_]{3,16}) (joined|left) the game\s*$")
+_push_lock = asyncio.Lock()
+_presence = {"last": 0.0, "pending": None}
+
+
+def is_presence_line(line):
+    return bool(JOIN_LEAVE_RE.search(line or ""))
+
+
+async def _presence_push(bot):
+    async with _push_lock:
+        _presence["last"] = time.monotonic()
+        async with aiohttp.ClientSession() as session:
+            return await push_servers(bot, session)
+
+
+def trigger_presence(bot):
+    """Max. ein Extra-Push pro DEBOUNCE s; spaetere Events werden nachgeholt, nie parallel."""
+    if _presence["pending"] and not _presence["pending"].done():
+        return _presence["pending"]
+    wait = max(0.0, _presence["last"] + DEBOUNCE - time.monotonic())
+
+    async def run():
+        if wait:
+            await asyncio.sleep(wait)
+        try:
+            await _presence_push(bot)
+        except Exception as e:
+            log.warning("Presence-Push fehlgeschlagen: %s", type(e).__name__)
+
+    _presence["pending"] = asyncio.create_task(run())
+    return _presence["pending"]
+
+
+def scan_presence(offsets, base="/minecraft"):
+    """Liest neue Logzeilen aller Backends (Lobby, Survival, VIP); True bei Join/Leave."""
+    hit = False
+    for key, _env, _d in SERVER_KEYS:
+        path = f"{base}/{key}/logs/latest.log"
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        old = offsets.get(key)
+        if old is None:
+            offsets[key] = (st.st_ino, st.st_size)
+            continue
+        ino, off = old
+        if ino != st.st_ino or st.st_size < off:
+            off = 0
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                f.seek(off)
+                for line in f:
+                    hit = is_presence_line(line) or hit
+                offsets[key] = (st.st_ino, f.tell())
+        except OSError:
+            continue
+    return hit
+
+
+async def presence_loop(bot):
+    await bot.wait_until_ready()
+    offsets = {}
+    while not bot.is_closed():
+        try:
+            if await asyncio.to_thread(scan_presence, offsets):
+                trigger_presence(bot)
+        except Exception as e:
+            log.warning("Presence-Scan fehlgeschlagen: %s", type(e).__name__)
+        await asyncio.sleep(PRESENCE_POLL)
+
+
 async def loop(bot):
     asyncio.create_task(servers_loop(bot))
+    asyncio.create_task(presence_loop(bot))
     import relay
     asyncio.create_task(relay.loop(bot))
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            await push_once(bot)
+            async with _push_lock:
+                await push_once(bot)
         except Exception as e:
             log.warning("Ingest-Push fehlgeschlagen: %s", type(e).__name__)
         await asyncio.sleep(INTERVAL)
