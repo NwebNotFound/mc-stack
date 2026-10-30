@@ -6,25 +6,62 @@ import discord
 log = logging.getLogger("changelog")
 SRC = Path(__file__).with_name("changelog.json")
 STATE = Path("/app/data/changelog-posted.json")
+def load_json(path):
+    """changelog*.json immer als UTF-8 lesen, BOM (utf-8-sig, z.B. aus Windows-Editor) wird toleriert."""
+    return json.loads(Path(path).read_bytes().decode("utf-8-sig"))
+
+
+def _cells(line):
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def table_fields(e, text, limit=24):
+    """Markdown-Tabelle (| a | b |) oder ```-Block -> Embed-Felder statt breitem Codeblock. True wenn umgesetzt."""
+    lines = [l for l in str(text or "").replace("```", "").splitlines() if l.strip()]
+    rows = [l for l in lines if l.strip().startswith("|")]
+    if len(rows) < 2:
+        return False
+    head = _cells(rows[0])
+    body = [_cells(r) for r in rows[1:] if not set(r.replace("|", "").strip()) <= set("-: ")]
+    intro = "\n".join(l for l in lines if not l.strip().startswith("|")).strip()
+    if intro:
+        e.add_field(name="\u200b", value=intro[:1024], inline=False)
+    for r in body[:max(0, min(limit, 25 - len(e.fields)))]:
+        name = (r[0] or "\u2013")[:256]
+        val = " \u00b7 ".join(f"{h}: **{v}**" for h, v in zip(head[1:], r[1:]) if v) or "\u2013"
+        e.add_field(name=name, value=val[:1024], inline=True)
+    return True
+
+
 GROUPS = (("neu", "✨ Neu"), ("verbessert", "🔧 Verbessert"), ("fix", "🐛 Fix"))
 
 
 def embed(entry):
     e = discord.Embed(title="\U0001F916 Discord \u00b7 " + f"Update v{entry['version']} — {entry['date']}", color=0x57F287)
     for key, label in GROUPS:
-        items = [c["text"] for c in entry["changes"] if c["type"] == key]
+        items = [c["text"] for c in entry["changes"] if c["type"] == key and not _is_table(c["text"])]
         if items:
             e.add_field(name=label, value="\n".join("• " + t for t in items)[:1024], inline=False)
+    for c in entry["changes"]:
+        if _is_table(c["text"]):
+            table_fields(e, c["text"])
+    if entry.get("table"):
+        table_fields(e, entry["table"])
     e.set_footer(text="Creepy · Changelog")
     return e
+
+
+def _is_table(text):
+    t = str(text or "")
+    return "```" in t or sum(1 for l in t.splitlines() if l.strip().startswith("|")) >= 2
 
 
 async def post_new(bot, force_version=None):
     cid = os.getenv("CHANGELOG_CHANNEL_ID", "").strip()
     if not cid:
         return 0
-    entries = json.loads(SRC.read_text(encoding="utf-8"))
-    posted = set(json.loads(STATE.read_text())) if STATE.exists() else set()
+    entries = load_json(SRC)
+    posted = set(json.loads(STATE.read_text(encoding="utf-8"))) if STATE.exists() else set()
     channel = bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
     n = 0
     for entry in entries:
@@ -53,7 +90,7 @@ async def post_new(bot, force_version=None):
                 continue  # erst posten, wenn die Markt-Views existieren
         await channel.send(embed=embed(entry))
         posted.add(v)
-        STATE.write_text(json.dumps(sorted(posted)))
+        STATE.write_text(json.dumps(sorted(posted)), encoding="utf-8")
         n += 1
         log.info("Changelog v%s gepostet", v)
     return n
@@ -62,8 +99,11 @@ MC_SRC = Path("/app/mc/changelog-mc.json")
 
 
 def _fields(e, head, items):
+    for c in items:
+        if _is_table(c.get("text")):
+            table_fields(e, c["text"])
     for key, label in GROUPS:
-        lines = [c["text"] for c in items if c.get("type") == key]
+        lines = [c["text"] for c in items if c.get("type") == key and not _is_table(c.get("text"))]
         chunk, part = [], 0
         for t in lines + [None]:
             if t is None or sum(len(x) + 3 for x in chunk) + len(t) + 3 > 1000:
@@ -80,6 +120,8 @@ def mc_embed(entry):
     _fields(e, "\u26CF\uFE0F Minecraft", entry.get("changes", []))
     if entry.get("discord"):
         e.add_field(name="\U0001F916 Discord", value="\n".join("\u2022 " + t for t in entry["discord"])[:1024], inline=False)
+    if entry.get("table"):
+        table_fields(e, entry["table"])
     e.set_footer(text="Creepy \u00b7 Changelog")
     return e
 
@@ -89,11 +131,11 @@ async def post_mc(bot):
     if not cid or not MC_SRC.exists():
         return 0
     try:
-        entries = json.loads(MC_SRC.read_text(encoding="utf-8"))
+        entries = load_json(MC_SRC)
     except Exception:
         log.warning("changelog-mc.json ist kein g\u00fcltiges JSON - \u00fcbersprungen")
         return 0
-    posted = set(json.loads(STATE.read_text())) if STATE.exists() else set()
+    posted = set(json.loads(STATE.read_text(encoding="utf-8"))) if STATE.exists() else set()
     channel = bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
     n = 0
     for entry in entries:
@@ -102,7 +144,7 @@ async def post_mc(bot):
             continue
         await channel.send(embed=mc_embed(entry))
         posted.add(key)
-        STATE.write_text(json.dumps(sorted(posted)))
+        STATE.write_text(json.dumps(sorted(posted)), encoding="utf-8")
         n += 1
         log.info("MC-Changelog %s gepostet", entry["version"])
     return n

@@ -166,7 +166,8 @@ async def sync_fulfillment(bot, session, token):
         rows = None
     if rows:
         apply_fulfillment(db, rows)
-    pend = db.execute("SELECT request_id, status FROM web_fulfillment_v2 WHERE acked=0 ORDER BY updated, rowid LIMIT 200").fetchall()
+    # Discord-Bank-Orders (bank-...) kennt die Website nicht -> nicht dorthin acken
+    pend = db.execute("SELECT request_id, status FROM web_fulfillment_v2 WHERE acked=0 AND request_id NOT LIKE 'bank-%' ORDER BY updated, rowid LIMIT 200").fetchall()
     if not pend:
         return []
     acks = [{"id": rid, "status": st} for rid, st in pend]
@@ -373,6 +374,9 @@ async def run_once(bot, session):
     if not token:
         return None
     import buy
+    import bank
+    bank.init_db(bot.db)
+    await asyncio.to_thread(_run, lambda db, rcon, host, _: bank.process_queue(db, rcon, host), buy.RCON, buy.HOST, None)
     st, orders = await _get(session, token, "mc-shop-orders/pending")
     await process(bot, session, token, "order", orders, handle_order)
     await sync_fulfillment(bot, session, token)
