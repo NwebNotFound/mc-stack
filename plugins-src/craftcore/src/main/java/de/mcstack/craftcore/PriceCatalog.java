@@ -17,7 +17,9 @@ final class PriceCatalog {
     List<Recipe> recipes=new ArrayList<>(); Bukkit.recipeIterator().forEachRemaining(recipes::add);
     return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList());
   }
-  record CatalogRecipe(Material output, int amount, List<List<Material>> ingredients) {}
+  record CatalogRecipe(Material output, int amount, List<List<Material>> ingredients, boolean cooking) {
+    CatalogRecipe(Material output, int amount, List<List<Material>> ingredients) { this(output,amount,ingredients,false); }
+  }
   // Only explicit prices and recipes whose ingredients are themselves known count.
   // Category fallback values are deliberately excluded from this provenance set.
   static Set<Material> known(YamlConfiguration cfg, List<CatalogRecipe> recipes) {
@@ -43,7 +45,7 @@ final class PriceCatalog {
     else return null;
     List<List<Material>> choices=new ArrayList<>();
     for(RecipeChoice choice:ingredients) { List<Material> options=new ArrayList<>(); if(choice instanceof RecipeChoice.MaterialChoice mc) options.addAll(mc.getChoices()); else if(choice instanceof RecipeChoice.ExactChoice ec) for(ItemStack stack:ec.getChoices()) options.add(stack.getType()); choices.add(options); }
-    return new CatalogRecipe(recipe.getResult().getType(),recipe.getResult().getAmount(),choices);
+    return new CatalogRecipe(recipe.getResult().getType(),recipe.getResult().getAmount(),choices,recipe instanceof CookingRecipe<?>);
   }
   static Map<Material,Double> build(YamlConfiguration cfg, List<CatalogRecipe> recipes) {
     return build(cfg,recipes,PriceCatalog::eligible,PriceCatalog::category);
@@ -63,6 +65,21 @@ final class PriceCatalog {
           double best=Double.POSITIVE_INFINITY; for(Material m:options) if(prices.containsKey(m)) best=Math.min(best,prices.get(m)); if(!Double.isFinite(best)){valid=false;break;} sum+=best;
         }
         if(valid) { double value=Math.max(.01,Math.min(100000000, sum*1.1/Math.max(1,recipe.amount()))); Double old=prices.get(out); if(old==null || value<old-0.000001){prices.put(out,value);changed=true;} }
+      }
+      if(!changed)break;
+    }
+    // Zyklen wie RAW_IRON <-> RAW_IRON_BLOCK haben sonst keinen Preis und fielen auf den billigen Kategorie-Fallback
+    // (Block 3 CP fuer 9 Raw Iron) - das drueckte ueber die Rezeptkostengrenze den Ankauf von Eisen/Gold.
+    // Unbepreiste Schmelz-Zutaten erben den Preis ihres Schmelzprodukts, danach wird erneut relaxiert.
+    boolean derived=false;
+    for(CatalogRecipe r:recipes) if(r.cooking() && prices.containsKey(r.output()) && r.amount()>0)
+      for(List<Material> options:r.ingredients()) for(Material in:options)
+        if(eligible.test(in) && !prices.containsKey(in)) { prices.put(in,prices.get(r.output())/r.amount()); derived=true; }
+    if(derived) for(int pass=0;pass<Material.values().length;pass++) { boolean changed=false;
+      for(CatalogRecipe recipe:recipes) { Material out=recipe.output(); if(!eligible.test(out) || fixed.contains(out) || recipe.ingredients().isEmpty())continue;
+        double sum=0; boolean valid=true;
+        for(List<Material> options:recipe.ingredients()) { double best=Double.POSITIVE_INFINITY; for(Material m:options) if(prices.containsKey(m)) best=Math.min(best,prices.get(m)); if(!Double.isFinite(best)){valid=false;break;} sum+=best; }
+        if(valid) { double value=Math.max(.01,Math.min(100000000, sum*1.1/Math.max(1,recipe.amount()))); Double old=prices.get(out); if(old==null){prices.put(out,value);changed=true;} }
       }
       if(!changed)break;
     }

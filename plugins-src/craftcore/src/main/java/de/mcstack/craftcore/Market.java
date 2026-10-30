@@ -24,19 +24,44 @@ final class Market implements Listener {
     public Inventory getInventory() { return null; }
   }
   Market(CraftCore core) { this.core=core; instance=this; }
+  private Set<Material> priced = EnumSet.noneOf(Material.class);
+  boolean tradable(Material m){ return !core.getConfig().getBoolean("market.lock-fallback",true) || priced.contains(m); }
+  /** Gemeinsame Pruefung fuer GUI-Verkauf und RCON-Test: null = Verkauf an die Bank erlaubt. */
+  static String sellBlocked(Connection c, org.bukkit.configuration.Configuration cfg, Material m) throws SQLException {
+    if(cfg.getStringList("market.unsellable").contains(m.name())) return "UNSELLABLE";
+    if(locked(c,m,false)) return "LOCKED";
+    return null;
+  }
+  String sellCheck(String raw) throws Exception {
+    Material m=raw==null?null:Material.matchMaterial(raw);
+    if(m==null || !items.containsKey(m)) return "ERR UNKNOWN";
+    if(!tradable(m)) return "ERR LOCKED";
+    String r=core.tx(c->sellBlocked(c,core.getConfig(),m));
+    return r==null?"OK SELLABLE "+m.name():"ERR "+r+" "+m.name();
+  }
+  static boolean buyEnabled(boolean unbuyable,boolean tradable,boolean lockedBuy){ return !unbuyable && tradable && !lockedBuy; }
+  static boolean sellEnabled(boolean tradable,String sellBlocked){ return tradable && sellBlocked==null; }
+  static boolean locked(Connection c, Material m, boolean buy) throws SQLException {
+    try(PreparedStatement s=c.prepareStatement("SELECT "+(buy?"lock_buy":"lock_sell")+" FROM market_locks WHERE item=?")){s.setString(1,m.name());try(ResultSet r=s.executeQuery()){return r.next()&&r.getInt(1)==1;}}
+  }
   void start() throws Exception {
     PriceCatalog.build(core).forEach((m,raw)->{if(Bukkit.getItemFactory().getItemMeta(m)==null){core.getLogger().warning("Marktartikel ohne ItemMeta ausgeschlossen: "+m);return;} Quote q=quote(core.getConfig(),m,raw); items.put(m,q);});
     Map<Material,Long> minimumPurchases=new EnumMap<>(Material.class);
-    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,cents(core.getConfig(),m,q.base(),true));});
+    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,cents(core.getConfig(),m,q.base()*recipeCapFactor(core.getConfig()),true));});
     List<PriceCatalog.CatalogRecipe> recipes=new ArrayList<>();
     Bukkit.recipeIterator().forEachRemaining(recipe->{var converted=PriceCatalog.recipe(recipe);if(converted!=null)recipes.add(converted);});
     recipeCosts=RecipeCost.derive(minimumPurchases,recipes);
     core.tx(c->{MarketEffective.refresh(c,core.getConfig(),MarketEffective.bases(core),recipes);return null;});
+    { var f=new java.io.File(core.getDataFolder(),"prices-base.yml"); priced=PriceCatalog.known(org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(f),recipes); core.getLogger().info("Markt: "+priced.size()+" Items mit eigenem Preis, "+items.keySet().stream().filter(x->!priced.contains(x)).count()+" auf Fallback (gesperrt="+core.getConfig().getBoolean("market.lock-fallback",true)+")"); }
+    for(Material dm:List.of(Material.IRON_INGOT,Material.RAW_IRON,Material.IRON_BLOCK,Material.GOLD_INGOT)) if(items.containsKey(dm)) core.getLogger().info("Rezeptkosten "+dm+": "+recipeCosts.get(dm)+" ct via "+RecipeCost.path(dm));
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_price_factors (material VARCHAR(64) PRIMARY KEY, sell_factor DOUBLE NOT NULL, buy_factor DOUBLE NOT NULL, updated BIGINT NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS discord_links (uuid CHAR(36) PRIMARY KEY, discord_id VARCHAR(20) NULL, INDEX discord_lookup (discord_id))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_link_revenue (owner VARCHAR(40) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(owner,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS market_prices (material VARCHAR(64) PRIMARY KEY, price DOUBLE NOT NULL, updated BIGINT NOT NULL, trend VARCHAR(8) NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_daily (player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(player,item,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_revenue_daily (player CHAR(36) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(player,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_journal (id CHAR(36) PRIMARY KEY, player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, status VARCHAR(24) NOT NULL, INDEX bank_pending (status,player))"); return null;});
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); for(Material m:items.keySet()) price(c,m,false,false); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
   }
+  // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
+  // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
+  static double recipeCapFactor(org.bukkit.configuration.Configuration cfg) { double f=cfg.getDouble("market.recipe-cap-factor",1.0); return Double.isFinite(f)&&f>0?f:1.0; }
   static Quote quote(org.bukkit.configuration.Configuration cfg, Material m, double raw) {
     double base=Math.max(raw*cfg.getDouble("market.base-factor",0.5),cfg.getDouble("market.valuable-base."+m.name(),0));
     double floor=cfg.getDouble("market.price-floor."+m.name(),0);
@@ -49,7 +74,7 @@ final class Market implements Listener {
   static long cents(org.bukkit.configuration.Configuration cfg, Material m, double current, boolean buy) {
     double floor=cfg.getDouble("market.price-floor."+m.name(),0);
     long cents=PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble(buy?"market.buy-factor":"market.sell-factor",buy?1.5:0.25)),floor);
-    if(!buy && !unbuyable(cfg,m)) cents=PriceModel.cappedSell(cents,PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble("market.buy-factor",1.5)),floor));
+    if(!buy && !unbuyable(cfg,m)) cents=PriceModel.cappedSell(cents,PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble("market.buy-factor",1.5)),floor),cfg.getDouble("market.max-sell-ratio",0.35));
     return cents;
   }
   Price price(Connection c, Material m, boolean trade, boolean buy) throws SQLException {
@@ -104,7 +129,7 @@ final class Market implements Listener {
     } catch(Exception ex) { core.getLogger().warning("Bank: "+ex); p.sendMessage("Bankaktion fehlgeschlagen. Bitte spaeter erneut versuchen."); }
   }
   private void sell(Player p, Material m) throws Exception {
-    if(core.getConfig().getStringList("market.unsellable").contains(m.name())) {p.sendMessage("Dieser Artikel ist nicht an die Bank verkaufbar.");return;}
+    if(!tradable(m) || core.tx(c->sellBlocked(c,core.getConfig(),m))!=null) {p.sendMessage("Dieser Artikel ist nicht an die Bank verkaufbar.");return;}
     PlayerInventory inv=p.getInventory(); int slot=-1;
     for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && !stack.hasItemMeta()) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
@@ -113,6 +138,7 @@ final class Market implements Listener {
     try {
       boolean accepted=core.tx(c->{String day=dayKey();
         String owner=DiscordRevenue.lock(c,player.toString(),day);
+        if(sellBlocked(c,core.getConfig(),m)!=null) return false;
         long cp=price(c,m,false,false).cents(); if(cp<1 || !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit()))return false;
         core.exec(c,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",id,player.toString(),m.name(),1,cp,"PENDING"); BankJournal.finishSale(c,id,material->price(c,m,true,false)); WebsiteStats.event(c,m.name(),1,cp,"bank"); return true;});
       if(!accepted){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht oder Verkaufspreis unter 0,01 CP.");return;}
@@ -126,7 +152,7 @@ final class Market implements Listener {
   }
   private boolean isUnbuyable(Material m) { return unbuyable(core.getConfig(),m); }
   private void buy(Player p,Material m) throws Exception {
-    if(isUnbuyable(m)) { p.sendMessage("Dieser Artikel ist nur durch Spielerhandel erhaeltlich."); return; }
+    if(!buyEnabled(isUnbuyable(m),tradable(m),core.tx(c->locked(c,m,true)))) { p.sendMessage("Dieser Artikel ist nur durch Spielerhandel erhaeltlich."); return; }
     UUID player=p.getUniqueId(); String id=UUID.randomUUID().toString();
     boolean accepted=core.tx(c->{long cp=price(c,m,false,true).cents(); long balance=core.balance(c,player); if(balance<cp)return false;
       String owner=DiscordRevenue.owner(c,player.toString(),true); int limit=core.getConfig().getInt("market.daily-buy-limits."+m.name(),core.getConfig().getInt("market.daily-buy-limit",512));

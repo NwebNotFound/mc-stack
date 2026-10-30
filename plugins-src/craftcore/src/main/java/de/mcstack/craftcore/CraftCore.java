@@ -205,6 +205,10 @@ public final class CraftCore extends JavaPlugin implements Listener {
       if(!(sender instanceof Player || sender instanceof org.bukkit.command.ConsoleCommandSender || sender instanceof org.bukkit.command.RemoteConsoleCommandSender)){sender.sendMessage("ERR INVALID");return true;}
       String response;try{response=tx(c->RealAuctions.bid(c,request,System.currentTimeMillis()));}catch(Exception ex){getLogger().warning("Auktionsgebot: "+ex.getClass().getSimpleName());response="ERR INVALID";}sender.sendMessage(response);return true;
     }
+    if((command.getName().equals("bank")||command.getName().equals("market")) && args.length==2 && args[0].equalsIgnoreCase("sellcheck")) {
+      if(!(sender instanceof org.bukkit.command.ConsoleCommandSender || sender instanceof org.bukkit.command.RemoteConsoleCommandSender) || Market.instance==null) {sender.sendMessage("ERR INVALID");return true;}
+      try{sender.sendMessage(Market.instance.sellCheck(args[1]));}catch(Exception ex){getLogger().warning("sellcheck: "+ex.getClass().getSimpleName());sender.sendMessage("ERR INVALID");} return true;
+    }
     if(command.getName().equals("cclink")) {
       if(!(sender instanceof org.bukkit.command.ConsoleCommandSender || sender instanceof org.bukkit.command.RemoteConsoleCommandSender) || args.length!=3 || !args[0].equalsIgnoreCase("set") || !args[2].matches("[0-9]{1,20}")) {sender.sendMessage("ERR INVALID");return true;}
       try {String uuid=UUID.fromString(args[1]).toString(); tx(c->{try(PreparedStatement st=c.prepareStatement("INSERT INTO discord_links(uuid,discord_id) VALUES (?,?) ON DUPLICATE KEY UPDATE discord_id=VALUES(discord_id)")){st.setString(1,uuid);st.setString(2,args[2]);st.executeUpdate();}return null;});sender.sendMessage("OK");}

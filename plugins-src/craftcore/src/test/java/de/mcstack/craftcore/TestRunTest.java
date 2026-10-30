@@ -26,7 +26,7 @@ class TestRunTest {
   }
 
   @Test void defaultConfigKeepsTestrunDisabled() throws Exception {
-    String yaml = Files.readString(Path.of("src/main/resources/config.yml"));
+    String yaml = Files.readString(Path.of("src/main/resources/config.yml")).replace("\r\n", "\n");
     int section = yaml.indexOf("\ntestrun:\n");
     assertTrue(section > 0);
     String block = yaml.substring(section, yaml.indexOf("\n", yaml.indexOf("enabled:", section)));

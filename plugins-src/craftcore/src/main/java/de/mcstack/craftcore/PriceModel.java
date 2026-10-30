@@ -1,7 +1,8 @@
 package de.mcstack.craftcore;
 
 final class PriceModel {
-  static long cappedSell(long sell,long buy) { return Math.min(sell, (buy / 100)*35 + (buy % 100)*35/100); }
+  static long cappedSell(long sell,long buy) { return cappedSell(sell,buy,0.35); }
+  static long cappedSell(long sell,long buy,double ratio) { long bp=Math.round(Math.max(0,Math.min(1,ratio))*10000); return Math.min(sell,(buy/10000)*bp+(buy%10000)*bp/10000); }
   static long withFloor(long cents, double floor) { return Math.max(cents, (long)Math.ceil(Math.max(0, floor)*100)); }
   static long factorQuote(double current,double factor) { return Math.max(0,(long)Math.floor(current*100*Math.max(0,factor))); }
   static double diminishing(int count,int tier1,double factor1,int tier2,double factor2) { return count>=tier2?factor2:count>=tier1?factor1:1.0; }

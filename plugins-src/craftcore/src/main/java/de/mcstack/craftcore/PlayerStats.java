@@ -67,6 +67,7 @@ final class PlayerStats implements Listener {
     core.tx(c->{migrate(c); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskTimer(core, ()->Bukkit.getOnlinePlayers().forEach(this::capture), 6000L, 6000L);
+    Bukkit.getScheduler().runTaskLater(core, this::backfill, 200L);
   }
   private void capture(Player p) {
     UUID uuid=p.getUniqueId();
@@ -74,6 +75,34 @@ final class PlayerStats implements Listener {
     Snapshot v=SpawnRoute.isSurvival(server) ? snapshot(p) : null;
     List<Detail> detail=v==null ? List.of() : details(p);
     writer.execute(()->{ try { core.tx(c->{upsertPlaytime(c,uuid,server,playtime); if(v!=null) { upsert(c,v); replaceDetails(c,uuid,detail); } return null;}); } catch(Exception e) { core.getLogger().warning("Statistik speichern fehlgeschlagen: " + e.getClass().getSimpleName()); } });
+  }
+  // Offline-Backfill: Tracking lief bisher nur fuer Online-Spieler (alle 5 min / beim Verlassen). Spieler, die seit dem
+  // Einbau nicht online waren, hatten daher keine Zeile -> Bestenlisten 0, details leer. Quelle: Vanilla-Statistik-JSONs.
+  static Object[] parseStats(UUID uuid, String json, boolean survival) {
+    var root=com.google.gson.JsonParser.parseString(json).getAsJsonObject(); var st=root.has("stats")?root.getAsJsonObject("stats"):new com.google.gson.JsonObject();
+    java.util.function.Function<String,com.google.gson.JsonObject> sec=k->st.has(k)&&st.get(k).isJsonObject()?st.getAsJsonObject(k):new com.google.gson.JsonObject();
+    var custom=sec.apply("minecraft:custom");
+    java.util.function.ToLongFunction<String> cv=k->custom.has("minecraft:"+k)?custom.get("minecraft:"+k).getAsLong():0L;
+    long playtime=cv.applyAsLong("play_time")/20L;
+    if(!survival) return new Object[]{playtime,null,List.of()};
+    List<Detail> r=new ArrayList<>(); long blocks=0;
+    for(var e:sec.apply("minecraft:mined").entrySet()) { long x=e.getValue().getAsLong(); if(x<=0)continue; blocks+=x; r.add(new Detail("blocks_mined",key(e.getKey()),x)); }
+    for(String k:DISTANCE_STATS) { long x=cv.applyAsLong(k.toLowerCase(Locale.ROOT)); if(x>0) r.add(new Detail("distance_cm",k,x)); }
+    for(var e:sec.apply("minecraft:killed").entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("kills_entity",key(e.getKey()),x)); }
+    for(var e:sec.apply("minecraft:killed_by").entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("deaths_entity",key(e.getKey()),x)); }
+    return new Object[]{playtime,new Snapshot(uuid,playtime,cv.applyAsLong("player_kills"),cv.applyAsLong("deaths"),blocks),List.copyOf(r)};
+  }
+  private static String key(String k){ int i=k.indexOf(':'); return (i<0?k:k.substring(i+1)).toUpperCase(Locale.ROOT); }
+  private void backfill() {
+    Set<UUID> online=new HashSet<>(); Bukkit.getOnlinePlayers().forEach(p->online.add(p.getUniqueId()));
+    java.io.File dir=null; for(java.io.File w=Bukkit.getWorlds().get(0).getWorldFolder().getAbsoluteFile(); w!=null && dir==null; w=w.getParentFile()){ for(String sub:new String[]{"players/stats","stats"}){ java.io.File x=new java.io.File(w,sub); if(x.isDirectory()){dir=x;break;} } } if(dir==null) dir=new java.io.File(Bukkit.getWorldContainer(),"world/players/stats");
+    final java.io.File d=dir; final boolean survival=SpawnRoute.isSurvival(server);
+    writer.execute(()->{ int n=0; java.io.File[] files=d.listFiles((x,name)->name.endsWith(".json")); if(files!=null) for(java.io.File f:files) {
+        try { UUID uuid=UUID.fromString(f.getName().substring(0,f.getName().length()-5)); if(online.contains(uuid)) continue;
+          Object[] v=parseStats(uuid,java.nio.file.Files.readString(f.toPath()),survival); @SuppressWarnings("unchecked") List<Detail> det=(List<Detail>)v[2];
+          core.tx(c->{upsertPlaytime(c,uuid,server,(Long)v[0]); if(v[1]!=null){upsert(c,(Snapshot)v[1]); replaceDetails(c,uuid,det);} return null;}); n++;
+        } catch(Exception e) { core.getLogger().warning("Statistik-Backfill "+f.getName()+": "+e.getClass().getSimpleName()); } }
+      core.getLogger().info("Statistik-Backfill: "+n+" Offline-Spieler aus "+d.getPath()); });
   }
   @EventHandler(priority=EventPriority.MONITOR) public void quit(PlayerQuitEvent e) { capture(e.getPlayer()); }
   void shutdown() {

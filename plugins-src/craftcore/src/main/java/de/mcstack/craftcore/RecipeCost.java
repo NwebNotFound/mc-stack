@@ -20,12 +20,16 @@ final class RecipeCost {
         }
         double cost=total/recipe.amount();
         if(Double.isFinite(cost) && cost<costs.getOrDefault(recipe.output(),Double.POSITIVE_INFINITY)-1e-9) {
-          costs.put(recipe.output(),cost); changed=true;
+          costs.put(recipe.output(),cost); VIA.put(recipe.output(),recipe); changed=true;
         }
       }
       if(!changed) break;
     }
     return costs;
   }
+  static final Map<Material,PriceCatalog.CatalogRecipe> VIA=new java.util.concurrent.ConcurrentHashMap<>();
+  static String path(Material m){ StringBuilder b=new StringBuilder(); Set<Material> seen=EnumSet.noneOf(Material.class); Material cur=m;
+    while(cur!=null && seen.add(cur)){ var r=VIA.get(cur); if(r==null){b.append(cur).append("[Kauf]");break;} b.append(cur).append("<-").append(r.amount()).append("x/"); Material next=null; for(var o:r.ingredients()) if(!o.isEmpty()){next=o.get(0); b.append(o.size()>3?o.subList(0,3)+"...":o); break;} b.append(" "); cur=next; }
+    return b.toString(); }
   private RecipeCost() {}
 }
