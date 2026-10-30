@@ -455,14 +455,15 @@ def _fetch(view):
     try:
         con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=os.getenv("CRAFTCORE_DB_USER", "craftcore"),
                               password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
-    except Exception:
+    except Exception as e:
+        log.warning("CraftCore-DB nicht erreichbar fuer %s (%s)", view, type(e).__name__)
         return None
     try:
         with con.cursor() as cur:
             cur.execute("SELECT * FROM " + view)
             return [d[0] for d in cur.description], cur.fetchall()
     except Exception as e:
-        log.info("%s nicht verfuegbar (%s)", view, type(e).__name__)
+        log.warning("%s nicht lesbar (%s: %s) - fehlt GRANT SELECT fuer %s?", view, type(e).__name__, e, os.getenv("CRAFTCORE_DB_USER", "craftcore"))
         return None
     finally:
         con.close()
@@ -525,6 +526,8 @@ async def push_once(bot, session=None):
         names.update({norm(u): n for u, n in names.items()})
         payload["auctions"] = build_auctions(*au, *(ab or (None, ())), names=names)
         payload["v_auctions"], payload["v_auction_bids"] = raw_auctions(au, ab, names)
+    log.info("Ingest: v_shop_listings=%s Zeilen -> %d Shops, v_auctions=%s Zeilen -> %d Auktionen",
+             len(sh[1]) if sh else None, len(payload.get("shops", [])), len(au[1]) if au else None, len(payload.get("auctions", [])))
     mk = await asyncio.to_thread(fetch_rows, "v_market")
     if mk:
         payload["market"] = build_market(*mk)
