@@ -3,7 +3,25 @@ import asyncio, json, logging, os, time
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
-URL = os.getenv("MC_INGEST_URL", "https://nwebnotfound.dev/api/mc-ingest")
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def safe_url(url, default):
+    """Nur https (http nur fuer localhost), sonst Default."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(url or "").strip())
+        ok = u.scheme == "https" and u.hostname or (u.scheme == "http" and u.hostname in _LOCAL_HOSTS)
+    except ValueError:
+        ok = False
+    if not ok:
+        if url:
+            log.warning("Unsichere/ungueltige URL verworfen, nutze Default")
+        return default
+    return str(url).strip().rstrip("/")
+
+
+URL = safe_url(os.getenv("MC_INGEST_URL"), "https://nwebnotfound.dev/api/mc-ingest")
 INTERVAL = 300
 STAT_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
 RENAME = {"playtime_s": "playtime"}
@@ -469,6 +487,55 @@ def _fetch(view):
         con.close()
 
 
+INV_MAX = 64
+PLAYERS_MAX = 200
+
+
+def _key_map(stats):
+    return {norm(k): k for k in stats}
+
+
+def merge_player_extras(stats, bal=None, inv=None, pickup=None):
+    """Kontostand/Inventar/Abholungen in players_stats[uuid] mergen (Inventar nur Ingest, nie Discord)."""
+    keys = _key_map(stats)
+
+    def slot(uuid):
+        k = keys.get(norm(uuid))
+        if k is None:
+            if len(stats) >= PLAYERS_MAX:
+                return None
+            k = keys[norm(uuid)] = norm(uuid)
+            stats[k] = {}
+        return stats[k]
+
+    if bal:
+        for row in bal[1]:
+            r = dict(zip(bal[0], row))
+            v = _num(r.get("balance_cp"))
+            st = slot(r.get("uuid")) if r.get("uuid") and v is not None else None
+            if st is not None:
+                st["money"] = int(v) if float(v).is_integer() else round(float(v), 2)
+    for data, field, keyset in ((inv, "inventory", True), (pickup, "pickup", False)):
+        if not data:
+            continue
+        per = {}
+        for row in data[1]:
+            r = dict(zip(data[0], row))
+            if not r.get("uuid") or not r.get("material"):
+                continue
+            e = {"item": _item(r.get("material")), "count": int(_num(r.get("amount")) or 0)}
+            if keyset:
+                e = {"slot": int(_num(r.get("slot")) or 0), **e}
+            per.setdefault(norm(r["uuid"]), []).append(e)
+        for u, items in per.items():
+            st = slot(u)
+            if st is not None:
+                if keyset:
+                    items.sort(key=lambda e: e["slot"])
+                st[field] = items[:INV_MAX]
+    return stats
+
+
 def build_payload(bot):
     rows = bot.db.execute("SELECT discord_id, uuid, name, state FROM links WHERE state != 'pending'").fetchall()
     guild = bot.get_guild(int(bot.cfg["GUILD_ID"]))
@@ -509,6 +576,15 @@ async def push_once(bot, session=None):
                 d = parse_details(r.get("details"))
                 if d and str(r.get("uuid")) in stats:
                     stats[str(r.get("uuid"))]["details"] = d
+    bal = await asyncio.to_thread(fetch_rows, "v_player_balance")
+    inv = await asyncio.to_thread(fetch_rows, "v_player_inventory")
+    for name, v in (("v_player_balance", bal), ("v_player_inventory", inv)):
+        if v is None:
+            log.warning("%s fehlt oder nicht lesbar - Feld wird nicht gesendet", name)
+    if bal or inv:
+        ps = merge_player_extras(payload.get("players_stats") or {}, bal, inv)
+        if ps:
+            payload["players_stats"] = ps
     try:
         mode = await asyncio.to_thread(bot.server_mode)
     except Exception:

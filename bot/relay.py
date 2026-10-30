@@ -3,7 +3,8 @@ import asyncio, logging, os, re, sqlite3, time
 import aiohttp
 
 log = logging.getLogger("creepy.relay")
-BASE = os.getenv("MC_WEB_API", "https://nwebnotfound.dev/api")
+from ingest import safe_url
+BASE = safe_url(os.getenv("MC_WEB_API"), "https://nwebnotfound.dev/api")
 INTERVAL = 60
 PROBE_EVERY = 600
 MAX_PENDING_ATTEMPTS = 5
@@ -21,6 +22,12 @@ def init_db(db):
         db.execute("ALTER TABLE web_relay ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
     if "next_try" not in cols:
         db.execute("ALTER TABLE web_relay ADD COLUMN next_try INTEGER NOT NULL DEFAULT 0")
+    # Eine Zeile pro (request_id, status): spaetere Stages ueberschreiben ungeackte nie.
+    db.execute("CREATE TABLE IF NOT EXISTS web_fulfillment_v2 (request_id TEXT NOT NULL, status TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL, PRIMARY KEY (request_id, status))")
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='web_fulfillment'").fetchone():
+        db.execute("INSERT OR IGNORE INTO web_fulfillment_v2 (request_id, status, acked, updated) SELECT request_id, status, acked, updated FROM web_fulfillment")
+        db.execute("DROP TABLE web_fulfillment")
+    db.execute("CREATE TABLE IF NOT EXISTS relay_cursor (name TEXT PRIMARY KEY, value TEXT)")
     db.commit()
 
 
@@ -95,6 +102,78 @@ def observe(db, rid, kind, status, reason, now, found=None):
                (rid, kind, status, reason, created, attempts, next_try))
     db.commit()
     return status, reason
+
+
+# ---------- Fulfillment-Status (ready|collected|failed|refunded) ----------
+FULFILL = ("ready", "collected", "failed", "refunded")
+FINAL = frozenset(("collected", "failed", "refunded"))
+
+
+def record_fulfillment(db, rid, status):
+    """Idempotent: True nur bei neuem Status; nach finalem Status kommt nichts mehr."""
+    if status not in FULFILL or not KEY_RE.match(str(rid or "")):
+        return False
+    have = {r[0] for r in db.execute("SELECT status FROM web_fulfillment_v2 WHERE request_id=?", (rid,))}
+    if status in have or have & FINAL:
+        return False
+    cur = db.execute("INSERT OR IGNORE INTO web_fulfillment_v2 (request_id, status, acked, updated) VALUES (?,?,0,?)", (rid, status, int(time.time())))
+    db.commit()
+    return cur.rowcount == 1
+
+
+def err_status(reason):
+    return "refunded" if "REFUND" in str(reason or "").upper() else "failed"
+
+
+def get_cursor(db, name="v_order_fulfillment"):
+    r = db.execute("SELECT value FROM relay_cursor WHERE name=?", (name,)).fetchone()
+    return r[0] if r else None
+
+
+def set_cursor(db, value, name="v_order_fulfillment"):
+    db.execute("INSERT OR REPLACE INTO relay_cursor (name, value) VALUES (?,?)", (name, value))
+    db.commit()
+
+
+def _fulfillment_rows(since):
+    import shops
+    if since is None:
+        return shops.query("SELECT request_id, status, updated_at FROM v_order_fulfillment ORDER BY updated_at")
+    return shops.query("SELECT request_id, status, updated_at FROM v_order_fulfillment WHERE updated_at >= %s ORDER BY updated_at", (since,))
+
+
+def apply_fulfillment(db, rows):
+    """rows: [(request_id, status, updated_at)] -> Anzahl neuer Stati; Cursor = groesstes updated_at (>= + Idempotenz)."""
+    n, cur = 0, get_cursor(db)
+    for rid, status, ts in rows:
+        n += record_fulfillment(db, str(rid), str(status or "").lower())
+        if ts is None:
+            continue  # ohne Zeitstempel den Cursor nicht verschieben
+        t = str(ts)
+        if cur is None or t > cur:
+            cur = t
+    if cur is not None:
+        set_cursor(db, cur)
+    return n
+
+
+async def sync_fulfillment(bot, session, token):
+    db = bot.db
+    try:
+        rows = await asyncio.to_thread(_fulfillment_rows, get_cursor(db))
+    except Exception as e:
+        log.warning("v_order_fulfillment nicht verfuegbar (%s)", type(e).__name__)
+        rows = None
+    if rows:
+        apply_fulfillment(db, rows)
+    pend = db.execute("SELECT request_id, status FROM web_fulfillment_v2 WHERE acked=0 ORDER BY updated, rowid LIMIT 200").fetchall()
+    if not pend:
+        return []
+    acks = [{"id": rid, "status": st} for rid, st in pend]
+    if await _ack(session, token, "mc-shop-orders/ack", acks):
+        db.executemany("UPDATE web_fulfillment_v2 SET acked=1 WHERE request_id=? AND status=?", pend)
+        db.commit()
+    return acks
 
 
 def norm_uuid(u):
@@ -266,6 +345,8 @@ async def process(bot, session, token, kind, items, handler, now=None):
             if status is None:
                 continue  # Server nicht bereit - naechste Runde, bis zum Versuchslimit
             log.info("%s %s -> %s %s", kind, rid, status, reason or "")
+            if kind == "order" and status == "rejected":
+                record_fulfillment(db, rid, err_status(reason))
         acks.append({"id": rid, "status": status, "reason": reason or ("OK" if status == "accepted" else "")})
     # bereits entschiedene, aber noch nicht bestaetigte Acks nachreichen
     for rid, status, reason in db.execute("SELECT request_id, status, reason FROM web_relay WHERE kind=? AND acked=0 AND status IS NOT NULL", (kind,)).fetchall():
@@ -294,6 +375,7 @@ async def run_once(bot, session):
     import buy
     st, orders = await _get(session, token, "mc-shop-orders/pending")
     await process(bot, session, token, "order", orders, handle_order)
+    await sync_fulfillment(bot, session, token)
     if time.time() - _state["probe_at"] > PROBE_EVERY:
         _state["probe_at"] = time.time()
         was = _state["bid_active"]
