@@ -19,6 +19,12 @@ class WebsiteStatsMariaDbTest {
       WebsiteStats.migrate(c);
       s.execute("INSERT INTO market_catalog VALUES('STONE',1.50,0.50,1.00,1)");
       s.execute("INSERT INTO market_locks(item,lock_buy,lock_sell) VALUES('STONE',TRUE,FALSE)");
+      s.execute("INSERT INTO market_effective VALUES('STONE',1,1,1)");
+      s.execute("INSERT INTO market_catalog VALUES('DIRT',0.20,0.10,0.10,1)");
+      s.execute("INSERT INTO market_effective VALUES('DIRT',0,1,1)");
+      try(ResultSet r=s.executeQuery("SELECT buy_price,sell_price,buy_enabled,sell_enabled FROM v_market WHERE item='DIRT'")){assertTrue(r.next());assertNull(r.getObject(1));assertEquals(0.1,r.getDouble(2),0.001);assertFalse(r.getBoolean(3));assertTrue(r.getBoolean(4));}
+      s.execute("INSERT INTO market_catalog VALUES('SAND',0.20,0.10,0.10,1)");
+      try(ResultSet r=s.executeQuery("SELECT buy_price,sell_price,buy_enabled,sell_enabled FROM v_market WHERE item='SAND'")){assertTrue(r.next());assertNull(r.getObject(1));assertNull(r.getObject(2));assertFalse(r.getBoolean(3));assertFalse(r.getBoolean(4));}
       try(ResultSet r=s.executeQuery("SELECT buy_price,sell_price,buy_enabled,sell_enabled FROM v_market WHERE item='STONE'")){assertTrue(r.next());assertNull(r.getObject(1));assertEquals(0.5,r.getDouble(2),0.001);assertFalse(r.getBoolean(3));assertTrue(r.getBoolean(4));}
       s.execute("INSERT INTO known_players VALUES('p','Player')");
       s.execute("INSERT INTO accounts VALUES('p',1000)");
