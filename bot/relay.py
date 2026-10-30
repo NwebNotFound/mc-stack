@@ -47,7 +47,7 @@ def pending_due(db, rid, now):
     return (row[1] or 0) <= now
 
 
-def stored_order(key):
+def stored_order(key, order_type="shop"):
     """Read v_rcon_purchase_result. Blocking; call via asyncio.to_thread.
 
     ('accepted', None) or ('rejected', CODE) when the view has a final reply.
@@ -55,10 +55,13 @@ def stored_order(key):
     NULL or PENDING. None when the database cannot be read.
     """
     import shops
-    if not KEY_RE.match(str(key or "")):
+    bank = order_type == "bank_buy"
+    if not (BANK_KEY_RE if bank else KEY_RE).match(str(key or "")):
         return "missing"
+    sql = ("SELECT response FROM bank_buy_orders WHERE request_id=%s" if bank  # bank_buy: Ergebnis im Plugin-Journal
+           else "SELECT response FROM v_rcon_purchase_result WHERE idem_key=%s")
     try:
-        rows = shops.query("SELECT response FROM v_rcon_purchase_result WHERE idem_key=%s", (str(key),))
+        rows = shops.query(sql, (str(key),))
     except shops.NotReady:
         return None
     if not rows:
@@ -115,7 +118,7 @@ FINAL = frozenset(("collected", "failed", "refunded"))
 
 def record_fulfillment(db, rid, status):
     """Idempotent: True nur bei neuem Status; nach finalem Status kommt nichts mehr."""
-    if status not in FULFILL or not KEY_RE.match(str(rid or "")):
+    if status not in FULFILL or not (KEY_RE.match(str(rid or "")) or BANK_KEY_RE.match(str(rid or ""))):
         return False
     have = {r[0] for r in db.execute("SELECT status FROM web_fulfillment_v2 WHERE request_id=?", (rid,))}
     if status in have or have & FINAL:
@@ -389,7 +392,7 @@ async def process(bot, session, token, kind, items, handler, now=None):
                 attempts = prev[0] if prev else 0
                 created = prev[1] if prev and prev[1] else now
                 if attempts + 1 >= MAX_PENDING_ATTEMPTS or now - created >= MAX_PENDING_AGE:
-                    found = await asyncio.to_thread(stored_order, rid)
+                    found = await asyncio.to_thread(stored_order, rid, str(it.get("type") or "shop"))
             status, reason = observe(db, rid, kind, status, reason, now, found)
             if status is None:
                 continue  # Server nicht bereit - naechste Runde, bis zum Versuchslimit

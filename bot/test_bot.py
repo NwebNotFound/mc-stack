@@ -477,6 +477,34 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0], f"shop buy {self.U} aaaaaaaa-0000-0000-0000-000000000001 1 10 r-1")
 
+    def test_bank_buy_stored_order_reads_bank_buy_orders(self):
+        import relay, shops
+        seen = []
+        def query(sql, args=()):
+            seen.append(sql)
+            return {"web:bank.9": [("OK 3 1350 0",)], "web:bank.8": [("ERR NO_FUNDS",)], "web:bank.7": [("",)]}.get(args[0], [])
+        old = shops.query
+        shops.query = query
+        try:
+            self.assertEqual(relay.stored_order("web:bank.9", "bank_buy"), ("accepted", None))
+            self.assertEqual(relay.stored_order("web:bank.8", "bank_buy"), ("rejected", "NO_FUNDS"))
+            self.assertEqual(relay.stored_order("web:bank.7", "bank_buy"), "unfinished")
+            self.assertEqual(relay.stored_order("web:bank.6", "bank_buy"), "missing")
+            self.assertTrue(all(s == "SELECT response FROM bank_buy_orders WHERE request_id=%s" for s in seen))
+            seen.clear()
+            relay.stored_order("r-shop")
+            self.assertIn("v_rcon_purchase_result", seen[0])
+        finally:
+            shops.query = old
+
+    def test_bank_buy_fulfillment_accepts_dotted_ids(self):
+        import relay
+        con = self.db()
+        self.assertTrue(relay.record_fulfillment(con, "web:bank.1", "ready"))
+        self.assertFalse(relay.record_fulfillment(con, "web:bank.1", "ready"))
+        self.assertTrue(relay.record_fulfillment(con, "web:bank.1", "refunded"))
+        self.assertFalse(relay.record_fulfillment(con, "bad id!", "ready"))
+
     def test_bank_buy_order(self):
         import relay
         con = self.db()

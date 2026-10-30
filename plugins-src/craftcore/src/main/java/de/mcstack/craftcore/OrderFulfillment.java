@@ -27,6 +27,7 @@ final class OrderFulfillment {
     try (Statement s = c.createStatement()) {
       s.execute("CREATE TABLE IF NOT EXISTS order_fulfillment (request_id VARCHAR(64) NOT NULL PRIMARY KEY, delivery_id CHAR(36) NULL, status VARCHAR(16) NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX order_fulfillment_delivery (delivery_id), CONSTRAINT order_fulfillment_status CHECK (status IN ('ready','collected','failed','refunded')))");
       s.execute(VIEW);
+      s.execute(PARTS);
     }
     installTrigger(c, warn);
   }
@@ -41,6 +42,11 @@ final class OrderFulfillment {
     String requestId = h2 ? "CAST(r.idem_key AS VARCHAR(64))" : "CONVERT(r.idem_key USING utf8mb4)";
     return "SELECT r.idem_key, r.kind, r.buyer, r.qty, r.response FROM rcon_purchases r LEFT JOIN order_fulfillment f ON f.request_id="+requestId+" WHERE f.request_id IS NULL AND r.created_at>=? AND (r.response='' OR r.response LIKE 'OK%') ORDER BY r.created_at, r.idem_key";
   }
+  /** Multi-stack orders: every pickup entry of a request; collected only when all are collected. */
+  static final String PARTS = "CREATE TABLE IF NOT EXISTS order_fulfillment_parts (delivery_id CHAR(36) NOT NULL PRIMARY KEY, request_id VARCHAR(64) NOT NULL, partial BOOLEAN NOT NULL DEFAULT FALSE, INDEX order_fulfillment_parts_request (request_id))";
+  static void addPart(Connection c, String requestId, String deliveryId) throws SQLException {
+    try (PreparedStatement q = c.prepareStatement("INSERT INTO order_fulfillment_parts(delivery_id,request_id) VALUES(?,?)")) { q.setString(1, deliveryId); q.setString(2, requestId); q.executeUpdate(); }
+  }
   static void mark(Connection c, String requestId, String status) throws SQLException {
     if (!STATUSES.contains(status)) throw new IllegalArgumentException(status);
     try (PreparedStatement q = c.prepareStatement("INSERT INTO order_fulfillment(request_id,delivery_id,status,updated_at) VALUES(?,NULL,?,CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE status=VALUES(status), updated_at=CURRENT_TIMESTAMP")) {
@@ -48,11 +54,25 @@ final class OrderFulfillment {
     }
   }
   static void collected(Connection c, String deliveryId) throws SQLException {
+    String part = null;
+    try (PreparedStatement q = c.prepareStatement("SELECT request_id FROM order_fulfillment_parts WHERE delivery_id=?")) {
+      q.setString(1, deliveryId); try (ResultSet r = q.executeQuery()) { if (r.next()) part = r.getString(1); }
+    }
+    if (part != null) {
+      try (PreparedStatement q = c.prepareStatement("DELETE FROM order_fulfillment_parts WHERE delivery_id=?")) { q.setString(1, deliveryId); q.executeUpdate(); }
+      boolean open;
+      try (PreparedStatement q = c.prepareStatement("SELECT COUNT(*) FROM order_fulfillment_parts WHERE request_id=?")) {
+        q.setString(1, part); try (ResultSet r = q.executeQuery()) { r.next(); open = r.getInt(1) > 0; }
+      }
+      if (!open) { try (PreparedStatement q = c.prepareStatement("UPDATE order_fulfillment SET status='collected', updated_at=CURRENT_TIMESTAMP WHERE request_id=? AND status='ready'")) { q.setString(1, part); q.executeUpdate(); } }
+      return;
+    }
     try (PreparedStatement q = c.prepareStatement("UPDATE order_fulfillment SET status='collected', updated_at=CURRENT_TIMESTAMP WHERE delivery_id=? AND status='ready'")) {
       q.setString(1, deliveryId); q.executeUpdate();
     }
   }
   static void retarget(Connection c, String deliveryId, String nextId) throws SQLException {
+    try (PreparedStatement q = c.prepareStatement("UPDATE order_fulfillment_parts SET delivery_id=?, partial=TRUE WHERE delivery_id=?")) { q.setString(1, nextId); q.setString(2, deliveryId); q.executeUpdate(); }
     try (PreparedStatement q = c.prepareStatement("UPDATE order_fulfillment SET delivery_id=?, updated_at=CURRENT_TIMESTAMP WHERE delivery_id=? AND status='ready'")) {
       q.setString(1, nextId); q.setString(2, deliveryId); q.executeUpdate();
     }

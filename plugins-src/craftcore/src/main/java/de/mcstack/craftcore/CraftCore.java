@@ -79,7 +79,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
       motivation=new Motivation(this); motivation.start();
       InviteRewards.start(this,SpawnRoute.isSurvival(server));
       tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");exec(c,"CREATE OR REPLACE SQL SECURITY DEFINER VIEW v_rcon_purchase_result AS SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response FROM rcon_purchases");TestRun.prepare(c);return null;});
-      try { try (Connection grant=connection()) { if(!PurchaseViewGrant.apply(grant)) getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich"); } }
+      tx(c->{BankBuy.migrate(c);return null;});
+      try { try (Connection grant=connection()) { if(!PurchaseViewGrant.apply(grant)) getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich"); if(!PurchaseViewGrant.applyBank(grant)) getLogger().warning("GRANT bank_buy_orders fuer creepy_ro nicht moeglich"); } }
       catch(Exception ex) { getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       Deliveries.start(this);
       SaleNotices.start(this);
@@ -231,6 +232,13 @@ public final class CraftCore extends JavaPlugin implements Listener {
         });
       }
       sender.sendMessage(dispatch.line());
+      return true;
+    }
+    if (command.getName().equals("shop") && args.length==3 && args[0].equalsIgnoreCase("refund") && args[1].equalsIgnoreCase("bank")) {
+      // storno a bank_buy order whose items are still uncollected: shop refund bank <request_id>
+      if(!(sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender) || !SpawnRoute.isSurvival(server) || Market.instance==null) {sender.sendMessage("ERR INVALID");return true;}
+      BankBuy.Env env=Market.instance.bankEnv();
+      String rid=args[2]; try{String out=tx(c->BankBuy.refund(c,rid,env)); sender.sendMessage(out);}catch(Exception ex){getLogger().warning("bank_buy refund: "+ex);sender.sendMessage("ERR INVALID");}
       return true;
     }
     if (command.getName().equals("shop") && args.length>1 && args[0].equalsIgnoreCase("buy") && args[1].equalsIgnoreCase("bank")) {
