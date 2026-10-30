@@ -75,4 +75,17 @@ class ShopBuyDispatchTest {
     assertEquals("OK 1 10 9", ShopBuyDispatch.stored(flight));
     assertEquals("OK 1 10 9", ShopBuyDispatch.complete(ShopBuyDispatch.Caller.CONSOLE, true, "shop", new String[] {"buy", BUYER, LISTING, "1", "10", id}, ShopBuyDispatch::stored, ignored -> { throw new AssertionError("stored result must not start again"); }, line -> {}));
   }
+
+  @Test void storedResultsExpireAndStayBounded() {
+    ShopBuyDispatch.clearDone();
+    long start = 10_000L;
+    ShopBuyDispatch.remember("oldest", "OK 1 1 1", start);
+    assertEquals("OK 1 1 1", ShopBuyDispatch.lookup("oldest", start + ShopBuyDispatch.DONE_TTL_MS));
+    assertNull(ShopBuyDispatch.lookup("oldest", start + ShopBuyDispatch.DONE_TTL_MS + 1));
+    for (int i = 0; i < ShopBuyDispatch.MAX_DONE + 20; i++) ShopBuyDispatch.remember("k" + i, "ERR NOT_FOUND", start);
+    assertNull(ShopBuyDispatch.lookup("oldest", start));
+    assertNull(ShopBuyDispatch.lookup("k0", start));
+    assertEquals("ERR NOT_FOUND", ShopBuyDispatch.lookup("k20", start));
+    assertEquals("ERR NOT_FOUND", ShopBuyDispatch.lookup("k" + (ShopBuyDispatch.MAX_DONE + 19), start));
+  }
 }

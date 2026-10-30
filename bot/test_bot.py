@@ -493,6 +493,25 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(calls[0], calls[1])
         self.assertTrue(calls[0].endswith(" r-pend"))
 
+    def test_pending_retries_backoff_then_fail(self):
+        import relay
+        con = self.db()
+        now = 1_000_000
+        self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), (None, None))
+        self.assertFalse(relay.pending_due(con, "r-wait", now))
+        self.assertTrue(relay.pending_due(con, "r-wait", now + relay.pending_delay(1)))
+        for attempt in range(1, relay.MAX_PENDING_ATTEMPTS - 1):
+            now += relay.pending_delay(attempt)
+            self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), (None, None))
+        now += relay.pending_delay(relay.MAX_PENDING_ATTEMPTS - 1)
+        self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), ("rejected", "TIMEOUT"))
+        self.assertEqual(con.execute("SELECT status, reason, attempts FROM web_relay WHERE request_id='r-wait'").fetchone(), ("rejected", "TIMEOUT", relay.MAX_PENDING_ATTEMPTS))
+        old = relay.MAX_PENDING_AGE
+        relay.observe(con, "r-age", "order", None, None, 50_000)
+        con.execute("UPDATE web_relay SET created=? WHERE request_id='r-age'", (50_000 - old,))
+        con.commit()
+        self.assertEqual(relay.observe(con, "r-age", "order", None, None, 50_000 + 120), ("rejected", "TIMEOUT"))
+
 
 class IngestP5Tests(unittest.TestCase):
     def test_shops(self):

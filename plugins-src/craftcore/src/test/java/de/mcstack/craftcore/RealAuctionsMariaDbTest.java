@@ -10,6 +10,28 @@ class RealAuctionsMariaDbTest {
  }
  @Test void commandValidation(){String u="00000000-0000-0000-0000-000000000001";assertNotNull(RealAuctions.parse(new String[]{"bid","1",u,"100","test"}));assertNull(RealAuctions.parse(new String[]{"bid","0",u,"100","test"}));assertNull(RealAuctions.parse(new String[]{"bid","1",u,"100","test","evil"}));}
 
+ @Test void fakeBidderCannotPayRealSeller() throws Exception {
+  String fake1="00000000-0000-0000-0000-0000c0de0001", fake2="00000000-0000-0000-0000-0000c0de0002", real="00000000-0000-0000-0000-000000000099";
+  try(Connection c=DriverManager.getConnection("jdbc:h2:mem:fakebid;MODE=MySQL;DB_CLOSE_DELAY=-1");Statement s=c.createStatement()){
+   s.execute("CREATE TABLE auctions(id BIGINT PRIMARY KEY,seller VARCHAR(36),item LONGTEXT,material VARCHAR(64),amount INT,min_price BIGINT,current_bid BIGINT,current_bidder VARCHAR(36),bid_count INT,ends_at BIGINT,status VARCHAR(16),created_at BIGINT,source_last_bid VARCHAR(16))");
+   s.execute("CREATE TABLE auction_requests(request_id VARBINARY(64) PRIMARY KEY,auction_id BIGINT,bidder VARCHAR(36),amount BIGINT,source VARCHAR(16),response VARCHAR(128))");
+   s.execute("CREATE TABLE auction_bids(id BIGINT AUTO_INCREMENT PRIMARY KEY,auction_id BIGINT,bidder VARCHAR(36),amount BIGINT,created_at BIGINT,source VARCHAR(16))");
+   s.execute("CREATE TABLE accounts(uuid VARCHAR(36) PRIMARY KEY,balance BIGINT)");
+   s.execute("INSERT INTO accounts VALUES('"+fake1+"',5000),('"+fake2+"',5000),('"+real+"',100)");
+   s.execute("INSERT INTO auctions VALUES(1,'"+real+"','item','STONE',1,1000,NULL,NULL,0,200000,'OPEN',0,NULL)");
+   c.setAutoCommit(false);
+   for(String bidder:new String[]{fake1,fake2}){
+    var request=new RealAuctions.Request(1,bidder,1000,"leak-"+bidder.substring(32),"web");
+    assertEquals("ERR INVALID",RealAuctions.bid(c,request,100)); c.commit();
+    assertEquals("ERR INVALID",RealAuctions.bid(c,request,100)); c.commit();
+   }
+   assertEquals(5000,scalar(s,"SELECT balance FROM accounts WHERE uuid='"+fake1+"'"));
+   assertEquals(5000,scalar(s,"SELECT balance FROM accounts WHERE uuid='"+fake2+"'"));
+   assertEquals(100,scalar(s,"SELECT balance FROM accounts WHERE uuid='"+real+"'"));
+   assertEquals(0,scalar(s,"SELECT COUNT(*) FROM auction_bids"));
+  }
+ }
+
  @Test void escrowRefundIdempotencyAndOfflineSettlement() throws Exception {
   String password=System.getenv("CRAFTCORE_DB_PASSWORD"); assumeTrue(password!=null && "true".equals(System.getenv("CRAFTCORE_MARIADB_TEST")));
   try(Connection c=DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore","craftcore",password);Statement s=c.createStatement()){

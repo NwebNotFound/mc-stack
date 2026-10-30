@@ -55,6 +55,19 @@ class TestRunTest {
     assertEquals("ERR INVALID", TestRun.decide(true, TestRun.Sender.PLAYER, FAKE1, 25, "k6").reply());
   }
 
+  @Test void creditRepliesPendingUntilTheStoredResult() {
+    TestRun.Result accepted = TestRun.decide(true, TestRun.Sender.RCON, FAKE1, 25, "pend");
+    TestRun.Dispatch first = TestRun.dispatch(accepted, null);
+    assertEquals("PENDING pend", first.line());
+    assertTrue(first.start());
+    assertEquals("OK", TestRun.dispatch(accepted, "OK").line());
+    assertFalse(TestRun.dispatch(accepted, "OK").start());
+    assertEquals("ERR INVALID", TestRun.dispatch(accepted, "ERR INVALID").line());
+    TestRun.Dispatch refused = TestRun.dispatch(TestRun.decide(false, TestRun.Sender.CONSOLE, FAKE1, 25, "pend"), null);
+    assertEquals("ERR DISABLED", refused.line());
+    assertFalse(refused.start());
+  }
+
   @Test void oneCallCannotCreditMoreThanOneMillionCents() {
     assertTrue(TestRun.decide(true, TestRun.Sender.CONSOLE, FAKE1, TestRun.MAX_PER_CALL, "cap").credit());
     TestRun.Result over = TestRun.decide(true, TestRun.Sender.RCON, FAKE1, TestRun.MAX_PER_CALL + 1, "over");

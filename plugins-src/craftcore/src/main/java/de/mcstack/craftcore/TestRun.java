@@ -46,16 +46,29 @@ final class TestRun {
         }
       }
     }
-    long total;
-    try (PreparedStatement ps = c.prepareStatement("SELECT COALESCE(SUM(cents),0) FROM testrun_credits WHERE uuid=?")) {
+    // Lock this account's credit rows so two overlapping applies cannot both pass the cap.
+    // CraftCore.tx also holds GET_LOCK('craftcore-write'), which serializes the async testrun task with every other economy write.
+    long total = 0;
+    try (PreparedStatement ps = c.prepareStatement("SELECT cents FROM testrun_credits WHERE uuid=? FOR UPDATE")) {
       ps.setString(1, result.uuid());
-      try (ResultSet r = ps.executeQuery()) { r.next(); total = r.getLong(1); }
+      try (ResultSet r = ps.executeQuery()) { while (r.next()) total += r.getLong(1); }
     }
     if (total > MAX_TOTAL || !EconomyStore.change(c, result.uuid(), result.cents())) {
       try (PreparedStatement ps = c.prepareStatement("DELETE FROM testrun_credits WHERE idem_key=?")) { ps.setBytes(1, key); ps.executeUpdate(); }
       return false;
     }
     return true;
+  }
+
+  record Dispatch(String line, boolean start) {}
+
+  static String cacheId(Result result) { return "testrun\n" + result.key() + "\n" + result.uuid() + "\n" + result.cents(); }
+
+  /** Immediate refusal, a stored OK/ERR, or PENDING while the credit runs asynchronously. */
+  static Dispatch dispatch(Result result, String stored) {
+    if (!result.credit()) return new Dispatch(result.reply(), false);
+    if (stored != null && (stored.equals("OK") || stored.startsWith("OK ") || stored.startsWith("ERR "))) return new Dispatch(stored, false);
+    return new Dispatch("PENDING " + result.key(), true);
   }
 
   private static Result refuse(String reply) { return new Result(false, reply, null, 0, null); }

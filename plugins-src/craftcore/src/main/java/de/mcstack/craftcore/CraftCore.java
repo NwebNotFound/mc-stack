@@ -208,9 +208,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
       if(args.length>=2 && args[1].matches("[0-9]+")) { try { cents=Long.parseLong(args[1]); } catch(NumberFormatException ex) { cents=-1; } }
       Boolean configured=getConfig().contains("testrun.enabled") ? getConfig().getBoolean("testrun.enabled") : null;
       TestRun.Result result=TestRun.decide(TestRun.enabled(configured), who, args.length>0 ? args[0] : "", cents, args.length>=3 ? args[2] : "");
-      if(!result.credit()) { sender.sendMessage(result.reply()); return true; }
-      try { sender.sendMessage(tx(c->TestRun.apply(c,result)) ? result.reply() : "ERR INVALID"); }
-      catch(Exception ex) { getLogger().warning("testrun: "+ex.getClass().getSimpleName()); sender.sendMessage("ERR INVALID"); }
+      String id=result.credit() ? TestRun.cacheId(result) : "";
+      TestRun.Dispatch dispatch=TestRun.dispatch(result, result.credit() ? ShopBuyDispatch.lookup(id, System.currentTimeMillis()) : null);
+      if(dispatch.start() && ShopBuyDispatch.beginId(id)) {
+        getServer().getScheduler().runTaskAsynchronously(this,()->{
+          String response=null;
+          try { response=tx(c->TestRun.apply(c,result)) ? "OK" : "ERR INVALID"; }
+          catch(Exception ex){getLogger().warning("testrun: "+ex.getClass().getSimpleName());}
+          finally { ShopBuyDispatch.finishId(id, response); }
+        });
+      }
+      sender.sendMessage(dispatch.line());
       return true;
     }
     if ((command.getName().equals("shop") || command.getName().equals("ah")) && args.length>0 && args[0].equalsIgnoreCase("buy")) {
