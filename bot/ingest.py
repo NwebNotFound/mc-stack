@@ -484,6 +484,7 @@ def build_price_reset(res):
 
 
 PARKOUR_MAX = 1000
+PARKOUR_COURSE_MAX = 32  # Website-Limit fuer Kurs-IDs
 
 
 def build_parkour(cols, rows):
@@ -494,7 +495,7 @@ def build_parkour(cols, rows):
         course = str(r.get("course") or "").strip().lower()
         uuid = str(r.get("uuid") or "").strip().lower()
         ms = _num(r.get("best_ms"))
-        if not course or not uuid or ms is None or ms <= 0:
+        if not course or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
             continue
         v = r.get("updated_at")
         try:
@@ -526,7 +527,8 @@ def _fetch(view):
         return None
     try:
         con = pymysql.connect(host=os.getenv("CRAFTCORE_DB_HOST", "craftcore-db"), user=shops.db_user(),
-                              password=pw, database="craftcore", connect_timeout=5, read_timeout=5)
+                              password=pw, database="craftcore", connect_timeout=5, read_timeout=5,
+                              init_command="SET time_zone='+00:00'")  # TIMESTAMP-Spalten immer als UTC lesen
     except Exception:
         return None
     try:

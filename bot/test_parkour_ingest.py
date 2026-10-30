@@ -29,6 +29,11 @@ class ParkourIngestTest(unittest.TestCase):
         self.assertEqual(out[1]["set_at"], "2026-10-30T13:00:00.000Z")
         self.assertEqual(len(out), 2)
 
+    def test_course_id_longer_than_32_is_skipped(self):
+        t = datetime.datetime(2026, 10, 30, 12, 0, 0)
+        rows = [(U1, "a" * 32, "Nils", 100, t), (U1, "b" * 33, "Nils", 50, t)]
+        self.assertEqual([e["course"] for e in ingest.build_parkour(COLS, rows)], ["a" * 32])
+
     def test_empty(self):
         self.assertEqual(ingest.build_parkour(COLS, []), [])
 
