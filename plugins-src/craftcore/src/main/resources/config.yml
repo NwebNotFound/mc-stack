@@ -95,6 +95,9 @@ market:
     NETHER_STAR: 2000.0
     ELYTRA: 3000.0
   unsellable: [COBBLESTONE, COBBLED_DEEPSLATE, DIRT, COARSE_DIRT, ROOTED_DIRT, NETHERRACK, ROTTEN_FLESH, KELP, DRIED_KELP, GRAVEL, SAND]
+  # Zusaetzliche Sperren neben market_locks. Gesperrt, sobald eine der beiden Quellen sperrt.
+  # buy: die Bank verkauft den Artikel nicht. sell: die Bank kauft ihn nicht an.
+  lock-fallback: {}
 
 auction:
   duration-hours: 48
