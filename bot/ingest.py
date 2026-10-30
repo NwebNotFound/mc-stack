@@ -602,7 +602,7 @@ DEBOUNCE = 15
 PRESENCE_POLL = 2
 JOIN_LEAVE_RE = re.compile(r"\]: ([A-Za-z0-9_]{3,16}) (joined|left) the game\s*$")
 _push_lock = asyncio.Lock()
-_presence = {"last": 0.0, "pending": None}
+_presence = {"last": 0.0, "pending": None, "dirty": False, "running": False}
 
 
 def is_presence_line(line):
@@ -612,23 +612,33 @@ def is_presence_line(line):
 async def _presence_push(bot):
     async with _push_lock:
         _presence["last"] = time.monotonic()
-        async with aiohttp.ClientSession() as session:
-            return await push_servers(bot, session)
+        _presence["running"] = True
+        try:
+            async with aiohttp.ClientSession() as session:
+                return await push_servers(bot, session)
+        finally:
+            _presence["running"] = False
 
 
 def trigger_presence(bot):
     """Max. ein Extra-Push pro DEBOUNCE s; spaetere Events werden nachgeholt, nie parallel."""
     if _presence["pending"] and not _presence["pending"].done():
+        if _presence["running"]:
+            _presence["dirty"] = True  # Event waehrend laufendem Push -> danach noch einmal
         return _presence["pending"]
-    wait = max(0.0, _presence["last"] + DEBOUNCE - time.monotonic())
 
     async def run():
-        if wait:
-            await asyncio.sleep(wait)
-        try:
-            await _presence_push(bot)
-        except Exception as e:
-            log.warning("Presence-Push fehlgeschlagen: %s", type(e).__name__)
+        while True:
+            wait = max(0.0, _presence["last"] + DEBOUNCE - time.monotonic())
+            if wait:
+                await asyncio.sleep(wait)
+            _presence["dirty"] = False
+            try:
+                await _presence_push(bot)
+            except Exception as e:
+                log.warning("Presence-Push fehlgeschlagen: %s", type(e).__name__)
+            if not _presence["dirty"]:
+                break
 
     _presence["pending"] = asyncio.create_task(run())
     return _presence["pending"]
