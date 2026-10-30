@@ -35,6 +35,29 @@ def pending_due(db, rid, now):
     return (row[1] or 0) <= now
 
 
+def stored_order(key):
+    """Final result already committed in rcon_purchases.
+
+    ('accepted', None) or ('rejected', CODE) when that row has a reply.
+    'missing' when the key has no row. None when the database cannot be read
+    or the row has no final OK/ERR yet.
+    """
+    import shops
+    if not KEY_RE.match(str(key or "")):
+        return "missing"
+    try:
+        rows = shops.query("SELECT response FROM rcon_purchases WHERE idem_key=%s", (str(key).encode("ascii"),))
+    except shops.NotReady:
+        return None
+    if not rows:
+        return "missing"
+    raw = rows[0][0]
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    status, reason = parse(raw)
+    return (status, reason) if status else None
+
+
 def observe(db, rid, kind, status, reason, now):
     """Store a final result, or count a PENDING reply until it is given up."""
     row = db.execute("SELECT attempts, created FROM web_relay WHERE request_id=?", (rid,)).fetchone()
@@ -43,8 +66,12 @@ def observe(db, rid, kind, status, reason, now):
     if status is None:
         attempts += 1
         if attempts >= MAX_PENDING_ATTEMPTS or now - created >= MAX_PENDING_AGE:
-            status, reason = "rejected", "TIMEOUT"
-            next_try = 0
+            found = stored_order(rid)
+            if found == "missing":
+                status, reason = "rejected", "TIMEOUT"
+            elif found:
+                status, reason = found
+            next_try = 0 if status else now + pending_delay(min(attempts, 4))
         else:
             next_try = now + pending_delay(attempts)
     else:

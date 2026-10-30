@@ -494,9 +494,17 @@ class RelayTests(unittest.TestCase):
         self.assertTrue(calls[0].endswith(" r-pend"))
 
     def test_pending_retries_backoff_then_fail(self):
-        import relay
+        import relay, shops
         con = self.db()
+        old = shops.query
+        shops.query = lambda sql, args=(): []
         now = 1_000_000
+        try:
+            self._pending_gives_up_without_a_row(relay, con, now)
+        finally:
+            shops.query = old
+
+    def _pending_gives_up_without_a_row(self, relay, con, now):
         self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), (None, None))
         self.assertFalse(relay.pending_due(con, "r-wait", now))
         self.assertTrue(relay.pending_due(con, "r-wait", now + relay.pending_delay(1)))
@@ -511,6 +519,38 @@ class RelayTests(unittest.TestCase):
         con.execute("UPDATE web_relay SET created=? WHERE request_id='r-age'", (50_000 - old,))
         con.commit()
         self.assertEqual(relay.observe(con, "r-age", "order", None, None, 50_000 + 120), ("rejected", "TIMEOUT"))
+
+    def test_lost_rcon_reply_accepts_stored_purchase(self):
+        import relay, shops
+        con = self.db()
+        looked = []
+
+        def query(sql, args=()):
+            looked.append(args[0])
+            self.assertIn("rcon_purchases", sql)
+            if args[0] == b"r-lost":
+                return [("OK 2 300 4",)]
+            if args[0] == b"r-sold":
+                return [("ERR SOLD_OUT",)]
+            return []
+
+        old = shops.query
+        shops.query = query
+        try:
+            now = 2_000_000
+            for _ in range(relay.MAX_PENDING_ATTEMPTS - 1):
+                self.assertIsNone(relay.observe(con, "r-lost", "order", None, None, now)[0])
+                now += 60
+            self.assertEqual(relay.observe(con, "r-lost", "order", None, None, now), ("accepted", None))
+            relay.observe(con, "r-sold", "order", None, None, 80_000)
+            con.execute("UPDATE web_relay SET created=? WHERE request_id='r-sold'", (80_000 - relay.MAX_PENDING_AGE,))
+            con.commit()
+            self.assertEqual(relay.observe(con, "r-sold", "order", None, None, 80_000 + 1), ("rejected", "SOLD_OUT"))
+        finally:
+            shops.query = old
+        self.assertEqual(con.execute("SELECT status, reason FROM web_relay WHERE request_id='r-lost'").fetchone(), ("accepted", None))
+        self.assertIn(b"r-lost", looked)
+        self.assertNotIn("TIMEOUT", [row[0] for row in con.execute("SELECT reason FROM web_relay").fetchall()])
 
 
 class IngestP5Tests(unittest.TestCase):
