@@ -103,10 +103,9 @@ class ArbitrageTest {
       var q=Market.quote(cfg,m,prices.get(m)); long revenue=Market.cents(cfg,m,q.max(),false);
       if(costs.get(m)+1e-9<revenue) failures.add(m+" cost="+costs.get(m)+" revenue="+revenue);
     }
-    // This diagnostic deliberately asserts the known gap, not economic safety.
-    // Extremes are independent; real trading pressure and batch sizes require
-    // separate execution-level verification before treating a result as profit.
-    assertTrue(failures.stream().anyMatch(s->s.startsWith("GOLD_NUGGET ")),String.join("\n",failures));
+    // Mit den Preisgrenzen aus prices-base (min 0.5x / max 1.45x Basis) ist die fruehere
+    // GOLD_NUGGET-Luecke geschlossen: auch an den unabhaengigen Extremen kein Gewinn.
+    assertTrue(failures.isEmpty(),String.join("\n",failures));
   }
   @Test void multiStepAllKnownRecipesRespectCostCap() {
     var recipes=RECIPES.stream().map(r->new PriceCatalog.CatalogRecipe(r.output(),r.outputs(),Collections.nCopies(r.inputs(),List.of(r.input())))).toList();
