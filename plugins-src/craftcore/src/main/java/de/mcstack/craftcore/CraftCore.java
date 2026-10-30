@@ -77,7 +77,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Challenges(this,server).start();
       motivation=new Motivation(this); motivation.start();
       InviteRewards.start(this,SpawnRoute.isSurvival(server));
-      tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");TestRun.prepare(c);return null;});
+      tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");exec(c,"CREATE OR REPLACE SQL SECURITY DEFINER VIEW v_rcon_purchase_result AS SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response FROM rcon_purchases");TestRun.prepare(c);return null;});
       Deliveries.start(this);
       SaleNotices.start(this);
       WebsiteStats.start(this);

@@ -512,13 +512,13 @@ class RelayTests(unittest.TestCase):
             now += relay.pending_delay(attempt)
             self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), (None, None))
         now += relay.pending_delay(relay.MAX_PENDING_ATTEMPTS - 1)
-        self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now), ("rejected", "TIMEOUT"))
+        self.assertEqual(relay.observe(con, "r-wait", "order", None, None, now, "missing"), ("rejected", "TIMEOUT"))
         self.assertEqual(con.execute("SELECT status, reason, attempts FROM web_relay WHERE request_id='r-wait'").fetchone(), ("rejected", "TIMEOUT", relay.MAX_PENDING_ATTEMPTS))
         old = relay.MAX_PENDING_AGE
         relay.observe(con, "r-age", "order", None, None, 50_000)
         con.execute("UPDATE web_relay SET created=? WHERE request_id='r-age'", (50_000 - old,))
         con.commit()
-        self.assertEqual(relay.observe(con, "r-age", "order", None, None, 50_000 + 120), ("rejected", "TIMEOUT"))
+        self.assertEqual(relay.observe(con, "r-age", "order", None, None, 50_000 + 120, "missing"), ("rejected", "TIMEOUT"))
 
     def test_lost_rcon_reply_accepts_stored_purchase(self):
         import relay, shops
@@ -526,12 +526,15 @@ class RelayTests(unittest.TestCase):
         looked = []
 
         def query(sql, args=()):
-            looked.append(args[0])
-            self.assertIn("rcon_purchases", sql)
-            if args[0] == b"r-lost":
+            looked.append((sql, args[0]))
+            self.assertIn("v_rcon_purchase_result", sql)
+            self.assertNotIn("FROM rcon_purchases", sql)
+            if args[0] == "r-lost":
                 return [("OK 2 300 4",)]
-            if args[0] == b"r-sold":
+            if args[0] == "r-sold":
                 return [("ERR SOLD_OUT",)]
+            if args[0] == "r-blank":
+                return [(None,)]
             return []
 
         old = shops.query
@@ -541,16 +544,63 @@ class RelayTests(unittest.TestCase):
             for _ in range(relay.MAX_PENDING_ATTEMPTS - 1):
                 self.assertIsNone(relay.observe(con, "r-lost", "order", None, None, now)[0])
                 now += 60
-            self.assertEqual(relay.observe(con, "r-lost", "order", None, None, now), ("accepted", None))
+            self.assertEqual(relay.observe(con, "r-lost", "order", None, None, now, relay.stored_order("r-lost")), ("accepted", None))
             relay.observe(con, "r-sold", "order", None, None, 80_000)
             con.execute("UPDATE web_relay SET created=? WHERE request_id='r-sold'", (80_000 - relay.MAX_PENDING_AGE,))
             con.commit()
-            self.assertEqual(relay.observe(con, "r-sold", "order", None, None, 80_000 + 1), ("rejected", "SOLD_OUT"))
+            self.assertEqual(relay.observe(con, "r-sold", "order", None, None, 80_000 + 1, relay.stored_order("r-sold")), ("rejected", "SOLD_OUT"))
+            born = 90_000
+            relay.observe(con, "r-blank", "order", None, None, born)
+            con.execute("UPDATE web_relay SET created=? WHERE request_id='r-blank'", (born - relay.MAX_ADMIN_AGE,))
+            con.commit()
+            with self.assertLogs("creepy.relay", level="WARNING") as logs:
+                self.assertEqual(relay.observe(con, "r-blank", "order", None, None, born, relay.stored_order("r-blank")), ("rejected", "NEEDS_ADMIN"))
+            self.assertTrue(any("NEEDS_ADMIN" in line for line in logs.output))
         finally:
             shops.query = old
         self.assertEqual(con.execute("SELECT status, reason FROM web_relay WHERE request_id='r-lost'").fetchone(), ("accepted", None))
-        self.assertIn(b"r-lost", looked)
+        self.assertIn(("SELECT response FROM v_rcon_purchase_result WHERE idem_key=%s", "r-lost"), looked)
         self.assertNotIn("TIMEOUT", [row[0] for row in con.execute("SELECT reason FROM web_relay").fetchall()])
+        self.assertEqual(relay.settle_pending(None, 0, relay.MAX_ADMIN_AGE), ("rejected", "NEEDS_ADMIN"))
+        self.assertIsNone(relay.settle_pending(None, 0, relay.MAX_ADMIN_AGE - 1))
+        self.assertEqual(relay.settle_pending("unfinished", 0, relay.MAX_ADMIN_AGE)[1], "NEEDS_ADMIN")
+
+    def test_purchase_lookup_runs_off_the_event_loop(self):
+        import asyncio, os, tempfile, threading, relay, shops
+        con = self.db()
+        now = 4_000_000
+        fd, path = tempfile.mkstemp(suffix=".sqlite3")
+        os.close(fd)
+        con.execute("INSERT INTO web_relay (request_id, kind, status, reason, acked, created, attempts, next_try) VALUES ('r-thread','order',NULL,NULL,0,?,4,0)", (now,))
+        con.commit()
+        seen = {}
+
+        def query(sql, args=()):
+            seen["thread"] = threading.current_thread()
+            seen["sql"] = sql
+            return [("OK 1 10 0",)]
+
+        def handler(db, rcon, host, item):
+            return None, None
+
+        async def fake_ack(session, token, path, acks):
+            seen["acks"] = list(acks)
+            return True
+
+        class Bot:
+            db = con
+
+        old, old_ack, old_path = shops.query, relay._ack, relay.DB_PATH
+        shops.query, relay._ack, relay.DB_PATH = query, fake_ack, path
+        try:
+            acks = asyncio.run(relay.process(Bot(), None, "t", "order", [{"request_id": "r-thread"}], handler, now=now))
+        finally:
+            shops.query, relay._ack, relay.DB_PATH = old, old_ack, old_path
+            os.unlink(path)
+        self.assertNotEqual(seen["thread"], threading.main_thread())
+        self.assertIn("v_rcon_purchase_result", seen["sql"])
+        self.assertEqual(acks[0]["status"], "accepted")
+        self.assertEqual(seen["acks"][0]["status"], "accepted")
 
 
 class IngestP5Tests(unittest.TestCase):
