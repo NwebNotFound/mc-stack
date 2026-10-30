@@ -19,6 +19,8 @@ commands:
     description: Kategorien und Hilfe
   abholen:
     description: Offene Lieferungen abholen
+  feedback:
+    description: Link zu Feedback und Bugs
   balance:
     description: CP-Kontostand
     aliases: [bal]

@@ -1,9 +1,9 @@
 param([switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$resetTables = @('accounts','ah_journal','bank_daily','bank_journal','bank_revenue_daily','buy_order_sales','buy_orders','invite_reward_notices','invites','invites_legacy_migrated','market_prices','motivation','online_players','pending_deliveries','player_challenges','player_season_points','purchase_ids','rcon_purchases','sale_notices','shop_events','shop_journal','shop_notifications','spawn_transfers')
+$resetTables = @('accounts','ah_journal','bank_daily','bank_journal','bank_revenue_daily','buy_order_sales','buy_orders','invite_reward_notices','invites','invites_legacy_migrated','market_prices','motivation','online_players','order_fulfillment','pending_deliveries','player_challenges','player_inventory','player_inventory_sync','player_season_points','purchase_ids','rcon_purchases','sale_notices','shop_events','shop_journal','shop_notifications','spawn_transfers')
 $preservedTables = @('claims','graves','home_slots','homes','known_players','members','parkour_times','server_status','team_invites','teams')
-$expectedViews = @('v_ah_listings','v_server_status','v_shop_listings','v_shop_events')
+$expectedViews = @('v_ah_listings','v_order_fulfillment','v_player_balance','v_player_inventory','v_server_status','v_shop_listings','v_shop_events')
 function Invoke-Docker([string[]]$Arguments) {
     $out = & docker @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Docker-Aufruf fehlgeschlagen ($($Arguments[0..1] -join ' '))." }
