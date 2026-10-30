@@ -32,7 +32,10 @@ class BotTests(unittest.TestCase):
         self.assertTrue(all(call.args[1] == "linkwhitelist add 12345678-1234-1234-1234-1234567890ab" for call in command.call_args_list))
 
     def test_whitelist_does_not_report_failure_as_success(self):
-        with patch.object(bot, "rcon", return_value="Unknown command"):
+        with tempfile.TemporaryDirectory() as directory, patch.object(bot, "DATA", Path(directory)), patch.object(bot, "rcon", return_value="Unknown command"):
+            # gleiches Schema wie Bot.__init__, damit der Test keine vorhandene /app/data/links.sqlite3 braucht
+            with bot.sqlite3.connect(Path(directory) / "links.sqlite3") as db:
+                db.execute("CREATE TABLE IF NOT EXISTS links (discord_id INTEGER PRIMARY KEY, uuid TEXT UNIQUE NOT NULL, name TEXT NOT NULL, code TEXT, expires INTEGER, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)")
             with self.assertRaises(RuntimeError):
                 bot.whitelist("remove", "123456781234123412341234567890ab")
 
