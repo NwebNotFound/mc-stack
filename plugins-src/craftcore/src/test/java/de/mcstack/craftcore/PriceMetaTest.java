@@ -24,7 +24,6 @@ class PriceMetaTest {
     assertEquals(PriceMeta.PLACEHOLDER, PriceMeta.effectiveFromOrPlaceholder(cfg, null));
     cfg.set("effective_from", "morgen");
     assertEquals(PriceMeta.PLACEHOLDER, assertDoesNotThrow(() -> PriceMeta.effectiveFromOrPlaceholder(cfg, java.util.logging.Logger.getLogger("t"))));
-    assertEquals(PriceMeta.PLACEHOLDER, PriceMeta.effectiveFromOrPlaceholder(RecipeArbitrageTest.prices(), null));
     try (Connection c = h2(); Statement s = c.createStatement()) {
       s.execute("CREATE TABLE market_catalog (item VARCHAR(64) PRIMARY KEY,sell_price DECIMAL(20,2))");
       s.execute("CREATE TABLE market_price_history (item VARCHAR(64),hour_ts BIGINT,avg_price DECIMAL(20,4))");
@@ -36,6 +35,17 @@ class PriceMetaTest {
         r.next(); assertEquals(10.0, r.getDouble(1), 1e-6);
       }
     }
+  }
+  /** Jar-Wert: kein 1970-Platzhalter, gueltiges ISO 8601 mit Zone. */
+  @Test void jarEffectiveFromIsRealIsoWithZone() {
+    String raw = RecipeArbitrageTest.prices().getString("effective_from");
+    assertNotNull(raw);
+    var odt = assertDoesNotThrow(() -> java.time.OffsetDateTime.parse(raw.trim()));
+    assertTrue(raw.trim().matches(".*(Z|[+-]\\d{2}:\\d{2})$"), "Zone fehlt: " + raw);
+    assertNotEquals(PriceMeta.PLACEHOLDER, odt.toInstant());
+    assertTrue(odt.getYear() > 1970);
+    assertEquals(odt.toInstant(), PriceMeta.effectiveFromOrPlaceholder(RecipeArbitrageTest.prices(), null));
+    assertEquals(java.time.Instant.parse("2026-10-30T14:00:00Z"), odt.toInstant());
   }
   @Test void viewExposesUtcDatetimeAndPlaceholderMeansEmpty() throws Exception {
     try (Connection c = h2(); Statement s = c.createStatement()) {
