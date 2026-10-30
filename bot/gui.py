@@ -180,11 +180,33 @@ class LbPager(discord.ui.View):
     """Bestenliste mit Blaettern: rows = [(rang, name, ms, uuid)], 10 pro Seite."""
     PER = 10
 
-    def __init__(self, title, rows, me=None):
+    def __init__(self, title, rows, me=None, courses=None, raw=None, selected=None):
         super().__init__(timeout=600)
         self.title, self.rows, self.me, self.page = title, rows, me, 0
+        self.raw = raw or []
         self.pages = max(1, (len(rows) + self.PER - 1) // self.PER)
+        if courses and len(courses) > 1:
+            sel = (selected or "").strip().lower()
+            opts = [discord.SelectOption(label="Alle Kurse (beste Zeit je Spieler)", value="*", default=not sel)]
+            opts += [discord.SelectOption(label=c[:100], value=c[:100], default=c == sel) for c in courses[:24]]
+            menu = discord.ui.Select(placeholder="Kurs w\u00e4hlen", options=opts, row=1)
+            menu.callback = self._pick
+            self.course_menu = menu
+            self.add_item(menu)
         self._sync()
+
+    async def _pick(self, interaction):
+        import parkour
+        v = self.course_menu.values[0]
+        course = None if v == "*" else v
+        self.rows = parkour.rank(self.raw, course)
+        self.title = f"Parkour \u2013 {course}" if course else "Parkour"
+        self.me, self.page = None, 0
+        self.pages = max(1, (len(self.rows) + self.PER - 1) // self.PER)
+        for o in self.course_menu.options:
+            o.default = o.value == v
+        self._sync()
+        await interaction.response.edit_message(attachments=[await self.file()], view=self)
 
     def _sync(self):
         self.prev.disabled = self.page == 0
