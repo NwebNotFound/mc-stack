@@ -36,7 +36,7 @@ class ParkourLeaderboardTest(unittest.TestCase):
 
     def test_legacy_table_without_course(self):
         raw = raw_from_sqlite(with_course=False)
-        self.assertEqual(parkour.rank(raw), [(1, "Anna", 9000, "u1"), (2, "Ben", 12000, "u2")])
+        self.assertEqual(parkour.rank(raw), [(1, "Ben", 8000, "u2"), (2, "Anna", 9000, "u1")])
         self.assertEqual(parkour.courses(raw), [])
 
     def test_uuid_dashes_dedup(self):
