@@ -268,6 +268,9 @@ class ItemView(discord.ui.View):
         for r in RANGES:
             self.add_item(RangeButton(r, r == rng))
         self.add_item(discord.ui.Button(label="Auf der Website", url=f"{WEB}?item={e['item']}", emoji="\U0001F310", row=1))
+        import bank
+        if bank.enabled() and e.get("buy_price") is not None:
+            self.add_item(BankButton(bot, e))
 
     @discord.ui.button(label="Preisalarm", emoji="\U0001F514", style=discord.ButtonStyle.primary, row=1)
     async def alarm(self, interaction, _):
@@ -292,6 +295,17 @@ class ItemView(discord.ui.View):
         v = discord.ui.View(timeout=300)
         v.add_item(buy.BuySelect(self.bot, opts))
         await interaction.response.send_message(f"\U0001F6D2 G\u00fcnstigste Spielershop-Angebote f\u00fcr **{sc.pretty(self.e['item'])}**:", view=v, ephemeral=True)
+
+
+class BankButton(discord.ui.Button):
+    def __init__(self, bot, e):
+        super().__init__(label="Bei der Bank kaufen", emoji="\U0001F3E6", style=discord.ButtonStyle.success, row=2)
+        self.bot, self.e = bot, e
+
+    async def callback(self, interaction):
+        import bank
+        p = self.e.get("buy_price")
+        await bank.start(self.bot, interaction, self.e["item"], f"{cp(p)} pro St\u00fcck" if p is not None else "")
 
 
 def register(bot, tree):
