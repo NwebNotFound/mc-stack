@@ -15,7 +15,7 @@ class FulfillmentTests(unittest.TestCase):
         relay.init_db(self.db)
 
     def st(self, rid):
-        r = self.db.execute("SELECT status, acked FROM web_fulfillment WHERE request_id=?", (rid,)).fetchone()
+        r = self.db.execute("SELECT status, acked FROM web_fulfillment_v2 WHERE request_id=? ORDER BY rowid DESC", (rid,)).fetchone()
         return r
 
     def test_final_never_overwritten_and_idempotent(self):
@@ -50,6 +50,44 @@ class FulfillmentTests(unittest.TestCase):
             asyncio.run(relay.sync_fulfillment(bot, None, "x"))
         self.assertEqual(sent, [("mc-shop-orders/ack", [{"id": "o1", "status": "ready"}])])
         self.assertEqual(self.st("o1"), ("ready", 1))
+
+    def test_unacked_ready_survives_collected(self):
+        bot = mock.Mock(db=self.db)
+        sent, ok = [], [False]
+
+        async def fake_ack(session, token, path, acks):
+            sent.append(acks)
+            return ok[0]
+        rows = [[("o1", "ready", "t1")]]
+        with mock.patch.object(relay, "_ack", fake_ack), mock.patch.object(relay, "_fulfillment_rows", lambda since: rows[0]):
+            asyncio.run(relay.sync_fulfillment(bot, None, "x"))  # Ack schlaegt fehl
+            rows[0], ok[0] = [("o1", "collected", "t2")], True
+            asyncio.run(relay.sync_fulfillment(bot, None, "x"))
+            asyncio.run(relay.sync_fulfillment(bot, None, "x"))
+        self.assertEqual(sent[1], [{"id": "o1", "status": "ready"}, {"id": "o1", "status": "collected"}])
+        self.assertEqual(len(sent), 2)
+        self.assertFalse(relay.record_fulfillment(self.db, "o1", "refunded"))
+
+    def test_none_ts_does_not_block_cursor(self):
+        rows = [("o1", "ready", "2026-10-30 09:00:00"), ("o2", "ready", None)]
+        relay.apply_fulfillment(self.db, rows)
+        self.assertEqual(relay.get_cursor(self.db), "2026-10-30 09:00:00")
+
+    def test_migrates_old_table(self):
+        db = sqlite3.connect(":memory:")
+        db.execute("CREATE TABLE web_fulfillment (request_id TEXT PRIMARY KEY, status TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL)")
+        db.execute("INSERT INTO web_fulfillment VALUES ('o1','ready',0,1)")
+        relay.init_db(db)
+        relay.init_db(db)
+        self.assertEqual(db.execute("SELECT request_id, status, acked FROM web_fulfillment_v2").fetchall(), [("o1", "ready", 0)])
+
+    def test_safe_url(self):
+        d = "https://nwebnotfound.dev/api"
+        self.assertEqual(ingest.safe_url("http://evil.example/api", d), d)
+        self.assertEqual(ingest.safe_url("ftp://x", d), d)
+        self.assertEqual(ingest.safe_url(None, d), d)
+        self.assertEqual(ingest.safe_url("https://staging.nwebnotfound.dev/api/", d), "https://staging.nwebnotfound.dev/api")
+        self.assertEqual(ingest.safe_url("http://localhost:8787/api", d), "http://localhost:8787/api")
 
     def test_missing_view_warns(self):
         bot = mock.Mock(db=self.db)
@@ -90,7 +128,10 @@ class IngestExtrasTests(unittest.TestCase):
     def test_player_cap(self):
         stats = {str(i): {} for i in range(200)}
         bal = (["uuid", "balance_cp"], [(U1, 1)])
-        self.assertNotIn(U1, ingest.merge_player_extras(stats, bal))
+        out = ingest.merge_player_extras(stats, bal)
+        self.assertEqual(len(out), 200)
+        self.assertNotIn(U1.replace("-", ""), out)
+        self.assertNotIn(U1, out)
 
 
 if __name__ == "__main__":

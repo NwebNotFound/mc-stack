@@ -3,7 +3,25 @@ import asyncio, json, logging, os, time
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
-URL = os.getenv("MC_INGEST_URL", "https://nwebnotfound.dev/api/mc-ingest")
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def safe_url(url, default):
+    """Nur https (http nur fuer localhost), sonst Default."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(url or "").strip())
+        ok = u.scheme == "https" and u.hostname or (u.scheme == "http" and u.hostname in _LOCAL_HOSTS)
+    except ValueError:
+        ok = False
+    if not ok:
+        if url:
+            log.warning("Unsichere/ungueltige URL verworfen, nutze Default")
+        return default
+    return str(url).strip().rstrip("/")
+
+
+URL = safe_url(os.getenv("MC_INGEST_URL"), "https://nwebnotfound.dev/api/mc-ingest")
 INTERVAL = 300
 STAT_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
 RENAME = {"playtime_s": "playtime"}
