@@ -12,6 +12,8 @@ import java.util.UUID;
  * Result goes to order_fulfillment: ready (item in /abholen, offline pickup) or failed. Caller owns the transaction.
  */
 final class BankBuy {
+  /** Website contract (INGEST.md, bank_buy): amount 1..2304, request_id [A-Za-z0-9_.:-]{8,64}. */
+  static final int MAX_AMOUNT = 2304;
   record Request(String mcUuid, String item, int amount, String requestId) {}
   interface Env {
     /** null = allowed, otherwise UNKNOWN or LOCKED. */
@@ -35,9 +37,9 @@ final class BankBuy {
       if(args.length!=6 || !args[0].equalsIgnoreCase("buy") || !args[1].equalsIgnoreCase("bank")) return null;
       UUID id=UUID.fromString(args[2]); if(!id.toString().equals(args[2])) return null;
       String item=args[3].toUpperCase(Locale.ROOT); if(item.startsWith("MINECRAFT:")) item=item.substring(10);
-      if(!item.matches("[A-Z0-9_]{1,64}") || !args[4].matches("[0-9]{1,5}") || !args[5].matches("[A-Za-z0-9_-]{1,64}")) return null;
+      if(!item.matches("[A-Z0-9_]{1,64}") || !args[4].matches("[0-9]{1,5}") || !args[5].matches("[A-Za-z0-9_.:-]{8,64}")) return null;
       int amount=Integer.parseInt(args[4]);
-      return amount>0 ? new Request(id.toString(),item,amount,args[5]) : null;
+      return amount>0 && amount<=MAX_AMOUNT ? new Request(id.toString(),item,amount,args[5]) : null;
     } catch(IllegalArgumentException e) { return null; }
   }
   static String cacheId(Request r) { return "bank\n"+r.requestId(); }
@@ -74,7 +76,8 @@ final class BankBuy {
   private static String run(Connection c, Request req, Env env) throws Exception {
     String blocked=env.blocked(c,req.item());
     if(blocked!=null) return "ERR "+blocked;
-    if(req.amount()>env.maxStack(req.item())) return "ERR INVALID";
+    int stack=env.maxStack(req.item());
+    if(stack<1 || req.amount()<1 || req.amount()>MAX_AMOUNT) return "ERR INVALID";
     long total=0;
     for(int i=0;i<req.amount();i++) {
       if(!env.reserve(c,req.mcUuid(),req.item())) return "ERR LIMIT";
@@ -83,13 +86,17 @@ final class BankBuy {
     }
     if(env.balance(c,req.mcUuid())<total) return "ERR NO_FUNDS";
     env.debit(c,req.mcUuid(),total);
-    String delivery=UUID.randomUUID().toString();
-    env.deliver(c,delivery,req.mcUuid(),req.item(),req.amount());
+    // one pickup entry per stack; order_fulfillment points to the first one
+    String delivery=null;
+    for(int left=req.amount();left>0;left-=stack) {
+      String id=UUID.randomUUID().toString(); if(delivery==null) delivery=id;
+      env.deliver(c,id,req.mcUuid(),req.item(),Math.min(stack,left));
+    }
     try(PreparedStatement q=c.prepareStatement("INSERT INTO order_fulfillment(request_id,delivery_id,status,updated_at) VALUES(?,?,'ready',CURRENT_TIMESTAMP)")) {
       q.setString(1,req.requestId()); q.setString(2,delivery); q.executeUpdate();
     }
     env.stats(c,req.item(),req.amount(),total);
-    return "OK "+req.amount()+" "+total;
+    return "OK "+req.amount()+" "+total+" 0"; // same shape as shop buy: OK <qty> <total> <rest>
   }
   private BankBuy() {}
 }

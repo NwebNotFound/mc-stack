@@ -477,6 +477,26 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0], f"shop buy {self.U} aaaaaaaa-0000-0000-0000-000000000001 1 10 r-1")
 
+    def test_bank_buy_order(self):
+        import relay
+        con = self.db()
+        calls = []
+        replies = ["PENDING bank", "OK 3 1350 0"]
+        def rcon(h, c):
+            calls.append(c); return replies.pop(0)
+        o = {"id": "web:bank.1", "request_id": "web:bank.1", "type": "bank_buy", "item": "diamond", "amount": 3, "qty": 3,
+             "mc_uuid": self.U, "buyer_uuid": self.U, "shop_id": None, "listing_id": None}
+        self.assertEqual(relay.handle_order(con, rcon, "h", o), (None, None))
+        self.assertEqual(relay.handle_order(con, rcon, "h", o), ("accepted", None))
+        self.assertEqual(relay.handle_order(con, rcon, "h", o), ("accepted", None))
+        self.assertEqual(calls, [f"shop buy bank {self.U} diamond 3 web:bank.1"] * 2)
+        self.assertEqual(relay.handle_order(con, lambda h, c: "ERR NO_FUNDS", "h", dict(o, request_id="web:bank.2", id="web:bank.2")), ("rejected", "NO_FUNDS"))
+        self.assertEqual(relay.handle_order(con, rcon, "h", dict(o, amount=2305)), ("rejected", "INVALID"))
+        self.assertEqual(relay.handle_order(con, rcon, "h", dict(o, request_id="short", id="short")), ("rejected", "INVALID"))
+        self.assertEqual(relay.handle_order(con, rcon, "h", dict(o, mc_uuid="00000000-0000-0000-0000-000000000000")), ("rejected", "LINK_MISMATCH"))
+        self.assertEqual(relay.handle_order(con, rcon, "h", dict(o, type="weird")), ("rejected", "UNSUPPORTED_TYPE"))
+        self.assertEqual(relay.PENDING_PATH, "mc-shop-orders/pending?types=shop,bank_buy")
+
     def test_bid(self):
         import relay
         con = self.db()

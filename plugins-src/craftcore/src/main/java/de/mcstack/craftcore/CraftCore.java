@@ -249,7 +249,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
           finally { ShopBuyDispatch.finishId(id, response); }
         });
       }
-      sender.sendMessage("PENDING");
+      sender.sendMessage("PENDING bank");
       return true;
     }
     if ((command.getName().equals("shop") || command.getName().equals("ah")) && args.length>0 && args[0].equalsIgnoreCase("buy")) {

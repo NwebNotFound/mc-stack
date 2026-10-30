@@ -34,7 +34,9 @@ class BankBuyTest {
   static String one(Connection c,String sql)throws SQLException{ try(ResultSet r=c.createStatement().executeQuery(sql)){ return r.next()?r.getString(1):null; } }
 
   @Test void parsesOnlyTheBankForm() {
-    assertEquals(new BankBuy.Request(U,"IRON_INGOT",16,"bank-abc"), BankBuy.parse(new String[]{"buy","bank",U,"minecraft:iron_ingot","16","bank-abc"}));
+    assertEquals(new BankBuy.Request(U,"IRON_INGOT",16,"web:a.b-1"), BankBuy.parse(new String[]{"buy","bank",U,"minecraft:iron_ingot","16","web:a.b-1"}));
+    assertNull(BankBuy.parse(new String[]{"buy","bank",U,"iron_ingot","2305","web:a.b-1"}));
+    assertNull(BankBuy.parse(new String[]{"buy","bank",U,"iron_ingot","1","short"}));
     assertNull(BankBuy.parse(new String[]{"buy",U,U,"1","100","k"}));
     assertNull(BankBuy.parse(new String[]{"buy","bank",U,"iron_ingot","0","k"}));
     assertNull(BankBuy.parse(new String[]{"buy","bank","AAAAAAAA-1111-1111-1111-111111111111","iron_ingot","1","k"}));
@@ -44,14 +46,23 @@ class BankBuyTest {
   @Test void okChargesPriceAtExecutionOnceAndIsReadyForPickup() throws Exception {
     try(Connection c=db("bb_ok",10_000)) {
       Fake env=new Fake(); var req=new BankBuy.Request(U,"IRON_INGOT",3,"web-1");
-      assertEquals("OK 3 330", BankBuy.execute(c,req,1,env)); // 100+110+120
+      assertEquals("OK 3 330 0", BankBuy.execute(c,req,1,env)); // 100+110+120
       assertEquals("9670", one(c,"SELECT balance FROM accounts"));
       assertEquals("ready", one(c,"SELECT status FROM order_fulfillment WHERE request_id='web-1'"));
       assertEquals("3", one(c,"SELECT amount FROM pending_deliveries WHERE id=(SELECT delivery_id FROM order_fulfillment WHERE request_id='web-1')"));
-      assertEquals("OK 3 330", BankBuy.execute(c,req,2,env), "same request_id: stored answer");
+      assertEquals("OK 3 330 0", BankBuy.execute(c,req,2,env), "same request_id: stored answer");
       assertEquals("9670", one(c,"SELECT balance FROM accounts"), "charged only once");
       assertEquals("1", one(c,"SELECT COUNT(*) FROM pending_deliveries"));
       assertEquals("ERR DUPLICATE", BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",4,"web-1"),3,env));
+    }
+  }
+  @Test void largeOrderIsSplitIntoStacks() throws Exception {
+    try(Connection c=db("bb_split",1_000_000)) {
+      Fake env=new Fake(); env.limit=2304;
+      assertTrue(BankBuy.execute(c,new BankBuy.Request(U,"DIRT",130,"web-split"),1,env).startsWith("OK 130 "));
+      assertEquals("3", one(c,"SELECT COUNT(*) FROM pending_deliveries"));
+      assertEquals("130", one(c,"SELECT SUM(amount) FROM pending_deliveries"));
+      assertEquals("64", one(c,"SELECT amount FROM pending_deliveries WHERE id=(SELECT delivery_id FROM order_fulfillment WHERE request_id='web-split')"));
     }
   }
   @Test void noFundsFailsWithoutSideEffects() throws Exception {
@@ -70,7 +81,7 @@ class BankBuyTest {
       Fake env=new Fake(); env.locked.add("DIRT"); env.limit=5;
       assertEquals("ERR LOCKED", BankBuy.execute(c,new BankBuy.Request(U,"DIRT",1,"a"),1,env));
       assertEquals("ERR UNKNOWN", BankBuy.execute(c,new BankBuy.Request(U,"BEDROCK",1,"b"),1,env));
-      assertEquals("ERR INVALID", BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",65,"c"),1,env));
+      assertEquals("ERR INVALID", BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",2305,"c"),1,env));
       assertEquals("ERR LIMIT", BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",6,"d"),1,env));
       assertTrue(BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",5,"e"),1,env).startsWith("OK 5 "));
       assertEquals("ERR LIMIT", BankBuy.execute(c,new BankBuy.Request(U,"IRON_INGOT",1,"f"),1,env));
