@@ -72,6 +72,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       for (OfflinePlayer known : Bukkit.getOfflinePlayers()) if (known.hasPlayedBefore() && known.getName()!=null) tx(c->{exec(c,"INSERT IGNORE INTO known_players(uuid,name) VALUES (?,?)",known.getUniqueId().toString(),known.getName()); return null;});
       new ServerStatus(this).start();
       new Features(this).start();
+      new Portals(this).start();
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();

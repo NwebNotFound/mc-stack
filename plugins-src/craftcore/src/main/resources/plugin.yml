@@ -37,6 +37,11 @@ commands:
     description: Chunk freigeben
   spawn:
     description: Zum Lobby-Spawn teleportieren
+    aliases: [lobby]
+  ccportal:
+    description: Portale anzeigen, neu laden, testen
+    usage: /ccportal list|reload|send <spieler> <portal>
+    permission: craftcore.portal.admin
   home:
     description: Zu einem Zuhause teleportieren
   tpteam:
@@ -76,6 +81,9 @@ commands:
     description: MineRush Loot-Editor
     permission: craftcore.minerush.edit
 permissions:
+  craftcore.portal.admin:
+    description: Portale verwalten
+    default: op
   craftcore.minerush.edit:
     description: MineRush bearbeiten
     default: op
