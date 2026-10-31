@@ -25,6 +25,16 @@ class NpcDefinitionsTest {
     assertEquals(def,find(List.of(def),"COOL_NPC").orElseThrow());
     assertThrows(IllegalArgumentException.class,()->new NpcDef("key","x".repeat(65),"","",ActionType.NONE,""));
   }
+  @Test void renameValidation() {
+    NpcDef a=new NpcDef("a","&aAlter Name","","",ActionType.NONE,"");
+    NpcDef b=new NpcDef("b","&bAnderer Name","","",ActionType.NONE,"");
+    var defs=List.of(a,b);
+    assertDoesNotThrow(()->validateDisplayName(defs,"a","&cAlter Name"));
+    assertDoesNotThrow(()->validateDisplayName(defs,"a","x".repeat(64)));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","&a  "));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","x".repeat(65)));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","&eanderer name"));
+  }
   @Test void view() {
     assertTrue(inViewAndRange(0,0,0,1,0,0,3,0,0));
     assertFalse(inViewAndRange(0,0,0,1,0,0,5,0,0));

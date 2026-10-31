@@ -24,12 +24,13 @@ import org.bukkit.util.Vector;
 final class CitizensNpcs implements Listener {
   private final CraftCore core;
   private final UserMenu menu;
+  private final de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
   private final File file;
   private final YamlConfiguration config;
   private final Map<String,NpcDefinitions.NpcDef> definitions=new LinkedHashMap<>();
   private final Map<String,NPC> npcs=new HashMap<>();
   private boolean active;
-  CitizensNpcs(CraftCore core, UserMenu menu) { this.core=core; this.menu=menu; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
+  CitizensNpcs(CraftCore core, UserMenu menu, de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp) { this.core=core; this.menu=menu; this.lobbyPvp=lobbyPvp; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
   void start() {
     ConfigurationSection section=config.getConfigurationSection("npcs");
     if(section!=null) for(String key:section.getKeys(false)) try {
@@ -93,7 +94,7 @@ final class CitizensNpcs implements Listener {
       var def=definitions.get(entry.getKey());
       switch(def.action()) {
         case SERVER -> { try { player.sendPluginMessage(core,"BungeeCord",Portals.connectMessage(def.actionArg())); } catch(IOException ex) { core.getLogger().warning("NPC-Verbindung fehlgeschlagen: "+ex.getMessage()); } }
-        case MENU -> { if(def.actionArg().equalsIgnoreCase("bank") || def.actionArg().equalsIgnoreCase("shop") || def.actionArg().equalsIgnoreCase("ah") || def.actionArg().equalsIgnoreCase("stats")) player.performCommand(def.actionArg()); else menu.open(player,def.actionArg().toLowerCase(Locale.ROOT)); }
+        case MENU -> { if(def.actionArg().equalsIgnoreCase("pvp")) { if(lobbyPvp!=null) lobbyPvp.openMenu(player); } else if(def.actionArg().equalsIgnoreCase("bank") || def.actionArg().equalsIgnoreCase("shop") || def.actionArg().equalsIgnoreCase("ah") || def.actionArg().equalsIgnoreCase("stats")) player.performCommand(def.actionArg()); else menu.open(player,def.actionArg().toLowerCase(Locale.ROOT)); }
         case COMMAND -> player.performCommand(def.actionArg().replace("{player}",player.getName()));
         case NONE -> { }
       }
@@ -103,7 +104,7 @@ final class CitizensNpcs implements Listener {
   void command(CommandSender sender,String[] args) {
     if(!sender.hasPermission("craftcore.admin.npc")) { sender.sendMessage("Keine Berechtigung."); return; }
     if(!active) { sender.sendMessage("Citizens ist nicht aktiv."); return; }
-    if(args.length==0) { sender.sendMessage("/cc npc create|setskin|setmessage|setaction|move|remove|list"); return; }
+    if(args.length==0) { sender.sendMessage("/cc npc create|rename|setskin|setmessage|setaction|move|remove|list"); return; }
     String op=args[0].toLowerCase(Locale.ROOT);
     if(op.equals("list")) { definitions.values().forEach(d->sender.sendMessage(color(d.displayName())+" - "+d.action().name().toLowerCase(Locale.ROOT)+(d.actionArg().isEmpty()?"":" "+d.actionArg()))); return; }
     try {
@@ -125,9 +126,10 @@ final class CitizensNpcs implements Listener {
       if(args.length<=nameEnd) throw new IllegalArgumentException("Wert fehlt");
       String value=String.join(" ",Arrays.copyOfRange(args,nameEnd,args.length));
       switch(op) {
+        case "rename" -> { NpcDefinitions.validateDisplayName(definitions.values(),def.key(),value); def=new NpcDefinitions.NpcDef(def.key(),value,def.skin(),def.message(),def.action(),def.actionArg()); }
         case "setskin" -> { if(args.length!=nameEnd+1) throw new IllegalArgumentException("Ein Skinname erwartet"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),value,def.message(),def.action(),def.actionArg()); }
         case "setmessage" -> def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),value,def.action(),def.actionArg());
-        case "setaction" -> { var action=NpcDefinitions.parseAction(value); if(action.type()==NpcDefinitions.ActionType.MENU && !Set.of("menu","bank","shop","ah","stats","pay","trade","team","claim","home","vip").contains(action.arg().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Unbekanntes Menue"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),def.message(),action.type(),action.arg()); }
+        case "setaction" -> { var action=NpcDefinitions.parseAction(value); if(action.type()==NpcDefinitions.ActionType.MENU && !Set.of("menu","bank","shop","ah","stats","pay","trade","team","claim","home","vip","pvp").contains(action.arg().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Unbekanntes Menue"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),def.message(),action.type(),action.arg()); }
         default -> throw new IllegalArgumentException("Unbekannter Unterbefehl");
       }
       definitions.put(def.key(),def); apply(def); save(); sender.sendMessage("NPC aktualisiert.");
@@ -135,8 +137,8 @@ final class CitizensNpcs implements Listener {
   }
   List<String> complete(CommandSender sender,String[] args) {
     if(!sender.hasPermission("craftcore.admin.npc")) return List.of();
-    if(args.length==1) return UserMenu.complete(args[0],"create","setskin","setmessage","setaction","move","remove","list");
-    if(args.length==2 && Set.of("setskin","setmessage","setaction","move","remove").contains(args[0].toLowerCase(Locale.ROOT))) return definitions.keySet().stream().filter(k->k.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
+    if(args.length==1) return UserMenu.complete(args[0],"create","rename","setskin","setmessage","setaction","move","remove","list");
+    if(args.length==2 && Set.of("rename","setskin","setmessage","setaction","move","remove").contains(args[0].toLowerCase(Locale.ROOT))) return definitions.keySet().stream().filter(k->k.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
     if(args.length==3 && args[0].equalsIgnoreCase("setaction")) return UserMenu.complete(args[2],"server","menu","command","none");
     return List.of();
   }

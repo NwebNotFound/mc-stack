@@ -8,12 +8,15 @@ class PvpQueueTest {
     @Test void fifoRejoinAndLeave() {
         PvpQueue queue = new PvpQueue();
         UUID a = UUID.randomUUID(), b = UUID.randomUUID(), c = UUID.randomUUID();
+        assertEquals(0, queue.size());
         queue.join(a, "old");
+        assertEquals(1, queue.size());
         queue.join(b, "b");
         queue.join(c, "c");
         queue.join(a, "new");
         assertEquals(3, queue.size());
         assertEquals(new PvpQueue.Pair(a, "new", b, "b"), queue.poll().orElseThrow());
+        assertEquals(1, queue.size());
         assertFalse(queue.contains(a));
         assertTrue(queue.contains(c));
         assertTrue(queue.leave(c));
