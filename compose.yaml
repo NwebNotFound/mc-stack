@@ -144,6 +144,9 @@ services:
       <<: *paper-environment
       MEMORY: 1152M
       CRAFTCORE_SERVER: vipworld-1
+      # Zugang ueber CraftCore-Join-Gate (Owner/Mitglieder/Bypass) statt Whitelist, wie pvp
+      ENABLE_WHITELIST: "FALSE"
+      ENFORCE_WHITELIST: "FALSE"
       CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_1_ID:-}"
       CRAFTCORE_DB_USER: craft_vip
       CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
@@ -172,6 +175,9 @@ services:
       <<: *paper-environment
       MEMORY: 1152M
       CRAFTCORE_SERVER: vipworld-2
+      # Zugang ueber CraftCore-Join-Gate (Owner/Mitglieder/Bypass) statt Whitelist, wie pvp
+      ENABLE_WHITELIST: "FALSE"
+      ENFORCE_WHITELIST: "FALSE"
       CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_2_ID:-}"
       CRAFTCORE_DB_USER: craft_vip
       CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
@@ -200,6 +206,9 @@ services:
       <<: *paper-environment
       MEMORY: 1152M
       CRAFTCORE_SERVER: vipworld-3
+      # Zugang ueber CraftCore-Join-Gate (Owner/Mitglieder/Bypass) statt Whitelist, wie pvp
+      ENABLE_WHITELIST: "FALSE"
+      ENFORCE_WHITELIST: "FALSE"
       CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_3_ID:-}"
       CRAFTCORE_DB_USER: craft_vip
       CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
