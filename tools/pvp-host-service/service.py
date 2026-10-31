@@ -1,11 +1,18 @@
-"""Small fixed-purpose HTTP bridge for the PvP container."""
+"""Small fixed-purpose HTTP bridge for the PvP and VIP containers."""
 import hmac
 import json
 import os
+import re
 import subprocess
+import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONTAINER = "mc-stack-pvp-1"
+VIP_LOCK = threading.Lock()
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+SLOT_RE = re.compile(r"vipworld-[1-3]\Z")
+
 
 def docker(action):
     args = ["docker", action]
@@ -14,27 +21,150 @@ def docker(action):
     args.append(CONTAINER)
     return subprocess.run(args, capture_output=True, text=True, check=True).stdout.strip()
 
+
 def status(value):
     return {"running": "online", "created": "sleeping", "exited": "sleeping", "restarting": "starting"}.get(value, "offline")
 
+
+def repo_root():
+    return Path(os.environ.get("MC_STACK_DIR") or Path(__file__).resolve().parents[2]).resolve()
+
+
+def read_config(root):
+    """Read the small, known subset of the VIP YAML configuration; fail closed."""
+    cfg = {"slots": [], "ram": {"fixed-services-mb": {}}}
+    section = None
+    subsection = None
+    for raw in (root / "config" / "vipworlds.yml").read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        value = line.strip()
+        if indent == 0:
+            subsection = None
+            key, sep, val = value.partition(":")
+            if not sep:
+                raise ValueError("invalid configuration")
+            section = key
+            if key == "max-running":
+                cfg[key] = int(val.strip())
+        elif section == "slots" and indent == 2 and value.startswith("- "):
+            slot = value[2:].strip()
+            if not SLOT_RE.fullmatch(slot) or slot in cfg["slots"]:
+                raise ValueError("invalid slot")
+            cfg["slots"].append(slot)
+        elif section == "ram":
+            key, sep, val = value.partition(":")
+            if not sep:
+                raise ValueError("invalid RAM configuration")
+            if indent == 2:
+                subsection = key
+                if key in ("total-mb", "reserved-mb", "survival-reserved-mb", "per-world-mb"):
+                    cfg["ram"][key] = int(val.strip())
+            elif indent == 4 and subsection == "fixed-services-mb":
+                cfg["ram"]["fixed-services-mb"][key] = int(val.strip())
+    cfg["max-running"] = min(cfg["max-running"], 3)
+    ram = cfg["ram"]
+    values = [cfg["max-running"], *(ram[k] for k in ("total-mb", "reserved-mb", "survival-reserved-mb", "per-world-mb")), *ram["fixed-services-mb"].values()]
+    if not cfg["slots"] or not ram["fixed-services-mb"] or any(v < 0 for v in values):
+        raise ValueError("invalid VIP configuration")
+    return cfg
+
+
+def budget_ok(cfg, running):
+    ram = cfg["ram"]
+    return ram["survival-reserved-mb"] + sum(ram["fixed-services-mb"].values()) + (running + 1) * ram["per-world-mb"] <= ram["total-mb"] - ram["reserved-mb"]
+
+
+def inspect_slot(slot):
+    result = subprocess.run(["docker", "inspect", "-f", '{{.State.Status}}|{{range .Config.Env}}{{println .}}{{end}}', "mc-stack-" + slot + "-1"], capture_output=True, text=True)
+    if result.returncode:
+        if "no such" in (result.stderr or "").lower():
+            return {"slot": slot, "status": "offline", "worldId": None}
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+    state, _, env = result.stdout.partition("|")
+    world_id = next((line[len("CRAFTCORE_VIP_WORLD_ID="):] for line in env.splitlines() if line.startswith("CRAFTCORE_VIP_WORLD_ID=")), None)
+    return {"slot": slot, "status": status(state.strip()), "worldId": world_id or None}
+
+
 class Handler(BaseHTTPRequestHandler):
-    def handle_request(self):
-        if (self.command, self.path) not in {("POST", "/start"), ("POST", "/stop"), ("GET", "/status")}:
-            self.send_response(404); self.end_headers(); return
-        token = os.environ.get("PVP_HOST_TOKEN", "")
-        supplied = self.headers.get("X-PvP-Token", "")
-        if not token or not hmac.compare_digest(token.encode(), supplied.encode()):
-            self.send_response(401); self.end_headers(); return
-        try:
-            result = status(docker("inspect")) if self.path == "/status" else (docker(self.path[1:]) and "ok") or "ok"
-            body = json.dumps({"status": result}).encode()
-            self.send_response(200)
-        except (OSError, subprocess.SubprocessError):
-            body = b'{"status":"offline"}'
-            self.send_response(503)
+    def json_response(self, code, value, compact=False):
+        body = json.dumps(value, separators=(",", ":") if compact else None).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body)
+
+    def handle_request(self):
+        pvp = (self.command, self.path) in {("POST", "/start"), ("POST", "/stop"), ("GET", "/status")}
+        vip = (self.command, self.path) in {("POST", "/vip/start"), ("POST", "/vip/stop"), ("GET", "/vip/status")}
+        if not (pvp or vip):
+            self.send_response(404); self.end_headers(); return
+        token = os.environ.get("PVP_HOST_TOKEN" if pvp else "VIP_HOST_TOKEN", "")
+        supplied = self.headers.get("X-PvP-Token" if pvp else "X-VIP-Token", "")
+        if not token or not hmac.compare_digest(token.encode(), supplied.encode()):
+            self.send_response(401); self.end_headers(); return
+        if pvp:
+            try:
+                result = status(docker("inspect")) if self.path == "/status" else (docker(self.path[1:]) and "ok") or "ok"
+                self.json_response(200, {"status": result})
+            except (OSError, subprocess.SubprocessError):
+                self.json_response(503, {"status": "offline"}, compact=True)
+            return
+        try:
+            with VIP_LOCK:
+                self.handle_vip()
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+            self.json_response(503, {"status": "error", "code": "service_unavailable"})
+
+    def handle_vip(self):
+        root = repo_root()
+        cfg = read_config(root)
+        if self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 65536:
+                    raise ValueError()
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError()
+            except (ValueError, UnicodeDecodeError):
+                self.json_response(400, {"status": "error", "code": "invalid_request"}); return
+            if self.path == "/vip/stop":
+                slot = payload.get("slot")
+                if not isinstance(slot, str) or slot not in cfg["slots"]:
+                    self.json_response(400, {"status": "error", "code": "invalid_slot"}); return
+                subprocess.run(["docker", "stop", "mc-stack-" + slot + "-1"], capture_output=True, text=True, check=True)
+                self.json_response(200, {"status": "stopping"}); return
+            world_id = payload.get("worldId")
+            if not isinstance(world_id, str) or not UUID_RE.fullmatch(world_id):
+                self.json_response(400, {"status": "error", "code": "invalid_world_id"}); return
+            world_dir = root / "data" / "vipworlds" / world_id
+            if not world_dir.is_dir():
+                self.json_response(404, {"status": "error", "code": "world_not_found"}); return
+        slots = [inspect_slot(slot) for slot in cfg["slots"]]
+        active = [slot for slot in slots if slot["status"] in ("online", "starting")]
+        if self.path == "/vip/status":
+            self.json_response(200, {"slots": slots, "maxRunning": cfg["max-running"], "budgetOk": budget_ok(cfg, len(active))}); return
+        for slot in active:
+            if slot["worldId"] and slot["worldId"].lower() == world_id.lower():
+                self.json_response(200, {"status": "running", "slot": slot["slot"]}); return
+        free = next((slot["slot"] for slot in slots if slot["status"] not in ("online", "starting")), None)
+        if len(active) >= cfg["max-running"] or free is None:
+            self.json_response(409, {"status": "error", "code": "no_free_slot"}); return
+        if not budget_ok(cfg, len(active)):
+            self.json_response(503, {"code": "ram_budget"}); return
+        env = os.environ.copy()
+        number = free.rsplit("-", 1)[1]
+        env["VIPWORLD_" + number + "_DIR"] = str(world_dir.resolve())
+        env["VIPWORLD_" + number + "_ID"] = world_id
+        args = ["docker", "compose", "--profile", "vip"]
+        if free == "vipworld-3":
+            args += ["--profile", "vip3"]
+        args += ["up", "-d", "--force-recreate", "--no-deps", free]
+        subprocess.run(args, cwd=str(root), env=env, capture_output=True, text=True, check=True)
+        self.json_response(202, {"status": "starting", "slot": free})
 
     def send_error(self, code, message=None, explain=None):
         if code == 501:
@@ -48,6 +178,6 @@ class Handler(BaseHTTPRequestHandler):
     do_PATCH = handle_request
 
 if __name__ == "__main__":
-    if not os.environ.get("PVP_HOST_TOKEN"):
-        raise SystemExit("PVP_HOST_TOKEN fehlt")
+    if not (os.environ.get("PVP_HOST_TOKEN") or os.environ.get("VIP_HOST_TOKEN")):
+        raise SystemExit("PVP_HOST_TOKEN oder VIP_HOST_TOKEN fehlt")
     ThreadingHTTPServer(((os.environ.get("PVP_HOST_BIND") or "127.0.0.1"), int(os.environ.get("PVP_HOST_PORT") or "25599")), Handler).serve_forever()
