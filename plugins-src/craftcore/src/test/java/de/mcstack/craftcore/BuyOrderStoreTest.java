@@ -21,8 +21,15 @@ class BuyOrderStoreTest {
   assertFalse(BuyOrderStore.sell(c,"sale","order","seller",3,"stone","three"));
   assertEquals(150,val(c,"SELECT balance FROM accounts WHERE uuid='seller'"));
   assertEquals(3,val(c,"SELECT amount FROM pending_deliveries WHERE player_uuid='buyer'"));
-  assertTrue(BuyOrderStore.cancel(c,"order","buyer"));assertFalse(BuyOrderStore.cancel(c,"order","buyer"));
-  assertEquals(850,val(c,"SELECT balance FROM accounts WHERE uuid='buyer'"));c.commit();
+  assertFalse(BuyOrderStore.cancel(c,"order","buyer"));
+  assertEquals(500,val(c,"SELECT balance FROM accounts WHERE uuid='buyer'"));c.commit();
+ }}
+ @Test void cancelUntouchedOrderOnlyOnce()throws Exception {try(Connection c=setup("orders_cancel")){
+  assertTrue(BuyOrderStore.create(c,"order","buyer","Buyer","stone",10,50));
+  assertFalse(BuyOrderStore.cancel(c,"order","seller"));
+  assertTrue(BuyOrderStore.cancel(c,"order","buyer"));
+  assertFalse(BuyOrderStore.cancel(c,"order","buyer"));
+  assertEquals(1000,val(c,"SELECT balance FROM accounts WHERE uuid='buyer'"));c.commit();
  }}
  @Test void insufficientAndRollback()throws Exception {try(Connection c=setup("orders2")){
   assertFalse(BuyOrderStore.create(c,"bad","buyer","Buyer","stone",11,100));
