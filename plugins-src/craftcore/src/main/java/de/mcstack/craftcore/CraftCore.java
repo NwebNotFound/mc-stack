@@ -27,6 +27,7 @@ import org.bukkit.scoreboard.*;
 
 public final class CraftCore extends JavaPlugin implements Listener {
   private String password, server;
+  private boolean economyEnabled;
   private de.mcstack.craftcore.vip.VipWorldGate vipWorldGate;
   private Economy economy;
   private Trade trade;
@@ -71,12 +72,13 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private boolean transfer(UUID from,UUID to,long amount) throws Exception { return tx(c->EconomyStore.transfer(c,from.toString(),to.toString(),amount)); }
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
+    economyEnabled=ServerProfile.economyEnabled(server);
     if (server.startsWith("vipworld-")) {
       try { Class.forName("org.mariadb.jdbc.Driver"); } catch (ClassNotFoundException | LinkageError e) { getLogger().warning("MariaDB-Treiber fehlt; VIP-Zugang nur mit Berechtigung."); }
       vipWorldGate=new de.mcstack.craftcore.vip.VipWorldGate(this, () -> DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=2000&socketTimeout=2000", ServerProfile.dbUser(System.getenv()), password), System.getenv("CRAFTCORE_VIP_WORLD_ID"));
       vipWorldGate.start(); new de.mcstack.craftcore.vip.VipIdleStop(this).start(); return;
     }
-    if (!ServerProfile.economyEnabled(server)) {
+    if (!economyEnabled) {
       getLogger().info("PvP-Profil: Economy-Module deaktiviert");
       boolean driverLoaded;
       try { Class.forName("org.mariadb.jdbc.Driver"); driverLoaded=true; } catch (ClassNotFoundException | LinkageError e) { driverLoaded=false; }
@@ -185,6 +187,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   }
   @EventHandler public void join(PlayerJoinEvent e) { try { remember(e.getPlayer().getUniqueId(),e.getPlayer().getName()); } catch(Exception ex) { getLogger().warning("Spielerregistrierung: "+ex); } sidebar(e.getPlayer()); DeliveryNotices.join(this,e.getPlayer()); SaleNotices.notify(this,e.getPlayer(),true); }
   @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
+    if(!ServerProfile.commandAllowed(economyEnabled,command.getName())) return List.of();
     if(command.getName().equals("sidebar")) return args.length==1 ? UserMenu.complete(args[0],"an","aus") : List.of();
     if(command.getName().equals("cc")) {
       if(args.length>1 && args[0].equalsIgnoreCase("npc")) return citizensNpcs == null ? List.of() : citizensNpcs.complete(sender, Arrays.copyOfRange(args,1,args.length));
@@ -272,6 +275,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     return ShopBuyDispatch.Caller.OTHER;
   }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
+    if(!ServerProfile.commandAllowed(economyEnabled,command.getName())) { sender.sendMessage("Dieser Befehl ist auf dem PvP-Server deaktiviert."); return true; }
     if(command.getName().equals("rank")) return rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
       if(args.length>0 && args[0].equalsIgnoreCase("npc")) { if (!sender.hasPermission("craftcore.admin.npc")) sender.sendMessage("Keine Berechtigung."); else if (citizensNpcs == null) sender.sendMessage("Citizens-NPCs sind nicht verfuegbar."); else citizensNpcs.command(sender,Arrays.copyOfRange(args,1,args.length)); return true; }

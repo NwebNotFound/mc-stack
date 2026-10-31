@@ -60,3 +60,4 @@ lp track ranks append admin
 lp user NwebNotFound parent set admin
 lp group builder permission set minecraft.command.gamemode true server=lobby
 lp group builder permission set minecraft.command.gamemode true server=pvp
+lp group builder permission set worldedit.* true server=pvp
