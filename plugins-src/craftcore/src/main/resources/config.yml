@@ -192,13 +192,4 @@ testrun:
 launchpads:
   enabled: true
   cooldown-seconds: 3
-  pads:
-    # Platzhalter: Blockposition vor der Nutzung pruefen und anpassen.
-    - id: spawn-portal
-      world: world
-      x: 112
-      y: -33
-      z: 90
-      target: {x: 2, y: -60, z: 1}
-      launch-height: 5
-      boost-speed: 1.6
+  pads: []

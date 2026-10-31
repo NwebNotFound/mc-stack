@@ -6,7 +6,7 @@ depend: [Vault]
 commands:
   cclaunch:
     description: LaunchPads verwalten
-    usage: /cclaunch list|reload
+    usage: /cclaunch <list|reload|set <id> [targetX targetY targetZ]|remove <id>|target <id>>
     permission: craftcore.launch.admin
   cclink:
     description: Discord-Verknuepfung setzen (Konsole)

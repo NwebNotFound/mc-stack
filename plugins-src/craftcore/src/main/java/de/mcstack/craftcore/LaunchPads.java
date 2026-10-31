@@ -12,7 +12,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.util.Vector;
 
-final class LaunchPads implements Listener, CommandExecutor {
+final class LaunchPads implements Listener, TabExecutor {
   private final CraftCore core;
   private final NamespacedKey marker, saved;
   private final Map<UUID, Flight> flights = new HashMap<>();
@@ -54,16 +54,65 @@ final class LaunchPads implements Listener, CommandExecutor {
     }
     pads=List.copyOf(loaded);
   }
+  private List<Map<String, Object>> configuredPads() {
+    List<Map<String, Object>> result=new ArrayList<>();
+    for (Map<?, ?> entry:core.getConfig().getMapList("launchpads.pads")) {
+      Map<String, Object> copy=new LinkedHashMap<>();
+      entry.forEach((k,v)->copy.put(String.valueOf(k),v));
+      result.add(copy);
+    }
+    return result;
+  }
+  private void savePads(List<Map<String, Object>> entries) {
+    core.getConfig().set("launchpads.pads",entries); core.saveConfig(); load();
+  }
   @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
     if (!sender.hasPermission("craftcore.launch.admin")) { sender.sendMessage("Keine Berechtigung."); return true; }
-    if (args.length != 1) return false;
-    if (args[0].equalsIgnoreCase("reload")) { core.reloadConfig(); load(); sender.sendMessage("LaunchPads neu geladen."); return true; }
-    if (args[0].equalsIgnoreCase("list")) {
+    if (args.length==1 && args[0].equalsIgnoreCase("reload")) { core.reloadConfig(); load(); sender.sendMessage("LaunchPads neu geladen."); return true; }
+    if (args.length==1 && args[0].equalsIgnoreCase("list")) {
       sender.sendMessage("LaunchPads: " + (enabled ? "aktiv" : "deaktiviert"));
       for (var p:pads) sender.sendMessage(p.id()+": "+p.world()+" "+p.x()+","+p.y()+","+p.z()+" -> "+p.targetX()+","+p.targetY()+","+p.targetZ());
       return true;
     }
-    return false;
+    if (args.length<2) return false;
+    String action=args[0].toLowerCase(Locale.ROOT), id=args[1];
+    if (!id.matches("[A-Za-z0-9_-]+")) { sender.sendMessage("Ungueltige ID (erlaubt: Buchstaben, Zahlen, _ und -)."); return true; }
+    List<Map<String, Object>> entries=configuredPads();
+    int index=LaunchPadLogic.indexOf(entries,id);
+    if (action.equals("remove") && args.length==2) {
+      if (index<0) { sender.sendMessage("LaunchPad nicht gefunden: "+id); return true; }
+      entries.remove(index); savePads(entries); sender.sendMessage("LaunchPad entfernt: "+id); return true;
+    }
+    if (!action.equals("set") && !action.equals("target")) return false;
+    if ((action.equals("set") && args.length!=2 && args.length!=5) || (action.equals("target") && args.length!=2)) return false;
+    if (!(sender instanceof Player player)) { sender.sendMessage("Dieser Befehl ist nur fuer Spieler verfuegbar."); return true; }
+    if (action.equals("target")) {
+      if (index<0) { sender.sendMessage("LaunchPad nicht gefunden: "+id); return true; }
+      Location location=player.getLocation();
+      if (!Objects.equals(entries.get(index).get("world"),location.getWorld().getName())) { sender.sendMessage("Das Ziel muss in der Welt des LaunchPads liegen."); return true; }
+      entries.get(index).put("target",LaunchPadLogic.target(location.getX(),location.getY(),location.getZ()));
+    } else {
+      double[] target={0,-59,-6};
+      if (args.length==5) {
+        try { for (int i=0;i<3;i++) { target[i]=Double.parseDouble(args[i+2]); if (!Double.isFinite(target[i])) throw new NumberFormatException(); } }
+        catch (NumberFormatException ex) { sender.sendMessage("Zielkoordinaten muessen endliche Zahlen sein."); return true; }
+      }
+      Location location=player.getLocation();
+      if (args.length==2 && !location.getWorld().getName().equals("world")) { sender.sendMessage("Das Standardziel liegt in Welt world; bitte Zielkoordinaten angeben."); return true; }
+      var block=location.getBlock(); if (LaunchPadLogic.useBlockBelow(block.getType().isAir())) block=block.getRelative(0,-1,0);
+      Map<String, Object> entry=LaunchPadLogic.entry(id,block.getWorld().getName(),block.getX(),block.getY(),block.getZ(),target);
+      if (index<0) entries.add(entry); else entries.set(index,entry);
+    }
+    savePads(entries); sender.sendMessage("LaunchPad gespeichert: "+id); return true;
+  }
+  @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+    if (!sender.hasPermission("craftcore.launch.admin")) return List.of();
+    List<String> choices=List.of();
+    if (args.length==1) choices=List.of("set","remove","target","list","reload");
+    else if (args.length==2 && (args[0].equalsIgnoreCase("remove") || args[0].equalsIgnoreCase("target") || args[0].equalsIgnoreCase("set")))
+      choices=pads.stream().map(LaunchPadLogic.Pad::id).toList();
+    String prefix=args.length==0 ? "" : args[args.length-1].toLowerCase(Locale.ROOT);
+    return choices.stream().filter(s->s.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
   }
   @EventHandler(ignoreCancelled=true) public void move(PlayerMoveEvent e) {
     Player player=e.getPlayer();
