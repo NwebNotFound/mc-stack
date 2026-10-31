@@ -63,8 +63,8 @@ public final class LobbyPvp implements Listener, TabExecutor {
             catch (IllegalArgumentException e) { sender.sendMessage("Ungueltige UUID"); return true; }
             String id=UUID.randomUUID().toString();
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                try { store.createAssignment(id,a,b,args[3],args[4]); Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("PvP-Zuweisung: "+id)); }
-                catch (Exception e) { Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("PvP-Zuweisung fehlgeschlagen: "+e.getMessage())); }
+                try { store.createAssignment(id,a,b,args[3],args[4]); Bukkit.getScheduler().runTask(plugin, () -> { plugin.getLogger().info("pvp debug-assign: PvP-Zuweisung: "+id); sender.sendMessage("PvP-Zuweisung: "+id); }); }
+                catch (Exception e) { Bukkit.getScheduler().runTask(plugin, () -> { plugin.getLogger().warning("pvp debug-assign: fehlgeschlagen: "+e.getMessage()); sender.sendMessage("PvP-Zuweisung fehlgeschlagen: "+e.getMessage()); }); }
             });
             return true;
         }

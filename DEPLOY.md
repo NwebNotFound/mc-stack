@@ -22,4 +22,5 @@ Velocity/Paper laufen online-mode, ein echter Join braucht einen Minecraft-Accou
 1. Lobby-Konsole: `docker exec mc-stack-lobby-1 rcon-cli "pvp debug-assign <uuidA> <uuidB> <kitA> <kitB>"` -> legt ueber `PvpStore.createAssignment` (derselbe Code wie die Queue) eine pending-Zuweisung an und gibt die Match-ID aus.
 2. pvp starten (Host-Service `/start`), dann pvp-Konsole: `rcon-cli "pvpdebug join <uuidA>"` -> derselbe `store.pendingFor` + `PvpAccess.decide` wie beim PlayerJoin; erwartet `MATCH matchId=<id>`. Mit einer fremden UUID: `KICK`.
 3. Aufraeumen: `rcon-cli "pvpdebug cancel <matchId>"` (pending -> failed). Danach stoppt pvp 120 s nach Start ohne Spieler, auch ohne DB.
+Hinweis: Die Antworten kommen asynchron und gehen ueber RCON verloren; sie stehen im Server-Log (`docker logs mc-stack-<server>-1 | Select-String 'pvpdebug|debug-assign'`).
 Nicht abgedeckt: Velocity-Handshake/Forwarding und das Teleportieren in die Arena - nur mit echtem Account.
