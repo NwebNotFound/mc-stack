@@ -107,3 +107,10 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Offen: gemeinsames Menue, Gebotsauktionen, sichere direkte Ausgabe und Abholbox-Fix, Website-Push `cancelled`; `Player.saveData()` bestaetigt keine persistente Speicherung gegenueber MariaDB. Bestehendes Verlustrisiko bleibt; kein Ingame-/MariaDB-Test.
 - Tests: Docker Gradle `AuctionStoreTest`, `ShopStoreTest`, `BuyOrderStoreTest`: 12 erfolgreich, 0 Fehler (H2).
 - Befehl: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack\data\survival\plugins\Vault-1.7.3.jar:/workspace/config/lobby-plugins/Vault-1.7.3.jar:ro" -w /workspace/plugins-src/craftcore gradle:9-jdk gradle test --tests de.mcstack.craftcore.AuctionStoreTest --tests de.mcstack.craftcore.ShopStoreTest --tests de.mcstack.craftcore.BuyOrderStoreTest --no-daemon`.
+
+## Lobby-Mobs 31.10.2026
+- Branch `craft/lobby-mob-spawning`, Basis-Commit `8178654`; nur Lobby-Serverkonfiguration und dieser Report geaendert.
+- Startup-Datapack `world/datapacks/lobby-mob-spawning` setzt `gamerule minecraft:spawn_mobs false` (26.3-Nachfolger von `doMobSpawning`); drei WorldGuard-Flags entfernt, Backups `regions.yml.bak-20261031-023052`.
+- Pruefung: drei Regionsdateien als YAML und Datapack-JSON gelesen; Server-JAR bestaetigt Gamerule-Namen und Datenformat 121. Kein Build, Restart, Reload oder Ingame-Test; laufendes WorldGuard kann Dateiaenderungen ueberschreiben, vor Neustart pruefen.
+- `difficulty=peaceful` unveraendert; feindliche Mobs koennen auch nach manueller Erzeugung verschwinden. Nach regulaerem Neustart Gamerule sowie Spawn-Ei und `/summon` pruefen.
+- Befehl im Datapack: `gamerule minecraft:spawn_mobs false`; kein Staging nach `data` und kein Merge.
