@@ -100,7 +100,7 @@ services:
     depends_on:
       craftcore-db:
         condition: service_healthy
-    mem_limit: 1g
+    mem_limit: 1280m
     environment:
       <<: *paper-environment
       MEMORY: 768M
