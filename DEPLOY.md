@@ -1,7 +1,9 @@
 # Deploy-Hinweise
 
 ## PvP-Server (`pvp`, Compose-Profil `pvp`)
-1. Plugins (nicht im Repo, `*.jar` ist ignoriert): `craftcore.jar` (Build mit `gradle:9-jdk`), `Vault-1.7.3.jar` und `LuckPerms-Bukkit-5.5.71.jar` nach `config/pvp-plugins/` kopieren (gleiche Jars wie in `config/lobby-plugins/`). Beim Start kopiert itzg sie per `COPY_PLUGINS_SRC` nach `data/pvp/plugins`.
+1. Plugins (nicht im Repo, `*.jar` ist ignoriert): `craftcore.jar` (Build mit `gradle:9-jdk`), `Vault-1.7.3.jar` `LuckPerms-Bukkit-5.5.71.jar` und `worldedit-bukkit-7.4.6.jar` nach `config/pvp-plugins/` kopieren (gleiche Jars wie in `config/lobby-plugins/`). Beim Start kopiert itzg sie per `COPY_PLUGINS_SRC` nach `data/pvp/plugins`.
+   - WorldEdit 7.4.6 (Paper, unterstuetzt 26.3; gleiche Version wie Lobby): https://cdn.modrinth.com/data/1u6JkXh5/versions/YFnqiUlL/worldedit-bukkit-7.4.6.jar (Modrinth-Projekt `worldedit`, EngineHub). SHA-512 `1fe3975132857093f971fed9efc601299bfa76fa7885f52a542fee41e7a0165ca9cb3cbcf5ae244474887d774d650b0db6f8f79aa80f98b245dea44f1c1b4152` vor dem Kopieren pruefen (`Get-FileHash -Algorithm SHA512`); identisch mit `config/lobby-plugins/worldedit-bukkit-7.4.6.jar`.
+   - Rechte: `lp group builder permission set worldedit.* true server=pvp` (admin erbt von builder), siehe `scripts/luckperms-ranks.txt`.
 2. DB-User: `powershell -ExecutionPolicy Bypass -File tools\pvp-db-user.ps1`. Legt `CRAFTCORE_PVP_DB_PASSWORD` in `.env` an (falls fehlend) und fuehrt `scripts/pvp-db-user.sql` als `craft_admin` aus: `craft_pvp` bekommt nur DML auf `pvp_matches`/`pvp_rounds` und `SELECT` auf `v_player_rank`, keinen Zugriff auf Economy-/Inventartabellen.
 3. CraftCore auf pvp (`CRAFTCORE_SERVER=pvp`) laedt nur das PvP-Modul, keine Economy-/Markt-/Inventar-Module (`ServerProfile.economyEnabled`). DB-Login `CRAFTCORE_DB_USER=craft_pvp`; das craftcore-Passwort wird im pvp-Container ueberschrieben.
 4. LuckPerms auf pvp nutzt wie Lobby/Survival/Velocity die gemeinsame LuckPerms-DB (`luckperms`, User `LUCKPERMS_DB_USER`, SQL-Messaging), damit Raenge/Permissions (`craftcore.build.pvp` fuer builder/admin) identisch sind. Dieser User hat nur Rechte auf die `luckperms`-DB.
