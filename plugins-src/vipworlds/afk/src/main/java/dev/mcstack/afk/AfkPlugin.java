@@ -3,6 +3,10 @@ package dev.mcstack.afk;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.ArrayList;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -22,7 +26,14 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class AfkPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, Long> activity = new HashMap<>();
-    private final Map<UUID, Component> marked = new HashMap<>();
+    private final Set<UUID> marked = new HashSet<>();
+    private static final Component SUFFIX = Component.text(" [AFK]", NamedTextColor.GRAY);
+    static Component withAfkSuffix(Component name, boolean afk) {
+        var children = new ArrayList<>(name.children());
+        if (!children.isEmpty() && children.get(children.size()-1).equals(SUFFIX)) children.remove(children.size()-1);
+        Component base = name.children(children);
+        return afk ? base.append(SUFFIX) : base;
+    }
     private long markMillis, kickMillis;
     private boolean announce;
     private boolean saveOnEmpty, saveOnDisable;
@@ -63,9 +74,11 @@ public final class AfkPlugin extends JavaPlugin implements Listener {
         clear(p, true);
     }
     private void clear(Player p, boolean broadcast) {
-        Component previous = marked.remove(p.getUniqueId());
-        if (previous != null) {
-            p.playerListName(previous);
+        boolean wasMarked = marked.remove(p.getUniqueId());
+        p.removeMetadata("afk", this);
+        if (wasMarked) {
+            Component current = p.playerListName();
+            if (current != null) p.playerListName(withAfkSuffix(current, false));
             if (broadcast && announce) Bukkit.broadcast(Component.text(p.getName() + " ist wieder da.", NamedTextColor.YELLOW));
         }
     }
@@ -76,11 +89,12 @@ public final class AfkPlugin extends JavaPlugin implements Listener {
             if (IdlePolicy.shouldKick(idle, kickMillis)) {
                 clear(p, false);
                 p.kick(Component.text("Wegen Inaktivitaet getrennt."));
-            } else if (IdlePolicy.shouldMark(idle, markMillis) && !marked.containsKey(p.getUniqueId())) {
-                Component previous = p.playerListName();
-                if (previous == null) previous = Component.text(p.getName());
-                marked.put(p.getUniqueId(), previous);
-                p.playerListName(previous.append(Component.text(" [AFK]", NamedTextColor.GRAY)));
+            } else if (IdlePolicy.shouldMark(idle, markMillis) && !marked.contains(p.getUniqueId())) {
+                Component current = p.playerListName();
+                if (current == null) current = Component.text(p.getName());
+                marked.add(p.getUniqueId());
+                p.setMetadata("afk", new FixedMetadataValue(this, true));
+                p.playerListName(withAfkSuffix(current, true));
                 if (announce) Bukkit.broadcast(Component.text(p.getName() + " ist nun AFK.", NamedTextColor.YELLOW));
             }
         }

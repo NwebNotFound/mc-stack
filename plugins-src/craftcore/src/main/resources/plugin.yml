@@ -3,7 +3,12 @@ version: 0.1.1
 main: de.mcstack.craftcore.CraftCore
 api-version: '26.3'
 depend: [Vault]
+softdepend: [LuckPerms]
 commands:
+  rank:
+    description: Rang setzen
+    usage: /rank set <spieler> <rang>
+    permission: craftcore.rank.set
   cc:
     description: CraftCore Administration
     permission: craftcore.admin
@@ -42,7 +47,7 @@ commands:
     usage: /pay <Spieler> <Betrag>
   team:
     description: Teamverwaltung
-    usage: /team create|invite|join|leave|kick|info|promote|demote
+    usage: /team create|invite|join|leave|kick|info|promote|demote|color
 
   claim:
     description: Chunk beanspruchen oder auflisten
@@ -93,6 +98,8 @@ commands:
     description: MineRush Loot-Editor
     permission: craftcore.minerush.edit
 permissions:
+  craftcore.rank.set:
+    default: op
   craftcore.admin:
     default: op
   craftcore.portal.admin:
