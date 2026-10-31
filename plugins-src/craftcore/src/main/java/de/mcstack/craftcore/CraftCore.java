@@ -157,7 +157,10 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(command.getName().equals("team") && args.length==1) return UserMenu.complete(args[0], "create", "invite", "join", "leave", "kick", "info", "promote", "demote");
     if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("invite")) return teamInvites.complete(args[1]);
     if(command.getName().equals("claim") && args.length==1) return UserMenu.complete(args[0], "create", "list");
-    if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search");
+    if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search", "zurueckziehen", "cancel");
+    if(command.getName().equals("ah") && args.length==2 && sender instanceof Player p && Set.of("zurueckziehen","zur?ckziehen","cancel").contains(args[0].toLowerCase(Locale.ROOT))) try {
+      return Auction.instance.list(p,true,"alle","").stream().map(Auction.Listing::id).filter(id->id.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
+    } catch(Exception ex){return List.of();}
     if(command.getName().equals("npc") && args.length==1) return UserMenu.complete(args[0], "set");
     if(command.getName().equals("npc") && args.length==2) return UserMenu.complete(args[1], "bank", "ah");
     if(command.getName().equals("trade") && args.length==1) { List<String> names=new ArrayList<>(List.of("accept")); Bukkit.getOnlinePlayers().forEach(p->names.add(p.getName())); return names.stream().filter(n->n.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))).toList(); }
