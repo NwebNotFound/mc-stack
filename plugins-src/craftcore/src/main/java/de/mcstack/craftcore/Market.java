@@ -188,7 +188,10 @@ final class Market implements Listener {
   static <T> void drain(int size, java.util.function.IntFunction<T> get, java.util.function.IntConsumer clear, java.util.function.Consumer<T> deliver) {
     for(int slot=0;slot<size;slot++){T item=get.apply(slot);clear.accept(slot);if(item!=null)deliver.accept(item);}
   }
-  void openSell(Player p) throws Exception {
+  static final String SELL_MENU_OFF = "Das Verkaufsmenue ist gerade deaktiviert.";
+ static boolean sellMenuEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("sell-menu.enabled", false); }
+ void openSell(Player p) throws Exception {
+  if(!sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
     SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Verkaufen");
     refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
   }

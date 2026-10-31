@@ -184,3 +184,7 @@ launchpads:
   enabled: true
   cooldown-seconds: 3
   pads: []
+
+# Verkaufsmenue (/verkaufen und Markt-Button). Aus, bis confirmSell pro Stack asynchron bucht.
+sell-menu:
+  enabled: false
