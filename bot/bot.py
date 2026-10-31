@@ -569,45 +569,64 @@ class Bot(discord.Client):
             return []
         try:
             with con.cursor() as cur:
-                try:
-                    cur.execute("SELECT uuid, name, best_ms, updated_at, course FROM parkour_times WHERE best_ms > 0")
-                    raw = list(cur.fetchall())
-                except pymysql.err.OperationalError:
-                    # alte Tabelle ohne Spalte `course`
-                    cur.execute("SELECT uuid, name, best_ms, updated_at FROM parkour_times WHERE best_ms > 0")
-                    raw = [tuple(r) + (None,) for r in cur.fetchall()]
-                return raw
+                # neu: course (Slug) + course_name; Fallback auf aeltere Tabellenformate
+                queries = [
+                    ("SELECT uuid, name, best_ms, updated_at, course, course_name FROM parkour_times WHERE best_ms > 0", ()),
+                    ("SELECT uuid, name, best_ms, updated_at, course FROM parkour_times WHERE best_ms > 0", (None,)),
+                    ("SELECT uuid, name, best_ms, updated_at FROM parkour_times WHERE best_ms > 0", (None, None)),
+                ]
+                for sql, pad in queries:
+                    try:
+                        cur.execute(sql)
+                    except pymysql.err.OperationalError:
+                        continue  # Spalte fehlt (1054)
+                    return [tuple(r) + pad for r in cur.fetchall()]
+                return []
         except pymysql.err.ProgrammingError:
             return []  # Tabelle existiert (noch) nicht
         finally:
             con.close()
 
     async def update_leaderboard(self):
-        import stats_card
-        rows = await asyncio.to_thread(self.parkour_rows)
+        import parkour
+        raw = await asyncio.to_thread(self.parkour_raw)
+        for course in parkour.status_courses(os.getenv("PARKOUR_STATUS_COURSES")):
+            try:
+                await self._update_board(raw, course)
+            except Exception:
+                log.exception("Parkour-Board %s fehlgeschlagen", course)
+
+    async def _update_board(self, raw, course):
+        import stats_card, parkour
+        rows = parkour.rank(raw, course)
+        name = parkour.display(raw, course)
         top = [(r, n, ms) for r, n, ms, _ in rows[:10]]
         sig = repr(top)
+        sigs = self.__dict__.setdefault("pk_sigs", {})
+        leaders = self.__dict__.setdefault("pk_leaders", {})
         leader = rows[0] if rows else None
-        prev = getattr(self, "pk_leader", "unset")
+        prev = leaders.get(course, "unset")
         if prev != "unset" and leader and (prev is None or prev[3] != leader[3] or prev[2] != leader[2]):
             chat = self.get_channel(int(self.cfg["CHAT_CHANNEL_ID"]))
             if chat and (prev is None or prev[3] != leader[3]):
+                where = f" auf **{discord.utils.escape_markdown(name)}**" if name else ""
                 try:
-                    await chat.send(f"-# \U0001F3C1 Neuer Parkour-Rekord: **{discord.utils.escape_markdown(leader[1])}** in **{stats_card.fmt_ms(leader[2])}**", allowed_mentions=discord.AllowedMentions.none())
+                    await chat.send(f"-# \U0001F3C1 Neuer Parkour-Rekord{where}: **{discord.utils.escape_markdown(leader[1])}** in **{stats_card.fmt_ms(leader[2])}**", allowed_mentions=discord.AllowedMentions.none())
                 except discord.HTTPException:
                     log.exception("Rekord-Zeile fehlgeschlagen")
-        self.pk_leader = leader
-        if sig == getattr(self, "pk_sig", None):
+        leaders[course] = leader
+        if sig == sigs.get(course):
             return
         channel = self.get_channel(int(self.cfg["STATUS_CHANNEL_ID"]))
         if not channel:
             return
-        png = await asyncio.to_thread(stats_card.render_leaderboard, "Parkour", top)
+        title = f"Parkour \u2013 {name}" if name else "Parkour"
+        png = await asyncio.to_thread(stats_card.render_leaderboard, title, top)
         file = discord.File(io.BytesIO(png), filename="parkour.png")
-        e = discord.Embed(color=0xF1C40F, title="\U0001F3C1 Parkour-Bestenliste")
+        e = discord.Embed(color=0xF1C40F, title=f"\U0001F3C1 Parkour-Bestenliste" + (f" \u2013 {name}" if name else ""))
         e.set_image(url="attachment://parkour.png")
         e.set_footer(text="/leaderboard parkour zeigt deinen Platz")
-        marker = DATA / "leaderboard-message.txt"
+        marker = DATA / parkour.marker_name(course)
         msg = None
         if marker.exists():
             try:
@@ -619,7 +638,7 @@ class Bot(discord.Client):
         else:
             msg = await channel.send(embed=e, file=file)
             marker.write_text(str(msg.id))
-        self.pk_sig = sig
+        sigs[course] = sig
 
     # ---------- Rollen-Sync Discord -> LuckPerms ----------
     SYNC_GROUPS = {"Builder": "builder", "VIP": "vip"}
@@ -1217,8 +1236,8 @@ def register(bot):
     async def _pk_courses(interaction: discord.Interaction, current: str):
         import parkour
         raw = await asyncio.to_thread(bot.parkour_raw)
-        cur = (current or "").lower()
-        return [app_commands.Choice(name=c, value=c) for c in parkour.courses(raw) if cur in c][:25]
+        cur = (current or "").strip().lower()
+        return [app_commands.Choice(name=n[:100], value=c[:100]) for c, n in parkour.courses(raw) if cur in n.lower() or parkour.slug(cur) in c][:25]
 
     @app_commands.describe(kurs="Nur diesen Kurs zeigen (leer = beste Zeit je Spieler über alle Kurse)")
     @app_commands.autocomplete(kurs=_pk_courses)
@@ -1237,8 +1256,9 @@ def register(bot):
         note = "" if not link else ("" if any(x[3].replace("-", "") == link[0].replace("-", "") for x in rows) else "-# Du hast noch keine Zeit – ab in die Lobby!")
         import gui
         cs = parkour.courses(raw)
-        pager = gui.LbPager(f"Parkour \u2013 {parkour.norm_course(kurs)}" if kurs else "Parkour", rows, me, courses=cs, raw=raw, selected=kurs)
-        show_view = pager.pages > 1 or len(cs) > 1
+        name = parkour.display(raw, kurs)
+        pager = gui.LbPager(f"Parkour \u2013 {name}" if name else "Parkour", rows, me, courses=cs, raw=raw, selected=kurs)
+        show_view = pager.pages > 1 or bool(cs)
         await interaction.followup.send(note or None, file=await pager.file(), view=pager if show_view else discord.utils.MISSING)
 
     tree.add_command(lb)
