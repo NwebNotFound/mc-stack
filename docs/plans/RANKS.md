@@ -46,7 +46,7 @@ Status: Plan, kein Code. Reihenfolge danach: NPCs → PvP → VIP-Welten → Mar
 - **Offen:** Sync mit Discord-Rollen über Creepy (Dex). Vorschlag: Discord-Rolle → LuckPerms-Gruppe nur in eine Richtung, Creepy schreibt über RCON `lp user … parent set`.
 
 ## Daten für die Website (Cloud)
-- View `craftcore.v_player_rank` mit `SQL SECURITY DEFINER` und `DEFINER='craft_admin'@'%'` (wie `v_economy_daily`), sonst sieht `creepy_ro` nichts. Inhalt: (Name, UUID, Gruppe, Anzeige, Farbe, Weight), gebaut aus `luckperms.luckperms_players` + `luckperms_user_permissions` (`group.*`, höchste Weight).
+- View `craftcore.v_player_rank` mit `SQL SECURITY DEFINER` und `DEFINER='craft_admin'@'%'` (wie `v_economy_daily`), sonst sieht `creepy_ro` nichts. Spalten exakt `uuid, name, rank, color, weight`, eine Zeile pro UUID (primäre Gruppe), gebaut aus `luckperms.luckperms_players` + `luckperms_user_permissions` (`group.*`, höchste Weight).
 - Nur `SELECT` auf die View für `creepy_ro`, keine Rechte auf die LuckPerms-Tabellen selbst. Grant läuft über `craft_admin`.
 - Optional im Ingest: `rank` pro Spieler im Online-Payload.
 
