@@ -1,5 +1,5 @@
 """Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
-import asyncio, datetime, json, logging, os, time
+import asyncio, datetime, hashlib, json, logging, os, time
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
@@ -37,7 +37,6 @@ VOLATILE = ("uptime_seconds", "tps")
 
 def payload_hash(payload):
     """Hash ohne fluechtige Server-Felder (Uptime/TPS), damit unveraenderte Daten nicht neu gesendet werden."""
-    import hashlib
     p = dict(payload)
     if isinstance(p.get("servers"), dict):
         p["servers"] = {k: {f: v for f, v in e.items() if f not in VOLATILE} if isinstance(e, dict) else e
@@ -716,7 +715,7 @@ async def push_once(bot, session=None):
             result = await _post(session, token, payload, "Ingest-Push")
             if result and result[0] < 300:
                 _rate["last_hash"] = h
-        await push_history(session, token)
+                await maybe_push_history(session, token)
         return result
     finally:
         if own:
@@ -741,6 +740,19 @@ async def _post(session, token, payload, label):
         else:
             log.warning("%s HTTP %s: %s", label, r.status, body)
         return r.status, body
+
+
+HISTORY_EVERY = 300
+_hist_push = {"last": None}
+
+
+async def maybe_push_history(session, token, now=None):
+    """Markt-History nur nach echtem Erfolg und hoechstens alle HISTORY_EVERY s."""
+    now = now if now is not None else time.monotonic()
+    if _hist_push["last"] is not None and now - _hist_push["last"] < HISTORY_EVERY:
+        return None
+    _hist_push["last"] = now
+    return await push_history(session, token)
 
 
 async def push_history(session, token, now=None):

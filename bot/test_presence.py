@@ -138,6 +138,53 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(len(posts), 2)
         self.assertGreaterEqual(posts[1] - posts[0], 0.18)
 
+    def test_history_throttle(self):
+        calls = []
+
+        async def fake_hist(session, token, now=None):
+            calls.append(1)
+            return True
+
+        async def run():
+            ingest._hist_push["last"] = None
+            with mock.patch.object(ingest, "push_history", fake_hist):
+                await ingest.maybe_push_history(None, "t", now=1000)
+                await ingest.maybe_push_history(None, "t", now=1100)  # < 5 min
+                await ingest.maybe_push_history(None, "t", now=1301)
+        asyncio.run(run())
+        self.assertEqual(len(calls), 2)
+
+    def test_history_not_on_skip_or_fail(self):
+        calls = []
+
+        async def fake_hist(session, token):
+            calls.append(1)
+
+        async def fake_post(session, token, payload, label):
+            return status[0], "{}"
+        status = [500]
+
+        class B:
+            def server_mode(self): return None
+
+        async def run():
+            ingest._hist_push["last"] = None
+            with mock.patch.dict(os.environ, {"MC_INGEST_TOKEN": "x"}), \
+                 mock.patch.object(ingest, "push_history", fake_hist), \
+                 mock.patch.object(ingest, "_post", fake_post), \
+                 mock.patch.object(ingest, "build_payload", lambda b: {"links": []}), \
+                 mock.patch.object(ingest, "fetch_rows", lambda n: None), \
+                 mock.patch.object(ingest, "collect_servers", lambda m: None):
+                await ingest.push_once(B(), session=object())  # Fehler
+                self.assertEqual(calls, [])
+                status[0] = 200
+                await ingest.push_once(B(), session=object())  # Erfolg
+                self.assertEqual(len(calls), 1)
+                ingest._hist_push["last"] = None
+                await ingest.push_once(B(), session=object())  # unveraendert -> Skip
+                self.assertEqual(len(calls), 1)
+        asyncio.run(run())
+
     def test_interval_env(self):
         with mock.patch.dict(os.environ, {"INGEST_INTERVAL_SEC": "45"}):
             self.assertEqual(ingest._env_int("INGEST_INTERVAL_SEC", 30), 45)
