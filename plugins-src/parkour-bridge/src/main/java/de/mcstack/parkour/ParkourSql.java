@@ -5,6 +5,15 @@ import java.util.*;
 /** SQL und reine Logik fuer parkour_times (Bestzeit pro Spieler und Kurs). */
 final class ParkourSql {
  private ParkourSql() {}
+ @FunctionalInterface interface FloorLoader { Double load() throws java.sql.SQLException; }
+ static final class FloorCache {
+  private final Map<String, Optional<Double>> values=new HashMap<>();
+  Double get(String name, FloorLoader loader) throws java.sql.SQLException {
+   if(!values.containsKey(name)) values.put(name,Optional.ofNullable(loader.load()));
+   return values.get(name).orElse(null);
+  }
+  void clear() { values.clear(); }
+ }
  static final String CREATE = "CREATE TABLE IF NOT EXISTS parkour_times (uuid CHAR(36) NOT NULL, course VARCHAR(64) NOT NULL, name VARCHAR(16) NOT NULL, best_ms BIGINT NOT NULL, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), PRIMARY KEY (uuid, course))";
  /** Kurs fuer Altzeilen ohne Kurs (Tabelle war bisher pro Spieler). */
  static final String LEGACY_COURSE = "lobby";
@@ -22,7 +31,8 @@ final class ParkourSql {
  /** Kurs-ID aus Lobby-Parkour: kleingeschrieben, getrimmt, max. 64 Zeichen; null bei leerem Namen. */
  static String course(String parkourName) {
   if (parkourName == null || parkourName.isBlank()) return null;
-  String c = parkourName.trim().toLowerCase(Locale.ROOT);
+  String c = parkourName.toLowerCase(Locale.ROOT).replaceAll("[\\s-]+", "_").replaceAll("^_+|_+$", "");
+  if (c.isEmpty()) return null;
   return c.length() > 64 ? c.substring(0, 64) : c;
  }
  /** Y aus Lobby-Parkour-Ort "world,x,y,z,yaw,pitch"; null wenn unlesbar. */
