@@ -17,7 +17,7 @@ ram:
     bot+playit: 256
     pvp: 1280
   per-world-mb: 1536
-  heap-mb: 1280
+  heap-mb: 1152 # ~380 MB Non-Heap-Puffer im 1536m-Limit (siehe pvp #53)
 
 idle-minutes: 10
 join-grace-seconds: 120
