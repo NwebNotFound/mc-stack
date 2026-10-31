@@ -4,6 +4,12 @@ import java.util.*;
 
 final class NpcDefinitions {
   enum ActionType { SERVER, MENU, COMMAND, NONE }
+  enum MenuAction { PVP, PVP_UNAVAILABLE, COMMAND, MENU }
+  static MenuAction menuAction(String arg, boolean pvpAvailable) {
+    if (arg.equalsIgnoreCase("pvp")) return pvpAvailable ? MenuAction.PVP : MenuAction.PVP_UNAVAILABLE;
+    if (Set.of("bank", "shop", "ah", "stats").contains(arg.toLowerCase(Locale.ROOT))) return MenuAction.COMMAND;
+    return MenuAction.MENU;
+  }
   record Action(ActionType type, String arg) {}
   record NpcDef(String key, String displayName, String skin, String message, ActionType action, String actionArg) {
     NpcDef {
@@ -14,6 +20,11 @@ final class NpcDefinitions {
     }
   }
   static String stripColors(String s) { return s.replaceAll("(?i)[&?][0-9a-fk-orx]", ""); }
+  static void validateDisplayName(Collection<NpcDef> defs, String key, String name) {
+    if (name == null || name.length() > 64 || stripColors(name).isBlank()) throw new IllegalArgumentException("Name muss 1 bis 64 Zeichen lang sein");
+    String stripped=stripColors(name);
+    if (defs.stream().anyMatch(d->!d.key().equals(key) && stripColors(d.displayName()).equalsIgnoreCase(stripped))) throw new IllegalArgumentException("NPC-Name existiert bereits");
+  }
   static String keyFromName(String name) {
     if (name == null || name.isBlank() || name.length() > 64) throw new IllegalArgumentException("Ungueltiger Name");
     String key = stripColors(name).toLowerCase(Locale.ROOT).replaceAll("\\s+", "_").replaceAll("[^a-z0-9_-]", "");

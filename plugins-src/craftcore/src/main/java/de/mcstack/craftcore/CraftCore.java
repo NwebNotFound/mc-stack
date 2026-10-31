@@ -44,6 +44,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
   private CitizensNpcs citizensNpcs;
+  private de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
+  de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp() { return lobbyPvp; }
   private void startCitizensNpcs() {
     if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
   }
@@ -107,7 +109,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Features(this).start();
       launchPads=new LaunchPads(this); launchPads.start();
       portals=new Portals(this); portals.start();
-      if ("lobby".equalsIgnoreCase(server)) { new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection).start(); new de.mcstack.craftcore.vip.LobbyVip(this, this::connection).start(); }
+      if ("lobby".equalsIgnoreCase(server)) { lobbyPvp=new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection); lobbyPvp.start(); new de.mcstack.craftcore.vip.LobbyVip(this, this::connection).start(); }
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();

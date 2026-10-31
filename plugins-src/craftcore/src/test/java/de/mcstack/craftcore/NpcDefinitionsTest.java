@@ -6,6 +6,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static de.mcstack.craftcore.NpcDefinitions.*;
 
 class NpcDefinitionsTest {
+  @Test void pvpMenuAvailability() {
+    assertEquals(MenuAction.PVP_UNAVAILABLE, menuAction("PvP", false));
+    assertEquals(MenuAction.PVP, menuAction("pvp", true));
+    assertEquals(MenuAction.COMMAND, menuAction("bank", false));
+    assertEquals(MenuAction.MENU, menuAction("home", false));
+  }
   @Test void actions() {
     assertEquals(new Action(ActionType.SERVER,"lobby"),parseAction("server lobby"));
     assertEquals(new Action(ActionType.MENU,"bank"),parseAction("menu bank"));
@@ -24,6 +30,16 @@ class NpcDefinitionsTest {
     assertEquals(def,find(List.of(def),"?bCOOL NPC").orElseThrow());
     assertEquals(def,find(List.of(def),"COOL_NPC").orElseThrow());
     assertThrows(IllegalArgumentException.class,()->new NpcDef("key","x".repeat(65),"","",ActionType.NONE,""));
+  }
+  @Test void renameValidation() {
+    NpcDef a=new NpcDef("a","&aAlter Name","","",ActionType.NONE,"");
+    NpcDef b=new NpcDef("b","&bAnderer Name","","",ActionType.NONE,"");
+    var defs=List.of(a,b);
+    assertDoesNotThrow(()->validateDisplayName(defs,"a","&cAlter Name"));
+    assertDoesNotThrow(()->validateDisplayName(defs,"a","x".repeat(64)));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","&a  "));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","x".repeat(65)));
+    assertThrows(IllegalArgumentException.class,()->validateDisplayName(defs,"a","&eanderer name"));
   }
   @Test void view() {
     assertTrue(inViewAndRange(0,0,0,1,0,0,3,0,0));

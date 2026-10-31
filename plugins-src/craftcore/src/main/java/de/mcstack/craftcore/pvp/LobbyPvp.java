@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -36,6 +37,8 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private final PvpStore store;
     private final PvpHostClient host = new PvpHostClient();
     private final PvpQueue queue = new PvpQueue();
+    private final Map<UUID, String> lastKit = new HashMap<>();
+    private final AtomicBoolean buildStarting = new AtomicBoolean();
     // Accessed only on the server thread, including while a pair is starting.
     private final Set<UUID> matching = new HashSet<>();
     private String activeMatchId;
@@ -72,13 +75,27 @@ public final class LobbyPvp implements Listener, TabExecutor {
         if (args.length == 1 && args[0].equalsIgnoreCase("leave")) {
             player.sendMessage(queue.leave(player.getUniqueId()) ? "PvP-Queue verlassen" : "Du bist nicht in der PvP-Queue");
         } else if (args.length == 0 || (args.length == 1 && args[0].equalsIgnoreCase("queue"))) {
-            loadKits(player.getUniqueId());
-        } else player.sendMessage("/pvp queue|leave");
+            openMenu(player);
+        } else if (args.length == 1 && args[0].equalsIgnoreCase("build")) {
+            if (!PvpAccess.mayBypass(player::hasPermission)) player.sendMessage("Keine Berechtigung.");
+            else if (!tryStartBuild(buildStarting)) player.sendMessage("PvP-Server startet bereits ...");
+            else {
+                UUID id = player.getUniqueId();
+                try { player.sendMessage("PvP-Server wird gestartet ..."); Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> startBuild(id)); }
+                catch (RuntimeException e) { buildStarting.set(false); throw e; }
+            }
+        } else if (args[0].equalsIgnoreCase("arena") || args[0].equalsIgnoreCase("kit")) {
+            player.sendMessage("Arenen und Kits werden auf dem PvP-Server bearbeitet: /pvp build");
+        } else player.sendMessage("/pvp queue|leave|build|arena|kit");
         return true;
     }
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        return args.length == 1 ? List.of("queue", "leave").stream().filter(s -> s.startsWith(args[0].toLowerCase(Locale.ROOT))).toList() : List.of();
+        if (args.length != 1) return List.of();
+        List<String> options = new ArrayList<>(List.of("queue", "leave", "arena", "kit"));
+        if (PvpAccess.mayBypass(sender::hasPermission)) options.add("build");
+        return options.stream().filter(s -> s.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
     }
+    public void openMenu(Player player) { loadKits(player.getUniqueId()); }
     private void loadKits(UUID id) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<Kit> kits = new ArrayList<>();
@@ -87,7 +104,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     Player player = Bukkit.getPlayer(id);
                     if (player == null) return;
-                    if (kits.isEmpty()) player.sendMessage("Noch keine Kits"); else open(player, kits, 0);
+                    open(player, kits, 0);
                 });
             } catch (Exception e) {
                 plugin.getLogger().warning("PvP-Kits konnten nicht geladen werden: " + e.getClass().getSimpleName());
@@ -106,9 +123,20 @@ public final class LobbyPvp implements Listener, TabExecutor {
             var meta = item.getItemMeta(); meta.displayName(Component.text(kit.name())); item.setItemMeta(meta);
             menu.inventory.setItem(i, item);
         }
+        if (kits.isEmpty()) menu.inventory.setItem(0, item(Material.PAPER, "Noch keine Kits", List.of()));
+        int position = queue.position(player.getUniqueId());
+        menu.inventory.setItem(49, item(position > 0 ? Material.BARRIER : Material.LIME_DYE,
+                position > 0 ? "Queue verlassen" : "Queue beitreten", queueStatus(position, queue.size())));
         if (page > 0) menu.inventory.setItem(45, button("Zurueck"));
         if ((page + 1) * 45 < kits.size()) menu.inventory.setItem(53, button("Weiter"));
         player.openInventory(menu.inventory);
+    }
+    static List<String> queueStatus(int position, int size) {
+        return position > 0 ? List.of("Platz " + position + " von " + size) : List.of("In der Queue: " + size, "Waehle ein Kit oder klicke hier");
+    }
+    private ItemStack item(Material material, String name, List<String> lore) {
+        ItemStack item = new ItemStack(material); var meta = item.getItemMeta();
+        meta.displayName(Component.text(name)); meta.lore(lore.stream().map(Component::text).toList()); item.setItemMeta(meta); return item;
     }
     private ItemStack button(String name) {
         ItemStack item = new ItemStack(Material.ARROW); var meta = item.getItemMeta(); meta.displayName(Component.text(name)); item.setItemMeta(meta); return item;
@@ -120,18 +148,30 @@ public final class LobbyPvp implements Listener, TabExecutor {
         int slot = event.getRawSlot();
         if (slot == 45 && menu.page > 0) { open(player, menu.kits, menu.page - 1); return; }
         if (slot == 53 && (menu.page + 1) * 45 < menu.kits.size()) { open(player, menu.kits, menu.page + 1); return; }
+        UUID id = player.getUniqueId();
+        if (slot == 49 && queue.contains(id)) {
+            queue.leave(id); player.sendMessage("PvP-Queue verlassen"); open(player, menu.kits, menu.page); return;
+        }
         int index = menu.page * 45 + slot;
-        if (slot < 0 || slot >= 45 || index >= menu.kits.size()) return;
-        player.closeInventory();
-        if (matching.contains(player.getUniqueId())) { player.sendMessage("PvP-Match wird bereits vorbereitet"); return; }
-        queue.join(player.getUniqueId(), menu.kits.get(index).name());
-        int position = queue.position(player.getUniqueId());
+        String kit;
+        if (slot == 49) {
+            if (menu.kits.isEmpty()) return;
+            String previous = lastKit.get(id);
+            kit = menu.kits.stream().map(Kit::name).filter(name -> name.equals(previous)).findFirst().orElse(menu.kits.get(0).name());
+        } else {
+            if (slot < 0 || slot >= 45 || index >= menu.kits.size()) return;
+            kit = menu.kits.get(index).name();
+        }
+        if (matching.contains(id)) { player.sendMessage("PvP-Match wird bereits vorbereitet"); return; }
+        lastKit.put(id, kit); queue.join(id, kit);
+        int position = queue.position(id);
         player.sendMessage(activeMatchId == null ? "PvP-Queue: Platz " + position : queueReminder(position));
+        open(player, menu.kits, menu.page);
     }
     @EventHandler public void drag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof Menu) event.setCancelled(true);
     }
-    @EventHandler public void quit(PlayerQuitEvent event) { queue.leave(event.getPlayer().getUniqueId()); }
+    @EventHandler public void quit(PlayerQuitEvent event) { UUID id = event.getPlayer().getUniqueId(); queue.leave(id); lastKit.remove(id); }
     private void tick() {
         for (UUID id : matching) {
             Player player = Bukkit.getPlayer(id);
@@ -194,14 +234,33 @@ public final class LobbyPvp implements Listener, TabExecutor {
         }
         fail(id, pair, null);
     }
+    static boolean tryStartBuild(AtomicBoolean starting) { return starting.compareAndSet(false, true); }
+    private void startBuild(UUID id) {
+        try {
+            if (!host.status().equals("online") && !host.start()) { Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden")); return; }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+            while (System.nanoTime() < deadline) {
+                if (host.status().equals("online")) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        Player player = Bukkit.getPlayer(id);
+                        if (player != null) try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht gestartet werden"); }
+                    }); return;
+                }
+                try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden"));
+        } finally { buildStarting.set(false); }
+    }
+    private void connectPlayer(Player player) throws java.io.IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF("pvp"); }
+        player.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
+    }
     private void connect(String id, PvpQueue.Pair pair) {
         Player a = Bukkit.getPlayer(pair.a()), b = Bukkit.getPlayer(pair.b());
         if (a == null || b == null) { UUID remaining = a != null ? pair.a() : b != null ? pair.b() : null; Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, remaining)); return; }
         try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF("pvp"); }
-            a.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
-            b.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
+            connectPlayer(a); connectPlayer(b);
             matching.remove(pair.a()); matching.remove(pair.b());
         } catch (Exception e) { Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, null)); }
     }
