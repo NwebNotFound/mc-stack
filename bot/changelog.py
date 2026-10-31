@@ -33,22 +33,43 @@ def table_fields(e, text, limit=24):
     return True
 
 
-GROUPS = (("neu", "✨ Neu"), ("verbessert", "🔧 Verbessert"), ("fix", "🐛 Fix"))
+GROUPS = (("neu", "\u2728 Neu"), ("verbessert", "\U0001F527 Verbessert"), ("fix", "\U0001F41B Fix"))
+AREAS = (("minecraft", "\u26CF\uFE0F Minecraft"), ("discord", "\U0001F916 Discord"))
+COLOR = 0xFFAA00
+FOOTER = "Creepy \u00b7 Changelog"
+
+
+def render(date, items, table=None):
+    """Einheitliches Format fuer ALLE Changelog-Posts:
+    Titel "Update DD.MM.YYYY", Felder "<Bereich> \u00b7 <Art>", gleiche Farbe, gleicher Footer.
+    items: [{"area": "minecraft"|"discord", "type": "neu"|"verbessert"|"fix", "text": ...}]"""
+    e = discord.Embed(title=f"Update {date}", color=COLOR)
+    for c in items:
+        if _is_table(c.get("text")):
+            table_fields(e, c["text"])
+    for akey, alabel in AREAS:
+        for gkey, glabel in GROUPS:
+            lines = [c["text"] for c in items if c.get("area", "discord") == akey
+                     and c.get("type", "neu") == gkey and not _is_table(c.get("text"))]
+            chunk, part = [], 0
+            for t in lines + [None]:
+                if t is None or sum(len(x) + 3 for x in chunk) + len(t) + 3 > 1000:
+                    if chunk:
+                        e.add_field(name=f"{alabel} \u00b7 {glabel}" + (f" ({part + 1})" if part else ""),
+                                    value="\n".join("\u2022 " + x for x in chunk), inline=False)
+                        part += 1
+                    chunk = []
+                if t is not None:
+                    chunk.append(t)
+    if table:
+        table_fields(e, table)
+    e.set_footer(text=FOOTER)
+    return e
 
 
 def embed(entry):
-    e = discord.Embed(title="\U0001F916 Discord \u00b7 " + f"Update v{entry['version']} — {entry['date']}", color=0x57F287)
-    for key, label in GROUPS:
-        items = [c["text"] for c in entry["changes"] if c["type"] == key and not _is_table(c["text"])]
-        if items:
-            e.add_field(name=label, value="\n".join("• " + t for t in items)[:1024], inline=False)
-    for c in entry["changes"]:
-        if _is_table(c["text"]):
-            table_fields(e, c["text"])
-    if entry.get("table"):
-        table_fields(e, entry["table"])
-    e.set_footer(text="Creepy · Changelog")
-    return e
+    """Eintrag aus changelog.json; "area" pro Change optional (Default discord)."""
+    return render(entry["date"], [dict(c, area=c.get("area", "discord")) for c in entry["changes"]], entry.get("table"))
 
 
 def _is_table(text):
@@ -98,32 +119,11 @@ async def post_new(bot, force_version=None):
 MC_SRC = Path("/app/mc/changelog-mc.json")
 
 
-def _fields(e, head, items):
-    for c in items:
-        if _is_table(c.get("text")):
-            table_fields(e, c["text"])
-    for key, label in GROUPS:
-        lines = [c["text"] for c in items if c.get("type") == key and not _is_table(c.get("text"))]
-        chunk, part = [], 0
-        for t in lines + [None]:
-            if t is None or sum(len(x) + 3 for x in chunk) + len(t) + 3 > 1000:
-                if chunk:
-                    e.add_field(name=f"{head} \u00b7 {label}" + (" (2)" if part else ""), value="\n".join("\u2022 " + x for x in chunk), inline=False)
-                    part += 1
-                chunk = []
-            if t is not None:
-                chunk.append(t)
-
-
 def mc_embed(entry):
-    e = discord.Embed(title=f"Was ist neu auf dem Server \u2013 {entry['date']}", color=0xFFAA00)
-    _fields(e, "\u26CF\uFE0F Minecraft", entry.get("changes", []))
-    if entry.get("discord"):
-        e.add_field(name="\U0001F916 Discord", value="\n".join("\u2022 " + t for t in entry["discord"])[:1024], inline=False)
-    if entry.get("table"):
-        table_fields(e, entry["table"])
-    e.set_footer(text="Creepy \u00b7 Changelog")
-    return e
+    """Eintrag aus changelog-mc.json -> gleiches Format wie embed()."""
+    items = [dict(c, area="minecraft") for c in entry.get("changes", [])]
+    items += [{"area": "discord", "type": "neu", "text": t} for t in entry.get("discord", [])]
+    return render(entry["date"], items, entry.get("table"))
 
 
 async def post_mc(bot):

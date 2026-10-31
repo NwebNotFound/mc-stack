@@ -215,23 +215,59 @@
       }
     ]
   },
-{
-  "version": "1.13",
-  "date": "29.10.2026",
-  "requires": "market_views",
-  "changes": [
-    {
-      "type": "neu",
-      "text": "/markt: Servermarkt im Börsenstil - Top-Gewinner und -Verlierer der letzten 24 h mit Preis, ▲/▼ und Volumen"
-    },
-    {
-      "type": "neu",
-      "text": "Kurscharts pro Item mit 1T/7T/30T/90T, Item-Suche per Formular oder Menü"
-    },
-    {
-      "type": "neu",
-      "text": "Direkt aus dem Chart: Preisalarm setzen oder bei Spielershops kaufen"
-    }
-  ]
-}
+  {
+    "version": "1.13",
+    "date": "29.10.2026",
+    "requires": "market_views",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "/markt: Servermarkt im Börsenstil - Top-Gewinner und -Verlierer der letzten 24 h mit Preis, ▲/▼ und Volumen"
+      },
+      {
+        "type": "neu",
+        "text": "Kurscharts pro Item mit 1T/7T/30T/90T, Item-Suche per Formular oder Menü"
+      },
+      {
+        "type": "neu",
+        "text": "Direkt aus dem Chart: Preisalarm setzen oder bei Spielershops kaufen"
+      }
+    ]
+  },
+  {
+    "version": "1.14",
+    "date": "31.10.2026",
+    "changes": [
+      {
+        "area": "minecraft",
+        "type": "neu",
+        "text": "Markt: Du verkaufst jetzt Stack für Stack statt alles auf einmal"
+      },
+      {
+        "area": "minecraft",
+        "type": "verbessert",
+        "text": "Markt: Gehst du während eines Verkaufs offline, bekommst du deine Items beim nächsten Einloggen zurück"
+      },
+      {
+        "area": "minecraft",
+        "type": "neu",
+        "text": "Markt: Preisvorschau im Verkaufsmenü – du siehst vorher, was du bekommst"
+      },
+      {
+        "area": "minecraft",
+        "type": "verbessert",
+        "text": "Markt: Verkaufen ist vorerst ausgeschaltet"
+      },
+      {
+        "area": "discord",
+        "type": "verbessert",
+        "text": "Das alte Parkour-Board in #server-status ist weg"
+      },
+      {
+        "area": "discord",
+        "type": "neu",
+        "text": "Bestzeiten pro Strecke siehst du mit /leaderboard parkour"
+      }
+    ]
+  }
 ]
