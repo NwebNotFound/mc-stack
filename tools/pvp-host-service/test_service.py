@@ -81,9 +81,9 @@ ram:
         return r.status, json.loads(data) if data else None
 
     @staticmethod
-    def docker_result(state="exited", world=""):
+    def docker_result(state="exited", world="", health="healthy"):
         from subprocess import CompletedProcess
-        return CompletedProcess([], 0, state + "|CRAFTCORE_VIP_WORLD_ID=" + world + "\n", "")
+        return CompletedProcess([], 0, state + "|" + health + "|CRAFTCORE_VIP_WORLD_ID=" + world + "\n", "")
 
     def test_vip_auth_validation_and_stop(self):
         with patch("service.subprocess.run") as run:
@@ -162,6 +162,20 @@ ram:
                 run.side_effect = [self.docker_result("running"), self.docker_result("running"), self.docker_result(), self.docker_result()]
                 self.assertEqual(202, self.vip("POST", "/vip/start", {"worldId": self.WORLD})[0])
                 self.assertIn("vip3", run.call_args.args[0])
+
+    def test_readiness(self):
+        from subprocess import CompletedProcess
+        for health, logs, expected in [("healthy", None, "online"), ("starting", None, "starting"), ("", "Done (1s)! For help", "online"), ("", "Booting", "starting")]:
+            with self.subTest(health=health, logs=logs), patch("service.subprocess.run") as run:
+                run.side_effect = [self.docker_result("running", self.WORLD, health)] + ([CompletedProcess([], 0, logs, "")] if logs is not None else [])
+                self.assertEqual(expected, service.inspect_slot("vipworld-1")["status"])
+                if logs is not None:
+                    self.assertEqual(["docker", "logs", "--tail", "200", "mc-stack-vipworld-1-1"], run.call_args.args[0])
+
+    def test_start_existing_not_ready(self):
+        with patch("service.subprocess.run") as run:
+            run.side_effect = [self.docker_result("running", self.WORLD, "starting"), self.docker_result(), self.docker_result()]
+            self.assertEqual((202, {"status": "starting", "slot": "vipworld-1"}), self.vip("POST", "/vip/start", {"worldId": self.WORLD}))
 
     def test_budget_boundary_and_missing_container(self):
         cfg = service.read_config(self.root)
