@@ -557,7 +557,7 @@ class Bot(discord.Client):
         return parkour.rank(self.parkour_raw(), course)
 
     def parkour_raw(self):
-        import pymysql
+        import pymysql, parkour
         import shops
         pw = shops.db_password()
         if not pw:
@@ -569,19 +569,18 @@ class Bot(discord.Client):
             return []
         try:
             with con.cursor() as cur:
-                # neu: course (Slug) + course_name; Fallback auf aeltere Tabellenformate
-                queries = [
-                    ("SELECT uuid, name, best_ms, updated_at, course, course_name FROM parkour_times WHERE best_ms > 0", ()),
-                    ("SELECT uuid, name, best_ms, updated_at, course FROM parkour_times WHERE best_ms > 0", (None,)),
-                    ("SELECT uuid, name, best_ms, updated_at FROM parkour_times WHERE best_ms > 0", (None, None)),
-                ]
-                for sql, pad in queries:
-                    try:
-                        cur.execute(sql)
-                    except pymysql.err.OperationalError:
-                        continue  # Spalte fehlt (1054)
-                    return [tuple(r) + pad for r in cur.fetchall()]
-                return []
+                # Spalten zur Laufzeit erkennen: course, course_name, course_icon sind optional
+                cur.execute("SELECT * FROM parkour_times WHERE best_ms > 0")
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+                raw = [(r.get("uuid"), r.get("name"), r.get("best_ms"), r.get("updated_at"),
+                        r.get("course"), r.get("course_name"), r.get("course_icon")) for r in rows]
+                try:  # Anzeigename/Icon von Craft (v_parkour_courses), optional
+                    cur.execute("SELECT * FROM v_parkour_courses")
+                    raw = parkour.apply_meta(raw, parkour.course_meta([d[0] for d in cur.description], cur.fetchall()))
+                except (pymysql.err.OperationalError, pymysql.err.ProgrammingError):
+                    pass  # View fehlt oder kein GRANT -> huebsch gemachter Slug
+                return raw
         except pymysql.err.ProgrammingError:
             return []  # Tabelle existiert (noch) nicht
         finally:

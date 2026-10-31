@@ -32,7 +32,7 @@ class ParkourLeaderboardTest(unittest.TestCase):
         self.assertEqual(parkour.rank(raw, "test"), [(1, "Ben", 8000, "u2"), (2, "Anna", 9000, "u1")])
         self.assertEqual(parkour.rank(raw, " BERG "), [(1, "Anna", 7000, "u1"), (2, "Ben", 12000, "u2")])
         self.assertEqual(parkour.rank(raw, "gibtsnicht"), [])
-        self.assertEqual(parkour.courses(raw), [("berg", "berg"), ("test", "test")])
+        self.assertEqual(parkour.courses(raw), [("berg", "Berg"), ("test", "Test")])
 
     def test_legacy_table_without_course(self):
         raw = raw_from_sqlite(with_course=False)
@@ -56,7 +56,7 @@ class CourseNameTest(unittest.TestCase):
         self.assertEqual(parkour.slug("kurs1"), "kurs1")
 
     def test_old_format_falls_back_to_id(self):
-        self.assertEqual(parkour.courses(self.OLD), [("cave_rush", "cave rush"), ("kurs1", "kurs1")])
+        self.assertEqual(parkour.courses(self.OLD), [("cave_rush", "Cave Rush"), ("kurs1", "Kurs1")])
         self.assertEqual(parkour.rank(self.OLD, "kurs1"), [(1, "Anna", 50000, "u2")])
 
     def test_new_format_shows_course_name(self):
@@ -65,16 +65,16 @@ class CourseNameTest(unittest.TestCase):
 
     def test_mixed_formats_merge(self):
         raw = self.OLD + self.NEW
-        self.assertEqual(parkour.courses(raw), [("cave_rush", "Cave Rush"), ("kurs1", "kurs1")])
+        self.assertEqual(parkour.courses(raw), [("cave_rush", "Cave Rush"), ("kurs1", "Kurs1")])
         self.assertEqual(parkour.rank(raw, "cave_rush"), [(1, "Ben", 30000, "u3"), (2, "Joni81", 36000, "u1")])
         self.assertEqual(parkour.rank(raw, "Cave Rush"), parkour.rank(raw, "cave_rush"))
         self.assertEqual([r[1] for r in parkour.rank(raw, "*")], ["Ben", "Joni81", "Anna"])
         self.assertIsNone(parkour.display(raw, "*"))
-        self.assertEqual(parkour.display(raw, "gibtsnicht"), "gibtsnicht")
+        self.assertEqual(parkour.display(raw, "gibtsnicht"), "Gibtsnicht")
 
     def test_empty_course_name_falls_back(self):
         raw = [("u1", "X", 100, "", "kurs2", None), ("u2", "Y", 200, "", "kurs2", "  ")]
-        self.assertEqual(parkour.courses(raw), [("kurs2", "kurs2")])
+        self.assertEqual(parkour.courses(raw), [("kurs2", "Kurs2")])
 
     def test_status_courses(self):
         self.assertEqual(parkour.status_courses(None), ["*"])
@@ -86,7 +86,7 @@ class CourseNameTest(unittest.TestCase):
         import gui
         v = gui.LbPager("Parkour", [], courses=parkour.courses(self.OLD + self.NEW), raw=self.OLD + self.NEW, selected="cave rush")
         opts = [(o.label, o.value, o.default) for o in v.course_menu.options]
-        self.assertEqual(opts, [("Alle Kurse (beste Zeit je Spieler)", "*", False), ("Cave Rush", "cave_rush", True), ("kurs1", "kurs1", False)])
+        self.assertEqual(opts, [("Alle Kurse (beste Zeit je Spieler)", "*", False), ("Cave Rush", "cave_rush", True), ("Kurs1", "kurs1", False)])
 
     def test_select_menu_with_single_course(self):
         import gui
