@@ -5,6 +5,8 @@ import java.time.Duration;
 
 final class SellTransaction {
   static final String DDL = "CREATE TABLE IF NOT EXISTS sell_txn (idem_key VARCHAR(64) PRIMARY KEY, status VARCHAR(16) NOT NULL, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB";
+  static final String PENDING_DDL = "CREATE TABLE IF NOT EXISTS sell_pending (idem_key VARCHAR(64) PRIMARY KEY, player_uuid CHAR(36) NOT NULL, item_nbt LONGTEXT NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING', created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB";
+  static final String PENDING_MIGRATION = "ALTER TABLE sell_pending ADD COLUMN IF NOT EXISTS resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING'";
   enum CommitStatus { COMMITTED, NOT_COMMITTED, UNKNOWN }
   interface Connections { Connection open() throws SQLException; }
 

@@ -32,7 +32,8 @@ final class Market implements Listener {
     public Inventory getInventory(){return inventory;}
   }
   private final Map<UUID,SellMenu> sellMenus=new HashMap<>();
-  Market(CraftCore core) { this.core=core; instance=this; }
+  private final SellStackFlow sellFlow;
+  Market(CraftCore core) { this.core=core; this.sellFlow=new SellStackFlow(r->Bukkit.getScheduler().runTaskAsynchronously(core,r),r->Bukkit.getScheduler().runTask(core,r)); instance=this; }
   private Set<Material> priced = EnumSet.noneOf(Material.class);
   boolean tradable(Material m){ return PriceCatalog.eligible(m) && (!core.getConfig().getBoolean("market.lock-fallback",true) || priced.contains(m)); }
   /** Every catalog item can be sold; purchase restrictions are independent. */
@@ -195,18 +196,9 @@ final class Market implements Listener {
     SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Verkaufen");
     refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
   }
-  private void refreshSell(SellMenu menu) throws Exception {
-    List<String> lore=new ArrayList<>(); long[] sum={0};
-    core.tx(c->{for(int slot=0;slot<45;slot++){ItemStack item=menu.inventory.getItem(slot); if(item==null || item.getType().isAir())continue;
-      Material m=item.getType(); if(!eligible(item)||!hasPrice(m)){lore.add(m.name()+" x"+item.getAmount()+": nicht verkaufbar");continue;}
-      int damage=item.getItemMeta() instanceof Damageable d?d.getDamage():0;
-      long unit=Math.max(1,durabilityPrice(price(c,m,false,false).cents(),damage,m.getMaxDurability()));
-      sum[0]=Math.addExact(sum[0],total(unit,item.getAmount())); lore.add(m.name()+" x"+item.getAmount()+": "+Money.format(unit)+" / Stueck");
-    } return null;});
-    lore.add("Summe (aktueller Preis): "+Money.format(sum[0]));
-    lore.add("Tageslimit uebrig: "+Money.format(core.tx(c->DiscordRevenue.remaining(c,menu.owner.toString(),dayKey(),revenueLimit()))));
-    lore.add("Preise koennen sich beim Verkauf aendern.");
-    ItemStack button=button(Material.LIME_DYE,"Verkauf bestaetigen"); ItemMeta meta=button.getItemMeta();meta.setLore(lore);button.setItemMeta(meta);menu.inventory.setItem(49,button);
+  private void refreshSell(SellMenu menu) {
+    ItemStack button=button(Material.LIME_DYE,"Verkauf bestaetigen");
+    ItemMeta meta=button.getItemMeta(); meta.setLore(List.of("Alle geeigneten Stacks verkaufen.","Der Preis wird beim Verkauf berechnet.")); button.setItemMeta(meta); menu.inventory.setItem(49,button);
   }
   private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }
   @EventHandler public void sellDrag(InventoryDragEvent e) {
@@ -229,17 +221,75 @@ final class Market implements Listener {
     refreshLater(menu);
   }
   private void confirmSell(Player p,SellMenu menu) {
-    int sold=0; boolean limited=false,failed=false;
-    for(int slot=0;slot<45;slot++) { ItemStack stack=menu.inventory.getItem(slot); if(!eligible(stack)||!hasPrice(stack.getType()))continue;
-      menu.inventory.setItem(slot,null); int remaining=stack.getAmount();
+    UUID player=p.getUniqueId();
+    for(int slot=0;slot<45;slot++) {
+      String lock=player+":"+slot;
+      if(sellFlow.busy(lock)) continue;
+      ItemStack stack=menu.inventory.getItem(slot);
+      if(!eligible(stack)||!hasPrice(stack.getType())) continue;
+      stack=stack.clone();
+      String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes());
+      String key=UUID.randomUUID().toString();
       int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
-      while(remaining>0) {try {if(!sellUnit(p.getUniqueId(),stack.getType(),damage)){limited=true;break;} remaining--;sold++;}catch(Exception ex){core.getLogger().warning("Verkauf: "+ex);failed=true;break;}}
-      if(remaining>0){stack.setAmount(remaining); menu.inventory.setItem(slot,stack);} if(failed)break;
+      ItemStack sold=stack;
+      int selectedSlot=slot;
+      sellFlow.start(lock,()->menu.inventory.setItem(selectedSlot,null),
+          ()->sellStack(player,key,nbt,sold,damage),
+          result->finishSell(p,player,key,sold,result));
     }
-    if(limited || failed) deliverSellItems(p,menu);
-    p.sendMessage("Verkauft: "+sold+" Gegenstaende."+(limited?" Tageslimit erreicht; Rest zurueckgegeben.":"")+(failed?" Verkauf fehlgeschlagen; Rest zurueckgegeben.":""));
-    try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}
   }
+  private record SellResult(SellTransaction.CommitStatus status, boolean limited, long cp, long balance) {}
+  private SellResult sellStack(UUID uuid,String key,String nbt,ItemStack stack,int damage) {
+     Material material=stack.getType(); int amount=stack.getAmount();
+    long[] cp={0}, balance={0}; Connection original=null;
+    SellTransaction.CommitStatus status=SellTransaction.CommitStatus.NOT_COMMITTED;
+    boolean limited=false;
+    try {
+      // Persist the recovery record before the sale can reach COMMIT. If this
+      // fails, no sale transaction is started and the stack can be refunded.
+      try(Connection pending=core.connection(); PreparedStatement q=pending.prepareStatement("INSERT INTO sell_pending(idem_key,player_uuid,item_nbt,amount,cp) VALUES(?,?,?,?,0)")) {
+        q.setString(1,key); q.setString(2,uuid.toString()); q.setString(3,nbt); q.setInt(4,amount); q.executeUpdate();
+      }
+      original=core.connection();
+      try (Connection c=original) {
+        try (Statement q=c.createStatement(); ResultSet r=q.executeQuery("SELECT GET_LOCK('craftcore-write', 5)")) {if(!r.next()||r.getInt(1)!=1)throw new SQLException("DB lock timeout");}
+        try {
+          SellTransaction.run(c,key,tx->{
+            String day=dayKey(), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
+            long unit=Math.max(1,durabilityPrice(price(tx,material,false,false).cents(),damage,material.getMaxDurability()));
+            cp[0]=total(unit,amount);
+            if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,revenueLimit()),unit,amount)<amount) throw new SellLimit();
+            for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,core.getConfig(),owner,material,day)) throw new SellLimit();
+            if(!DiscordRevenue.reserve(tx,owner,day,cp[0],revenueLimit())) throw new SellLimit();
+            core.exec(tx,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",key,uuid.toString(),material.name(),amount,cp[0],"PENDING");
+            BankJournal.finishSale(tx,key,m->price(tx,material,true,false));
+            WebsiteStats.event(tx,material.name(),amount,cp[0],"bank");
+            core.exec(tx,"UPDATE sell_pending SET cp=?, resolution='COMMITTED' WHERE idem_key=?",cp[0],key);
+            balance[0]=core.balance(tx,uuid); return null;
+          });
+        } finally {try(Statement q=c.createStatement()){q.execute("SELECT RELEASE_LOCK('craftcore-write')");}}
+      }
+      status=SellTransaction.CommitStatus.COMMITTED;
+    } catch(Exception ex) {
+      limited=ex instanceof SellLimit;
+      if(original!=null) status=core.checkCommitStatus(key,original,java.time.Duration.ofSeconds(2));
+      if(status==SellTransaction.CommitStatus.UNKNOWN) {
+        core.getLogger().warning("Ungeklaerter Bankverkauf " + key + " fuer " + uuid + "; sell_pending pruefen");
+      } else if(status==SellTransaction.CommitStatus.NOT_COMMITTED) {
+        try(Connection c=core.connection(); PreparedStatement q=c.prepareStatement("UPDATE sell_pending SET resolution='NOT_COMMITTED' WHERE idem_key=?")) {
+          q.setString(1,key); q.executeUpdate();
+        } catch(SQLException pending) {core.getLogger().warning("Pending-Status nicht aktualisiert fuer " + key);}
+      }
+    }
+    return new SellResult(status,limited,cp[0],balance[0]);
+  }
+  private void finishSell(Player player,UUID uuid,String key,ItemStack stack,SellResult result) {
+    SellStackFlow.resolve(result.status(),
+      ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstaende fuer "+Money.format(result.cp())+".");},
+      ()->{for(ItemStack left:player.getInventory().addItem(stack).values())player.getWorld().dropItemNaturally(player.getLocation(),left); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurueckgegeben.":"Verkauf fehlgeschlagen; Stack zurueckgegeben.");},
+      ()->player.sendMessage("Verkauf ungeklaert. Bitte Admin informieren: "+key));
+  }
+  private static final class SellLimit extends Exception {}
   private void returnSell(Player p,SellMenu menu) {
     if(!sellMenus.remove(menu.owner,menu))return;
     deliverSellItems(p,menu);

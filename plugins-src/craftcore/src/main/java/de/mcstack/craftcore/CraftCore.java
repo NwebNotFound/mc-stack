@@ -41,7 +41,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private Npcs npcs;
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
   interface Work<T> { T run(Connection c) throws Exception; }
-  private Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
+  Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
   <T> T tx(Work<T> work) throws Exception { return tx(null, work); }
   <T> T tx(String idemKey, Work<T> work) throws Exception {
     try (Connection c = connection()) {
@@ -69,6 +69,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute("CREATE TABLE IF NOT EXISTS teams (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(16) NOT NULL UNIQUE)");
         s.execute("CREATE TABLE IF NOT EXISTS members (uuid CHAR(36) PRIMARY KEY, team_id BIGINT NOT NULL, role VARCHAR(8) NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE)");
         s.execute(SellTransaction.DDL);
+        s.execute(SellTransaction.PENDING_DDL);
+        s.execute(SellTransaction.PENDING_MIGRATION);
         InviteStore.prepareSchema(c);
         SidebarPreference.prepare(c);
       }
@@ -206,6 +208,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     p.setScoreboard(board);
     return board;
   }
+  void sellBalance(UUID id,long cp) { Scoreboard board=sidebars.get(id); if(board!=null) setLine(board,2,"CP: ",String.format(Locale.GERMANY,"%,d CP",cp/100),NamedTextColor.GREEN); }
   private void sidebar(Player p) {
     try {
       if (!tx(c->SidebarPreference.enabled(c,p.getUniqueId().toString()))) return;
