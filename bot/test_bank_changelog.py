@@ -109,9 +109,12 @@ class UniformFormatTest(unittest.TestCase):
         import json
         from pathlib import Path
         ents = json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))
-        es = [changelog.embed(x) for x in ents] + [changelog.mc_embed({"version": "x", "date": "30.10.2026", "changes": [{"type": "fix", "text": "a"}], "discord": ["b"]})]
+        # Tabellen (table_fields) haben eigene Feldnamen -> fuer den Format-Test herausnehmen
+        plain = [dict(x, table=None, changes=[c for c in x["changes"] if not changelog._is_table(c.get("text"))]) for x in ents]
+        es = [changelog.embed(x) for x in plain] + [changelog.mc_embed({"version": "1.14", "date": "31.10.2026", "changes": [{"type": "fix", "text": "a"}], "discord": ["b"]})]
+        self.assertEqual(es[-1].title, "Update 31.10.2026 \u00b7 v1.14")
         for e in es:
-            self.assertRegex(e.title, r"^Update \d\d\.\d\d\.\d{4}$")
+            self.assertRegex(e.title, r"^Update \d\d\.\d\d\.\d{4}( · v[\w.]+)?$")
             self.assertEqual(e.color.value, changelog.COLOR)
             self.assertEqual(e.footer.text, changelog.FOOTER)
             for f in e.fields:
