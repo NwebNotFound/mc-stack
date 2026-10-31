@@ -854,8 +854,14 @@ async def push_ranks(session, token):
             log.warning("v_player_rank nicht lesbar, player_ranks wird weggelassen")
             _ranks["warned"] = True
         return None
+    data = build_ranks(*res)
+    if not data:  # Website nimmt jeden Push als Vollbild: leere Liste wuerde alle Raenge loeschen
+        if not _ranks["warned"]:
+            log.warning("v_player_rank leer oder unerwartete Spalten, player_ranks wird weggelassen")
+            _ranks["warned"] = True
+        return None
     _ranks["warned"] = False
-    st, _ = await _post(session, token, {"player_ranks": build_ranks(*res)}, "Player-Ranks")
+    st, _ = await _post(session, token, {"player_ranks": data}, "Player-Ranks")
     return st < 300
 
 

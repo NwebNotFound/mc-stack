@@ -126,6 +126,30 @@ class RanksIngestTests(unittest.TestCase):
         asyncio.run(run())
         self.assertEqual(posted, [{"player_ranks": [{"uuid": U1, "name": "Kai", "rank": "mvp", "color": "&d", "weight": 60}]}])
 
+    def test_never_empty_list(self):
+        posted = []
+
+        async def fake_post(session, token, payload, label):
+            posted.append(payload)
+            return 200, "{}"
+
+        def raise_(n):
+            raise RuntimeError("db weg")
+
+        async def run():
+            with mock.patch.object(ingest, "_post", fake_post):
+                for fr in (lambda n: None, lambda n: (["uuid", "name", "rank"], []), lambda n: (["foo"], [(1,)])):
+                    ingest._ranks["warned"] = False
+                    with mock.patch.object(ingest, "fetch_rows", fr):
+                        self.assertIsNone(await ingest.push_ranks(None, "t"))
+                with mock.patch.object(ingest, "fetch_rows", raise_), \
+                     mock.patch.object(ingest, "push_history", mock.AsyncMock(return_value=True)), \
+                     mock.patch.object(ingest, "push_economy", mock.AsyncMock()):
+                    ingest._hist_push["last"] = None
+                    self.assertTrue(await ingest.maybe_push_history(None, "t", now=1.0))
+        asyncio.run(run())
+        self.assertEqual(posted, [])
+
     def test_history_survives_rank_error(self):
         async def boom(*a):
             raise RuntimeError("x")
