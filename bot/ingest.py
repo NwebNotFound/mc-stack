@@ -1,5 +1,5 @@
 """Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
-import asyncio, datetime, json, logging, os, time
+import asyncio, datetime, hashlib, json, logging, os, time
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
@@ -22,7 +22,44 @@ def safe_url(url, default):
 
 
 URL = safe_url(os.getenv("MC_INGEST_URL"), "https://nwebnotfound.dev/api/mc-ingest")
-INTERVAL = 300
+def _env_int(name, default, lo=5):
+    try:
+        return max(lo, int(os.getenv(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+INTERVAL = _env_int("INGEST_INTERVAL_SEC", 30)
+MIN_GAP = 3.0  # max. 1 POST pro 3 s
+_rate = {"last_post": 0.0, "backoff_until": 0.0, "fails": 0, "last_hash": None}
+VOLATILE = ("uptime_seconds", "tps")
+
+
+def payload_hash(payload):
+    """Hash ohne fluechtige Server-Felder (Uptime/TPS), damit unveraenderte Daten nicht neu gesendet werden."""
+    p = dict(payload)
+    if isinstance(p.get("servers"), dict):
+        p["servers"] = {k: {f: v for f, v in e.items() if f not in VOLATILE} if isinstance(e, dict) else e
+                        for k, e in p["servers"].items()}
+    return hashlib.sha256(json.dumps(p, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def note_status(status, retry_after=None, now=None):
+    """429/5xx -> exponentielles Backoff (5 s .. 300 s, Retry-After wird beachtet); Erfolg setzt zurueck."""
+    now = now if now is not None else time.monotonic()
+    if status == 429 or status >= 500:
+        _rate["fails"] += 1
+        wait = min(300.0, 5.0 * 2 ** (_rate["fails"] - 1))
+        try:
+            wait = max(wait, min(300.0, float(retry_after)))
+        except (TypeError, ValueError):
+            pass
+        _rate["backoff_until"] = now + wait
+        return wait
+    if status < 300:
+        _rate["fails"] = 0
+        _rate["backoff_until"] = 0.0
+    return 0.0
 STAT_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
 RENAME = {"playtime_s": "playtime"}
 
@@ -667,11 +704,18 @@ async def push_once(bot, session=None):
     pk = await asyncio.to_thread(fetch_rows, "parkour_times")
     if pk:
         payload["parkour"] = build_parkour(*pk)
+    h = payload_hash(payload)
     own = session is None
     session = session or aiohttp.ClientSession()
     try:
-        result = await _post(session, token, payload, "Ingest-Push")
-        await push_history(session, token)
+        if h == _rate["last_hash"]:
+            log.debug("Ingest-Push uebersprungen: unveraendert")
+            result = None
+        else:
+            result = await _post(session, token, payload, "Ingest-Push")
+            if result and result[0] < 300:
+                _rate["last_hash"] = h
+                await maybe_push_history(session, token)
         return result
     finally:
         if own:
@@ -679,14 +723,36 @@ async def push_once(bot, session=None):
 
 
 async def _post(session, token, payload, label):
+    now = time.monotonic()
+    if now < _rate["backoff_until"]:
+        log.info("%s uebersprungen: Backoff noch %.0f s", label, _rate["backoff_until"] - now)
+        return 0, "backoff"
+    wait = _rate["last_post"] + MIN_GAP - now
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _rate["last_post"] = time.monotonic()
     async with session.post(URL, json=payload, headers={"x-ingest-token": token},
                             timeout=aiohttp.ClientTimeout(total=120)) as r:
         body = (await r.text())[:300]
+        note_status(r.status, r.headers.get("Retry-After") if r.headers else None)
         if r.status < 300:
             log.info("%s HTTP %s: %s", label, r.status, body)
         else:
             log.warning("%s HTTP %s: %s", label, r.status, body)
         return r.status, body
+
+
+HISTORY_EVERY = 300
+_hist_push = {"last": None}
+
+
+async def maybe_push_history(session, token, now=None):
+    """Markt-History nur nach echtem Erfolg und hoechstens alle HISTORY_EVERY s."""
+    now = now if now is not None else time.monotonic()
+    if _hist_push["last"] is not None and now - _hist_push["last"] < HISTORY_EVERY:
+        return None
+    _hist_push["last"] = now
+    return await push_history(session, token)
 
 
 async def push_history(session, token, now=None):
@@ -736,10 +802,13 @@ async def servers_loop(bot):
             await asyncio.sleep(SERVERS_INTERVAL)
 
 
-# ---------- Sofort-Push bei Join/Leave ----------
-DEBOUNCE = 15
-PRESENCE_POLL = 2
+# ---------- Sofort-Push bei Join/Leave/Tod ----------
+DEBOUNCE = 3
+PRESENCE_POLL = 1
 JOIN_LEAVE_RE = re.compile(r"\]: ([A-Za-z0-9_]{3,16}) (joined|left) the game\s*$")
+# wie bot.DEATH_RE (Chat-Sync), aber nur Server-Thread-Zeilen ohne Chat-Prefix
+DEATH_RE = re.compile(r"\[Server thread/INFO\]: ([A-Za-z0-9_]{3,16}) (?:was |were |died|drowned|fell |blew up|burned|went up in flames|went off|hit the ground|experienced kinetic|froze|starved|suffocated|walked into|tried to swim|withered|discovered the floor|left the confines|didn't want to live)")
+NOT_DEATH = re.compile(r" was (?:kicked|banned|unbanned|whitelisted|opped|de-opped)|\]: \S+ was (?:added|removed) ")
 _push_lock = asyncio.Lock()
 _presence = {"last": 0.0, "pending": None, "dirty": False, "running": False}
 
@@ -748,13 +817,22 @@ def is_presence_line(line):
     return bool(JOIN_LEAVE_RE.search(line or ""))
 
 
+def is_death_line(line):
+    line = line or ""
+    return bool(DEATH_RE.search(line)) and not NOT_DEATH.search(line)
+
+
+def is_trigger_line(line):
+    return is_presence_line(line) or is_death_line(line)
+
+
 async def _presence_push(bot):
     async with _push_lock:
         _presence["last"] = time.monotonic()
         _presence["running"] = True
         try:
             async with aiohttp.ClientSession() as session:
-                return await push_servers(bot, session)
+                return await push_once(bot, session)
         finally:
             _presence["running"] = False
 
@@ -784,7 +862,7 @@ def trigger_presence(bot):
 
 
 def scan_presence(offsets, base="/minecraft"):
-    """Liest neue Logzeilen aller Backends (Lobby, Survival, VIP); True bei Join/Leave."""
+    """Liest neue Logzeilen aller Backends (Lobby, Survival, VIP); True bei Join/Leave/Tod."""
     hit = False
     for key, _env, _d in SERVER_KEYS:
         path = f"{base}/{key}/logs/latest.log"
@@ -803,7 +881,7 @@ def scan_presence(offsets, base="/minecraft"):
             with open(path, encoding="utf-8", errors="replace") as f:
                 f.seek(off)
                 for line in f:
-                    hit = is_presence_line(line) or hit
+                    hit = is_trigger_line(line) or hit
                 offsets[key] = (st.st_ino, f.tell())
         except OSError:
             continue
