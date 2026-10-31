@@ -16,14 +16,12 @@ final class ParkourRules {
   if(grounded || climbable) return null;
   double current=Math.max(from,to); return peak==null ? current : Math.max(peak,current);
  }
- /** Vanilla: ab mehr als 3 Bloecken Fallhoehe gibt es Fallschaden. */
- static final double SAFE_FALL = 3.0;
  /** Bloecke, auf denen eine Landung keinen (vollen) Fallschaden verursacht. */
  static final Set<String> SOFT = Set.of("slime_block", "hay_block", "honey_block", "powder_snow", "water", "bubble_column", "cobweb", "scaffolding", "sweet_berry_bush");
  static boolean softLanding(String blockKey, boolean bed) { return bed || (blockKey != null && SOFT.contains(blockKey)); }
  static double[][] footprint(double x, double z) { return new double[][]{{x,z},{x-0.299,z-0.299},{x-0.299,z+0.299},{x+0.299,z-0.299},{x+0.299,z+0.299}}; }
  static boolean softLandingAny(Collection<String> blockKeys, boolean anyBed) { return anyBed || blockKeys.stream().anyMatch(key->softLanding(key,false)); }
  static boolean inGrace(Long until, long now) { return until!=null && now<until; }
- /** Ruecksetzen, wenn die Landung echten Fallschaden verursachen wuerde. */
- static boolean fallResets(double drop, String blockKey, boolean bed) { return drop > SAFE_FALL && !softLanding(blockKey, bed); }
+ static boolean hardLandingReset(double drop, double limit, boolean soft, boolean grace) { return limit > 0 && drop > limit && !soft && !grace; }
+ static boolean fallResets(double drop, double limit, String blockKey, boolean bed) { return hardLandingReset(drop, limit, softLanding(blockKey, bed), false); }
 }

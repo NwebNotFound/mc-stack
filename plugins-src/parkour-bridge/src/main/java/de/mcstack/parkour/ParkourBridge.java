@@ -137,12 +137,12 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) { peaks.remove(p.getUniqueId()); return; }
   // Wasser beruehrt -> zurueck zum Checkpoint
   if(p.isInWater() || to.getBlock().getType()==Material.WATER) { reset(p,s,e); return; }
-  // Echter Fallschaden (vanilla): Fallhoehe > 3 und Landeblock daempft nicht (Schleim, Heu, Honig, Bett, Pulverschnee, Wasser ...)
+  // Optionales Ruecksetzen bei harten Landungen; weiche Bloecke und Schonzeit bleiben ausgenommen.
   boolean climbable=Tag.CLIMBABLE.isTagged(e.getFrom().getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.getBlock().getType())
    || Tag.CLIMBABLE.isTagged(e.getFrom().clone().add(0,1,0).getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.clone().add(0,1,0).getBlock().getType());
   if(climbable || !p.isOnGround()) { Double peak=ParkourRules.nextPeak(peaks.get(p.getUniqueId()),e.getFrom().getY(),to.getY(),false,climbable); if(peak==null) peaks.remove(p.getUniqueId()); else peaks.put(p.getUniqueId(),peak); }
   else { Double peak=peaks.remove(p.getUniqueId()); Landing landing=landing(to,true); long now=System.currentTimeMillis();
-   if(peak!=null && peak-to.getY()>ParkourRules.SAFE_FALL && !landing.soft() && !ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now)) { reset(p,s,e); return; }
+   if(peak!=null && ParkourRules.hardLandingReset(peak-to.getY(),getConfig().getDouble("hard-landing-reset-blocks",0),landing.soft(),ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now))) { reset(p,s,e); return; }
    slimeGrace(p.getUniqueId(),landing,now); }
   // Fallback: weit unter dem tiefsten Kurspunkt
   try { Location cp=checkpoint(s); Double floor=floorY(s.getParkourName()); if(cp!=null && floor!=null && cp.getWorld().equals(to.getWorld()) && to.getY()<floor) reset(p,s,e); }
@@ -152,7 +152,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(!(e.getEntity() instanceof Player p)) return;
   ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) return;
   if(e.getCause()==EntityDamageEvent.DamageCause.VOID) { e.setCancelled(true); reset(p,s,null); return; }
-  if(e.getCause()==EntityDamageEvent.DamageCause.FALL) { e.setCancelled(true); Landing landing=landing(p.getLocation(),false); long now=System.currentTimeMillis(); if(!landing.soft() && !ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now)) reset(p,s,null); else slimeGrace(p.getUniqueId(),landing,now); }
+  if(e.getCause()==EntityDamageEvent.DamageCause.FALL) { e.setCancelled(true); Landing landing=landing(p.getLocation(),false); long now=System.currentTimeMillis(); if(ParkourRules.hardLandingReset(p.getFallDistance(),getConfig().getDouble("hard-landing-reset-blocks",0),landing.soft(),ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now))) reset(p,s,null); else slimeGrace(p.getUniqueId(),landing,now); }
  } @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
   if(e.getAction()!=Action.PHYSICAL || e.getClickedBlock()==null) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null || s.getCompletedCheckpoints()!=s.getMaxCheckpoints()) return;
