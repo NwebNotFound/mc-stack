@@ -18,5 +18,8 @@ class DeathEventsTest {
       assertEquals(3,totals.values().stream().mapToLong(Long::longValue).sum());
     }
   }
+  @Test void backfillUsesPlayerStatsDirectory() {
+    assertEquals(new java.io.File("world/players/stats"), DeathEvents.statsDirectory(new java.io.File("world")));
+  }
   @Test void recordedEntityDoesNotDuplicateVanilla() { assertEquals(Map.of("unknown",1L),DeathEvents.baseline(2,Map.of("zombie",1L),Map.of("zombie",1L))); }
 }

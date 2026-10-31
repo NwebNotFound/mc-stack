@@ -57,10 +57,10 @@ final class DeathEvents implements Listener {
     try(PreparedStatement q=c.prepareStatement("SELECT LOWER(COALESCE(entity_type,cause_type)),COUNT(*) FROM player_deaths WHERE uuid=? AND server=? AND ts<=? GROUP BY entity_type,cause_type")){q.setString(1,uuid);q.setString(2,server);q.setLong(3,cutoff);try(ResultSet r=q.executeQuery()){while(r.next())recorded.merge(r.getString(1),r.getLong(2),Long::sum);}}
     try(PreparedStatement q=c.prepareStatement("INSERT INTO player_death_backfill(uuid,server,stat_key,stat_value) VALUES(?,?,?,?)")){for(var e:baseline(total,vanilla,recorded).entrySet()){q.setString(1,uuid);q.setString(2,server);q.setString(3,e.getKey());q.setLong(4,e.getValue());q.addBatch();}q.executeBatch();} return true;
   }
+  static File statsDirectory(File worldFolder) { return new File(worldFolder,"players/stats"); }
   void backfill(CommandSender sender) {
     if(!SpawnRoute.isSurvival(server)){sender.sendMessage("Backfill bitte auf Survival ausfuehren.");return;}
-    File dir=new File(Bukkit.getWorlds().get(0).getWorldFolder(),"stats");
-    if(!dir.isDirectory()) { File alternate=new File(Bukkit.getWorlds().get(0).getWorldFolder(),"players/stats"); if(alternate.isDirectory()) dir=alternate; }
+    File dir=statsDirectory(Bukkit.getWorlds().get(0).getWorldFolder());
     Set<String> online=new HashSet<>(); Bukkit.getOnlinePlayers().forEach(p->online.add(p.getUniqueId().toString()));
     final File stats=dir; sender.sendMessage("Death-Backfill gestartet: "+stats+" (Online-Spieler ausgenommen; nach Quit erneut ausfuehren)");
     writer.execute(()->{int n=0,errors=0; File[] files=stats.listFiles((d,name)->name.endsWith(".json"));
