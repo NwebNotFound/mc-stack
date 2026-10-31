@@ -53,3 +53,6 @@ tools/*.exe
 website/
 site/
 web/
+
+# Aus dem Betrieb genommene Dateien (nicht loeschen, nicht einchecken)
+quarantine/
