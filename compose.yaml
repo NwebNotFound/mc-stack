@@ -73,6 +73,8 @@ services:
       CRAFTCORE_SERVER: Lobby
       PVP_HOST_URL: http://host.docker.internal:25599
       PVP_HOST_TOKEN: "${PVP_HOST_TOKEN:-}"
+      VIP_HOST_URL: http://host.docker.internal:25599
+      VIP_HOST_TOKEN: "${VIP_HOST_TOKEN:-}"
       MOTD: MC Stack Lobby
       MODE: adventure
       DIFFICULTY: easy
@@ -127,6 +129,84 @@ services:
       - ./data/pvp:/data
       - ./config/lobby-paper:/config:ro
       - ./config/pvp-plugins:/pvp-plugins:ro
+    expose:
+      - "25565/tcp"
+
+  vipworld-1:
+    <<: *paper
+    profiles: ["vip"]
+    restart: "no"
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
+    mem_limit: 1536m
+    environment:
+      <<: *paper-environment
+      MEMORY: 1152M
+      CRAFTCORE_SERVER: vipworld-1
+      CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_1_ID:-}"
+      CRAFTCORE_DB_USER: craft_vip
+      CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
+      MOTD: "MC Stack VIP 1"
+      LEVEL: vipworld
+      COPY_PLUGINS_SRC: /vip-plugins
+    volumes:
+      - ./data/vipworld-slots/vipworld-1:/data
+      - ${VIPWORLD_1_DIR:-./data/vipworld-slots/empty-1}:/data/vipworld
+      - ./config/lobby-paper:/config:ro
+      - ./config/vip-plugins:/vip-plugins:ro
+    expose:
+      - "25565/tcp"
+
+  vipworld-2:
+    <<: *paper
+    profiles: ["vip"]
+    restart: "no"
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
+    mem_limit: 1536m
+    environment:
+      <<: *paper-environment
+      MEMORY: 1152M
+      CRAFTCORE_SERVER: vipworld-2
+      CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_2_ID:-}"
+      CRAFTCORE_DB_USER: craft_vip
+      CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
+      MOTD: "MC Stack VIP 2"
+      LEVEL: vipworld
+      COPY_PLUGINS_SRC: /vip-plugins
+    volumes:
+      - ./data/vipworld-slots/vipworld-2:/data
+      - ${VIPWORLD_2_DIR:-./data/vipworld-slots/empty-2}:/data/vipworld
+      - ./config/lobby-paper:/config:ro
+      - ./config/vip-plugins:/vip-plugins:ro
+    expose:
+      - "25565/tcp"
+
+  vipworld-3:
+    <<: *paper
+    profiles: ["vip3"]
+    restart: "no"
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
+    mem_limit: 1536m
+    environment:
+      <<: *paper-environment
+      MEMORY: 1152M
+      CRAFTCORE_SERVER: vipworld-3
+      CRAFTCORE_VIP_WORLD_ID: "${VIPWORLD_3_ID:-}"
+      CRAFTCORE_DB_USER: craft_vip
+      CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_VIP_DB_PASSWORD:-}"
+      MOTD: "MC Stack VIP 3"
+      LEVEL: vipworld
+      COPY_PLUGINS_SRC: /vip-plugins
+    volumes:
+      - ./data/vipworld-slots/vipworld-3:/data
+      - ${VIPWORLD_3_DIR:-./data/vipworld-slots/empty-3}:/data/vipworld
+      - ./config/lobby-paper:/config:ro
+      - ./config/vip-plugins:/vip-plugins:ro
     expose:
       - "25565/tcp"
 
