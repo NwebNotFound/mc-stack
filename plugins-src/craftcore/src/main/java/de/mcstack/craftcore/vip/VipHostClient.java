@@ -5,6 +5,7 @@ import com.google.gson.JsonParser;
 import java.net.URI;
 import java.net.http.*;
 import java.time.Duration;
+import java.util.*;
 
 public final class VipHostClient {
     public enum Outcome { STARTING, ONLINE, STOPPED, NO_FREE_SLOT, RAM_BUDGET, WORLD_NOT_FOUND, ERROR }
@@ -47,6 +48,31 @@ public final class VipHostClient {
             if (slot.equals(field(json, "slot"))) return new Result("online".equals(field(json, "status")) ? Outcome.ONLINE : Outcome.STARTING, slot);
         } catch (RuntimeException ignored) {}
         return new Result(Outcome.ERROR, null);
+    }
+    public static List<VipReconcile.Slot> parseSlots(int code, String body) {
+        if (code != 200) return null;
+        try {
+            var root=JsonParser.parseString(body).getAsJsonObject();
+            var slots=root.get("slots");
+            if (slots==null || !slots.isJsonArray()) return null;
+            List<VipReconcile.Slot> result=new ArrayList<>(); Set<String> names=new HashSet<>();
+            for (var value : slots.getAsJsonArray()) {
+                if (!value.isJsonObject()) return null;
+                var entry=value.getAsJsonObject(); String name=field(entry,"slot"), status=field(entry,"status");
+                var id=entry.get("worldId");
+                if (!validSlot(name) || !names.add(name) || !Set.of("online","starting","sleeping","offline").contains(status)
+                        || id==null || !(id.isJsonNull() || id.isJsonPrimitive() && id.getAsJsonPrimitive().isString())) return null;
+                String worldId=id.isJsonNull() ? null : id.getAsString();
+                if (("online".equals(status) || "starting".equals(status)) && (worldId==null || worldId.isBlank())) return null;
+                result.add(new VipReconcile.Slot(name,status,worldId));
+            }
+            return List.copyOf(result);
+        } catch (RuntimeException e) { return null; }
+    }
+    public List<VipReconcile.Slot> slots() {
+        try { var response=client.send(request("/vip/status", 5).GET().build(), HttpResponse.BodyHandlers.ofString()); return parseSlots(response.statusCode(),response.body()); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+        catch (Exception e) { return null; }
     }
     public static Result parseStop(int code, String body) { return new Result(code >= 200 && code < 300 ? Outcome.STOPPED : Outcome.ERROR, null); }
     private static boolean validSlot(String slot) { return slot != null && slot.matches("vipworld-[1-9][0-9]*"); }

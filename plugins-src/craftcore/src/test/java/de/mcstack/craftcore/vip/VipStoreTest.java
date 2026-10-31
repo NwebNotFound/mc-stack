@@ -21,7 +21,7 @@ class VipStoreTest {
 
     @Test void sqlConstantsHaveExpectedParameters() throws Exception {
         Map<String, Integer> expected = Map.of("COUNT_WORLDS", 1, "INSERT_WORLD", 5, "LIST_WORLDS", 1,
-                "RENAME_WORLD", 3, "SET_STATUS", 3, "SET_RUNNING", 3, "INSERT_RUN", 3, "SET_STOPPED", 1, "STOP_RUNS", 2);
+                "RENAME_WORLD", 3, "SET_STATUS", 3, "SET_RUNNING", 3, "INSERT_RUN", 3, "SET_STOPPED", 1, "STOP_RUNS", 2, "STOP_IDLE_RUNS", 2);
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;
@@ -69,4 +69,18 @@ class VipStoreTest {
             }
         }
     }
+    @Test void idleStopFreesSlotAndClosesOpenRunsAtClockTime() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(); store.create(owner,"world","normal");
+            String id=store.list(owner).get(0).id(); store.status(id,"starting","vipworld-1"); store.running(id,"vipworld-1");
+            store.idleStopped(id);
+            var world=store.find(owner,"world").orElseThrow(); assertEquals("stopped",world.status()); assertNull(world.slot());
+            try (Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT stopped_at,stop_reason FROM vip_world_runs")) {
+                assertTrue(r.next()); assertEquals(EPOCH,r.getLong(1)); assertEquals("idle",r.getString(2));
+            }
+        }
+    }
+
 }

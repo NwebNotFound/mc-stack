@@ -17,6 +17,8 @@ public final class VipStore {
     static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=?";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
+    static final String STOP_IDLE_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='idle' WHERE world_id=? AND stopped_at IS NULL";
+
     private final ConnectionSource source;
     private final Clock clock;
     public VipStore(ConnectionSource source) { this(source, Clock.systemUTC()); }
@@ -52,11 +54,13 @@ public final class VipStore {
             c.commit();
         } catch(SQLException e) { c.rollback(); throw e; } }
     }
-    public void stopped(String id) throws SQLException {
+    public void stopped(String id) throws SQLException { stop(id,STOP_RUNS); }
+    public void idleStopped(String id) throws SQLException { stop(id,STOP_IDLE_RUNS); }
+    private void stop(String id, String sql) throws SQLException {
         long now=clock.millis();
         try (Connection c=source.open()) { c.setAutoCommit(false); try {
             try (PreparedStatement s=c.prepareStatement(SET_STOPPED)) { s.setString(1,id); s.executeUpdate(); }
-            try (PreparedStatement s=c.prepareStatement(STOP_RUNS)) { s.setLong(1,now); s.setString(2,id); s.executeUpdate(); }
+            try (PreparedStatement s=c.prepareStatement(sql)) { s.setLong(1,now); s.setString(2,id); s.executeUpdate(); }
             c.commit();
         } catch(SQLException e) { c.rollback(); throw e; } }
     }
