@@ -31,6 +31,7 @@ world*/
 # plugin data folders (keep only top-level plugin config yml)
 config/*-plugins/*/
 *.jar
+!plugins-src/craftcore/libs/VaultAPI-1.7.jar
 !**/gradle/wrapper/*.jar
 # build
 **/build/

@@ -101,6 +101,8 @@ class SellTransactionTest {
       c.setAutoCommit(false);
       assertEquals(1,SellTransaction.queueRefunds(c,"player")); c.commit();
       assertEquals(1,SellTransaction.queueRefunds(c,"player")); c.commit();
+      SellTransaction.refundOwed(c,"refund","player","serialized",4);
+      assertEquals(1,SellTransaction.queueRefunds(c,"player")); c.commit();
       try(ResultSet r=s.executeQuery("SELECT p.status,d.item_nbt,d.amount,d.status FROM sell_pending p JOIN pending_deliveries d ON d.id=p.idem_key")) {
         assertTrue(r.next()); assertEquals("DELIVERED",r.getString(1)); assertEquals("serialized",r.getString(2)); assertEquals(4,r.getInt(3)); assertEquals("offen",r.getString(4)); assertFalse(r.next());
       }

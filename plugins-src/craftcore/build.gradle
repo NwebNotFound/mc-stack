@@ -2,11 +2,19 @@ plugins { id 'java' }
 java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
 repositories {
     mavenCentral()
-    maven { url = 'https://jitpack.io' }
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
 }
 def serverLibs = fileTree(dir: '../../data/survival/libraries', include: '**/*.jar')
-def vaultJar = file('../../config/lobby-plugins/Vault-1.7.3.jar')
+def vaultJar = file('libs/VaultAPI-1.7.jar')
+def vaultSha256 = '47f6a400a8ab22012e6a320f7bfc63621ce4a246e1c60502ff7fc91d532d2601'
+tasks.register('verifyVaultApi') {
+    inputs.file(vaultJar)
+    doLast {
+        def digest = java.security.MessageDigest.getInstance('SHA-256').digest(vaultJar.bytes).encodeHex().toString()
+        if (digest != vaultSha256) throw new GradleException('VaultAPI-1.7.jar SHA-256 mismatch')
+    }
+}
+tasks.withType(JavaCompile).configureEach { dependsOn tasks.named('verifyVaultApi') }
 dependencies {
     if (!serverLibs.files.isEmpty()) {
         compileOnly serverLibs
@@ -15,13 +23,8 @@ dependencies {
         compileOnly 'io.papermc.paper:paper-api:26.3.build.231-stable'
         testImplementation 'io.papermc.paper:paper-api:26.3.build.231-stable'
     }
-    if (vaultJar.exists() && vaultJar.length() > 0) {
-        compileOnly files(vaultJar)
-        testImplementation files(vaultJar)
-    } else {
-        compileOnly('com.github.MilkBowl:VaultAPI:1.7') { transitive = false }
-        testImplementation('com.github.MilkBowl:VaultAPI:1.7') { transitive = false }
-    }
+    compileOnly files(vaultJar)
+    testImplementation files(vaultJar)
     implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.6'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
