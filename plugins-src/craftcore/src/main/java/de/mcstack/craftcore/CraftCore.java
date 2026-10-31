@@ -97,13 +97,19 @@ public final class CraftCore extends JavaPlugin implements Listener {
       InviteRewards.start(this,SpawnRoute.isSurvival(server));
       tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");exec(c,"CREATE OR REPLACE SQL SECURITY DEFINER VIEW v_rcon_purchase_result AS SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response FROM rcon_purchases");TestRun.prepare(c);return null;});
       tx(c->{BankBuy.migrate(c);return null;});
-      try { try (Connection grant=connection()) { if(!PurchaseViewGrant.apply(grant)) getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich"); if(!PurchaseViewGrant.applyBank(grant)) getLogger().warning("GRANT bank_buy_orders fuer creepy_ro nicht moeglich"); } }
-      catch(Exception ex) { getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
+      boolean canGrant;
+      try (Connection grant=connection()) { canGrant=ReadGrants.canGrant(grant); }
+      catch(Exception ex) { canGrant=false; }
+      if (!canGrant) getLogger().info("creepy_ro-Grants uebersprungen (kein GRANT-Recht); bitte scripts/creepy-ro-grants.sql als craft_admin ausfuehren");
+      if (canGrant) {
+        try { try (Connection grant=connection()) { if(!PurchaseViewGrant.apply(grant)) getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich"); if(!PurchaseViewGrant.applyBank(grant)) getLogger().warning("GRANT bank_buy_orders fuer creepy_ro nicht moeglich"); } }
+        catch(Exception ex) { getLogger().warning("GRANT v_rcon_purchase_result fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
+      }
       Deliveries.start(this);
       SaleNotices.start(this);
       WebsiteStats.start(this);
       tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
-      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","player_deaths","deaths_by")) {
+      if (canGrant) for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","player_deaths","deaths_by")) {
         try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
         catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       }
