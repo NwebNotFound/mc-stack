@@ -1,275 +1,299 @@
-{
-  "source": "bot/*.py",
-  "commands": [
-    {
-      "name": "/setup",
-      "args": "",
-      "description": "Anleitung zum Einstieg per DM",
-      "group": "Discord",
-      "rank": "Jeder",
-      "server": "discord",
-      "status": "live",
-      "example": "/setup"
-    },
-    {
-      "name": "/link",
-      "args": "[mc_name]",
-      "description": "Minecraft-Konto verknüpfen und auf die Whitelist kommen, Schritt für Schritt per DM",
-      "group": "Discord",
-      "rank": "Jeder",
-      "server": "discord",
-      "status": "live",
-      "example": "/link NwebNotFound"
-    },
-    {
-      "name": "/verify",
-      "args": "<code>",
-      "description": "Code vom Kick-Bildschirm eingeben (geht auch per DM)",
-      "group": "Discord",
-      "rank": "Jeder",
-      "server": "discord",
-      "status": "live",
-      "example": "/verify 123456"
-    },
-    {
-      "name": "/menu",
-      "args": "",
-      "description": "Alle Funktionen von Creepy mit Buttons",
-      "group": "Allgemein",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/menu"
-    },
-    {
-      "name": "/hilfe",
-      "args": "",
-      "description": "Hilfe und Menü mit Buttons",
-      "group": "Allgemein",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/hilfe"
-    },
-    {
-      "name": "/status",
-      "args": "",
-      "description": "Ist der Server online und wer spielt gerade?",
-      "group": "Allgemein",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/status"
-    },
-    {
-      "name": "/stats",
-      "args": "[spieler] [user]",
-      "description": "Survival-Statistiken als Karte, deine oder die von jemand anderem",
-      "group": "Allgemein",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/stats NwebNotFound"
-    },
-    {
-      "name": "/invite",
-      "args": "",
-      "description": "Persönlichen Einladungslink für einen Freund erstellen (max. 2 offen, 24h gültig)",
-      "group": "Discord",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/invite"
-    },
-    {
-      "name": "/voice name",
-      "args": "[name]",
-      "description": "Deinen Temp-Voice-Kanal umbenennen",
-      "group": "Discord",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/voice name"
-    },
-    {
-      "name": "/voice limit",
-      "args": "[anzahl]",
-      "description": "Wie viele in deinen Kanal dürfen",
-      "group": "Discord",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/voice limit 4"
-    },
-    {
-      "name": "/voice lock",
-      "args": "",
-      "description": "Deinen Kanal für neue Leute sperren",
-      "group": "Discord",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/voice lock"
-    },
-    {
-      "name": "/voice unlock",
-      "args": "",
-      "description": "Deinen Kanal wieder öffnen",
-      "group": "Discord",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/voice unlock"
-    },
-    {
-      "name": "/markt",
-      "args": "[item]",
-      "description": "Servermarkt im Börsenstil: Gewinner, Verlierer, Kurscharts",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/markt diamond"
-    },
-    {
-      "name": "/ah",
-      "args": "[ansicht] [sortierung] [suche]",
-      "description": "Auktionen ansehen, bieten oder sofort kaufen",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/ah"
-    },
-    {
-      "name": "/shop",
-      "args": "[spieler] [suche]",
-      "description": "Shop eines Spielers ansehen und per Discord kaufen",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/shop NwebNotFound"
-    },
-    {
-      "name": "/shops",
-      "args": "",
-      "description": "Alle Spielershops auf einen Blick",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/shops"
-    },
-    {
-      "name": "/alarm add",
-      "args": "[item] [max_preis] [min_menge]",
-      "description": "DM bekommen, wenn ein Item billig angeboten wird",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/alarm add diamond 50"
-    },
-    {
-      "name": "/alarm list",
-      "args": "",
-      "description": "Deine Preisalarme ansehen und verwalten",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/alarm list"
-    },
-    {
-      "name": "/alarm remove",
-      "args": "<alarm>",
-      "description": "Preisalarm löschen",
-      "group": "Wirtschaft",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/alarm remove"
-    },
-    {
-      "name": "/leaderboard parkour",
-      "args": "[kurs]",
-      "description": "Parkour-Bestenliste pro Kurs, mit deinem Platz",
-      "group": "Minispiele",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/leaderboard parkour"
-    },
-    {
-      "name": "/leaderboard pvp",
-      "args": "",
-      "description": "PvP-Bestenliste: Siege, Niederlagen, Winrate",
-      "group": "Minispiele",
-      "rank": "Spieler",
-      "server": "discord",
-      "status": "live",
-      "example": "/leaderboard pvp"
-    },
-    {
-      "name": "/event",
-      "args": "",
-      "description": "Event ankündigen (Formular)",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/event"
-    },
-    {
-      "name": "/recap preview",
-      "args": "",
-      "description": "Vorschau des Wochen-Recaps",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/recap preview"
-    },
-    {
-      "name": "/whitelist add",
-      "args": "[mc_name]",
-      "description": "Spieler auf die Whitelist setzen",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/whitelist add"
-    },
-    {
-      "name": "/whitelist remove",
-      "args": "[mc_name]",
-      "description": "Spieler von der Whitelist nehmen",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/whitelist remove"
-    },
-    {
-      "name": "/restart survival",
-      "args": "",
-      "description": "Survival neu starten",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/restart survival"
-    },
-    {
-      "name": "/backup",
-      "args": "",
-      "description": "Backup von Lobby und Survival",
-      "group": "Admin",
-      "rank": "Admin",
-      "server": "discord",
-      "status": "live",
-      "example": "/backup"
-    }
-  ]
-}
+[
+  {
+    "name": "setup",
+    "aliases": [],
+    "args": "",
+    "description": "Anleitung zum Einstieg per DM",
+    "example": "/setup",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "link",
+    "aliases": [],
+    "args": "[mc_name]",
+    "description": "Minecraft-Konto verknüpfen und auf die Whitelist kommen, Schritt für Schritt per DM",
+    "example": "/link NwebNotFound",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "verify",
+    "aliases": [],
+    "args": "<code>",
+    "description": "Code vom Kick-Bildschirm eingeben (geht auch per DM)",
+    "example": "/verify 123456",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "menu",
+    "aliases": [],
+    "args": "",
+    "description": "Alle Funktionen von Creepy mit Buttons",
+    "example": "/menu",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Allgemein"
+  },
+  {
+    "name": "hilfe",
+    "aliases": [],
+    "args": "",
+    "description": "Hilfe und Menü mit Buttons",
+    "example": "/hilfe",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Allgemein"
+  },
+  {
+    "name": "status",
+    "aliases": [],
+    "args": "",
+    "description": "Ist der Server online und wer spielt gerade?",
+    "example": "/status",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Allgemein"
+  },
+  {
+    "name": "stats",
+    "aliases": [],
+    "args": "[spieler] [user]",
+    "description": "Survival-Statistiken als Karte, deine oder die von jemand anderem",
+    "example": "/stats NwebNotFound",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Allgemein"
+  },
+  {
+    "name": "invite",
+    "aliases": [],
+    "args": "",
+    "description": "Persönlichen Einladungslink für einen Freund erstellen (max. 2 offen, 24h gültig)",
+    "example": "/invite",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "voice name",
+    "aliases": [],
+    "args": "[name]",
+    "description": "Deinen Temp-Voice-Kanal umbenennen",
+    "example": "/voice name",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "voice limit",
+    "aliases": [],
+    "args": "[anzahl]",
+    "description": "Wie viele in deinen Kanal dürfen",
+    "example": "/voice limit 4",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "voice lock",
+    "aliases": [],
+    "args": "",
+    "description": "Deinen Kanal für neue Leute sperren",
+    "example": "/voice lock",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "voice unlock",
+    "aliases": [],
+    "args": "",
+    "description": "Deinen Kanal wieder öffnen",
+    "example": "/voice unlock",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Discord"
+  },
+  {
+    "name": "markt",
+    "aliases": [],
+    "args": "[item]",
+    "description": "Servermarkt im Börsenstil: Gewinner, Verlierer, Kurscharts",
+    "example": "/markt diamond",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "ah",
+    "aliases": [],
+    "args": "[ansicht] [sortierung] [suche]",
+    "description": "Auktionen ansehen, bieten oder sofort kaufen",
+    "example": "/ah",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "shop",
+    "aliases": [],
+    "args": "[spieler] [suche]",
+    "description": "Shop eines Spielers ansehen und per Discord kaufen",
+    "example": "/shop NwebNotFound",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "shops",
+    "aliases": [],
+    "args": "",
+    "description": "Alle Spielershops auf einen Blick",
+    "example": "/shops",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "alarm add",
+    "aliases": [],
+    "args": "[item] [max_preis] [min_menge]",
+    "description": "DM bekommen, wenn ein Item billig angeboten wird",
+    "example": "/alarm add diamond 50",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "alarm list",
+    "aliases": [],
+    "args": "",
+    "description": "Deine Preisalarme ansehen und verwalten",
+    "example": "/alarm list",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "alarm remove",
+    "aliases": [],
+    "args": "<alarm>",
+    "description": "Preisalarm löschen",
+    "example": "/alarm remove",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Wirtschaft"
+  },
+  {
+    "name": "leaderboard parkour",
+    "aliases": [],
+    "args": "[kurs]",
+    "description": "Parkour-Bestenliste pro Kurs, mit deinem Platz",
+    "example": "/leaderboard parkour",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Minispiele"
+  },
+  {
+    "name": "leaderboard pvp",
+    "aliases": [],
+    "args": "",
+    "description": "PvP-Bestenliste: Siege, Niederlagen, Winrate",
+    "example": "/leaderboard pvp",
+    "rank": "Spieler",
+    "server": "discord",
+    "status": "live",
+    "group": "Minispiele"
+  },
+  {
+    "name": "event",
+    "aliases": [],
+    "args": "",
+    "description": "Event ankündigen (Formular)",
+    "example": "/event",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  },
+  {
+    "name": "recap preview",
+    "aliases": [],
+    "args": "",
+    "description": "Vorschau des Wochen-Recaps",
+    "example": "/recap preview",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  },
+  {
+    "name": "whitelist add",
+    "aliases": [],
+    "args": "[mc_name]",
+    "description": "Spieler auf die Whitelist setzen",
+    "example": "/whitelist add",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  },
+  {
+    "name": "whitelist remove",
+    "aliases": [],
+    "args": "[mc_name]",
+    "description": "Spieler von der Whitelist nehmen",
+    "example": "/whitelist remove",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  },
+  {
+    "name": "restart survival",
+    "aliases": [],
+    "args": "",
+    "description": "Survival neu starten",
+    "example": "/restart survival",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  },
+  {
+    "name": "backup",
+    "aliases": [],
+    "args": "",
+    "description": "Backup von Lobby und Survival",
+    "example": "/backup",
+    "rank": "Admin",
+    "server": "discord",
+    "status": "live",
+    "group": "Admin"
+  }
+]
