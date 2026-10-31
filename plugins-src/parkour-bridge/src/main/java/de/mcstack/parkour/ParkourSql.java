@@ -5,6 +5,15 @@ import java.util.*;
 /** SQL und reine Logik fuer parkour_times (Bestzeit pro Spieler und Kurs). */
 final class ParkourSql {
  private ParkourSql() {}
+ @FunctionalInterface interface FloorLoader { Double load() throws java.sql.SQLException; }
+ static final class FloorCache {
+  private final Map<String, Optional<Double>> values=new HashMap<>();
+  Double get(String name, FloorLoader loader) throws java.sql.SQLException {
+   if(!values.containsKey(name)) values.put(name,Optional.ofNullable(loader.load()));
+   return values.get(name).orElse(null);
+  }
+  void clear() { values.clear(); }
+ }
  static final String CREATE = "CREATE TABLE IF NOT EXISTS parkour_times (uuid CHAR(36) NOT NULL, course VARCHAR(64) NOT NULL, name VARCHAR(16) NOT NULL, best_ms BIGINT NOT NULL, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), PRIMARY KEY (uuid, course))";
  /** Kurs fuer Altzeilen ohne Kurs (Tabelle war bisher pro Spieler). */
  static final String LEGACY_COURSE = "lobby";
@@ -22,11 +31,21 @@ final class ParkourSql {
  /** Kurs-ID aus Lobby-Parkour: kleingeschrieben, getrimmt, max. 64 Zeichen; null bei leerem Namen. */
  static String course(String parkourName) {
   if (parkourName == null || parkourName.isBlank()) return null;
-  String c = parkourName.trim().toLowerCase(Locale.ROOT);
+  String c = parkourName.toLowerCase(Locale.ROOT).replaceAll("[\\s-]+", "_").replaceAll("^_+|_+$", "");
+  if (c.isEmpty()) return null;
   return c.length() > 64 ? c.substring(0, 64) : c;
  }
- record Entry(String name, long ms) {}
- static String board(String course, List<Entry> entries) {
+ /** Y aus Lobby-Parkour-Ort "world,x,y,z,yaw,pitch"; null wenn unlesbar. */
+ static Double locY(String loc) {
+  if (loc == null) return null; String[] p = loc.split(",");
+  try { return p.length >= 4 ? Double.parseDouble(p[2].trim()) : null; } catch (NumberFormatException e) { return null; }
+ }
+ /** Rueckholgrenze: tiefster Kurspunkt minus Abstand (mind. 1); null ohne Kurspunkte. */
+ static Double floor(List<Double> ys, double distance) {
+  Double min = null; for (Double y : ys) if (y != null && (min == null || y < min)) min = y;
+  return min == null ? null : min - Math.max(1, distance);
+ }
+ record Entry(String name, long ms) {} static String board(String course, List<Entry> entries) {
   StringBuilder t = new StringBuilder("Parkour ").append(course).append(" - Top 10");
   for (int i = 0; i < Math.min(10, entries.size()); i++) t.append("\n").append(i + 1).append(". ").append(entries.get(i).name()).append("  ").append(TimeFormat.format(entries.get(i).ms()));
   if (entries.isEmpty()) t.append("\nNoch keine Bestzeiten");

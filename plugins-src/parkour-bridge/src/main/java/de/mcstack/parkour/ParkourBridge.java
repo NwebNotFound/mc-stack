@@ -11,15 +11,18 @@ import org.bukkit.*;
 import org.bukkit.command.*;
 import org.bukkit.entity.*;
 import org.bukkit.event.*;
+import org.bukkit.block.Block;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.util.Vector;
 
 public final class ParkourBridge extends JavaPlugin implements Listener {
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private final Map<UUID, Candidate> candidates=new HashMap<>();
+ private final ParkourSql.FloorCache floors=new ParkourSql.FloorCache();
  private String password;
  private record Candidate(ParkourSession session, String course, long ms) {}
 
@@ -36,7 +39,8 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
  }
- @Override public void onDisable() { worker.shutdown(); try { if(!worker.awaitTermination(10,TimeUnit.SECONDS)) getLogger().warning("Ausstehende Parkour-Datenbankaufgaben nicht abgeschlossen"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); } }
+ @Override public void reloadConfig() { super.reloadConfig(); floors.clear(); }
+ @Override public void onDisable() { floors.clear(); worker.shutdown(); try { if(!worker.awaitTermination(10,TimeUnit.SECONDS)) getLogger().warning("Ausstehende Parkour-Datenbankaufgaben nicht abgeschlossen"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); } }
  private Query query() { return new Query(ParkoursDatabase.getConnection()); }
  private Location checkpoint(ParkourSession s) throws SQLException {
   Query q=query(); Integer id=q.getParkourIdFromName(s.getParkourName()); if(id==null) return null;
@@ -48,17 +52,44 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try { Location l=checkpoint(s); if(l==null) { p.sendMessage("Parkour: Checkpoint nicht gefunden."); return; } l.setYaw(s.getLastCheckpointYaw()); l.setPitch(s.getLastCheckpointPitch()); p.setFallDistance(0); p.setVelocity(new Vector()); p.teleport(l); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
+ /** Kursboden: tiefster Punkt (Start, Checkpoints, Ziel) minus fall-distance-below-floor. Erst darunter wird zurueckgesetzt. */
+ private Double floorY(String parkourName) throws SQLException {
+  return floors.get(parkourName,()->loadFloorY(parkourName));
+ }
+ private Double loadFloorY(String parkourName) throws SQLException {
+  List<Double> ys=new ArrayList<>(); Connection c=ParkoursDatabase.getConnection();
+  try(PreparedStatement p=c.prepareStatement("SELECT start_cp,end_cp FROM parkours WHERE pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) { ys.add(ParkourSql.locY(r.getString(1))); ys.add(ParkourSql.locY(r.getString(2))); } } }
+  try(PreparedStatement p=c.prepareStatement("SELECT c.location FROM checkpoints c JOIN parkours k ON k.id=c.parkour_id WHERE k.pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) ys.add(ParkourSql.locY(r.getString(1))); } }
+  return ParkourSql.floor(ys,getConfig().getDouble("fall-distance-below-floor",getConfig().getDouble("fall-distance-below-checkpoint",4)));
+ }
+ /** Hoechster Y-Wert seit dem letzten Bodenkontakt, pro Spieler im Lauf. */
+ private final Map<UUID, Double> peaks=new HashMap<>();
+ private void reset(Player p,ParkourSession s,PlayerMoveEvent e) {
+  peaks.remove(p.getUniqueId());
+  try { Location cp=checkpoint(s); if(cp==null) { p.sendMessage("Parkour: Checkpoint nicht gefunden."); return; } cp.setYaw(s.getLastCheckpointYaw()); cp.setPitch(s.getLastCheckpointPitch()); p.setFallDistance(0); p.setVelocity(new Vector()); if(e!=null) e.setTo(cp); else p.teleport(cp); }
+  catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
+ }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void move(PlayerMoveEvent e) {
-  if(e.getTo()==null || e.getFrom().getY()==e.getTo().getY()) return;
-  ParkourSession s=ParkourSessionManager.getSession(e.getPlayer().getUniqueId()); if(s==null) return;
-  try { Location cp=checkpoint(s); if(cp!=null && cp.getWorld().equals(e.getTo().getWorld()) && e.getTo().getY()<cp.getY()-Math.max(1,getConfig().getDouble("fall-distance-below-checkpoint",4))) { e.setTo(cp); e.getPlayer().setFallDistance(0); e.getPlayer().setVelocity(new Vector()); } }
+  Location to=e.getTo(); if(to==null || e.getFrom().getY()==to.getY()) return;
+  Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) { peaks.remove(p.getUniqueId()); return; }
+  // Wasser beruehrt -> zurueck zum Checkpoint
+  if(p.isInWater() || to.getBlock().getType()==Material.WATER) { reset(p,s,e); return; }
+  // Echter Fallschaden (vanilla): Fallhoehe > 3 und Landeblock daempft nicht (Schleim, Heu, Honig, Bett, Pulverschnee, Wasser ...)
+  boolean climbable=Tag.CLIMBABLE.isTagged(e.getFrom().getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.getBlock().getType())
+   || Tag.CLIMBABLE.isTagged(e.getFrom().clone().add(0,1,0).getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.clone().add(0,1,0).getBlock().getType());
+  if(climbable || !p.isOnGround()) { Double peak=ParkourRules.nextPeak(peaks.get(p.getUniqueId()),e.getFrom().getY(),to.getY(),false,climbable); if(peak==null) peaks.remove(p.getUniqueId()); else peaks.put(p.getUniqueId(),peak); }
+  else { Double peak=peaks.remove(p.getUniqueId()); if(peak!=null) { Block b=to.clone().subtract(0,0.2,0).getBlock(); if(b.getType().isAir()) b=to.clone().subtract(0,1.2,0).getBlock();
+   if(ParkourRules.fallResets(peak-to.getY(),b.getType().getKey().getKey(),Tag.BEDS.isTagged(b.getType()))) { reset(p,s,e); return; } } }
+  // Fallback: weit unter dem tiefsten Kurspunkt
+  try { Location cp=checkpoint(s); Double floor=floorY(s.getParkourName()); if(cp!=null && floor!=null && cp.getWorld().equals(to.getWorld()) && to.getY()<floor) reset(p,s,e); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void damage(EntityDamageEvent e) {
-  if(!(e.getEntity() instanceof Player p) || (e.getCause()!=EntityDamageEvent.DamageCause.VOID && e.getCause()!=EntityDamageEvent.DamageCause.FALL)) return;
-  ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s!=null) { e.setCancelled(true); back(p,s); }
- }
- @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
+  if(!(e.getEntity() instanceof Player p)) return;
+  ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) return;
+  if(e.getCause()==EntityDamageEvent.DamageCause.VOID) { e.setCancelled(true); reset(p,s,null); return; }
+  if(e.getCause()==EntityDamageEvent.DamageCause.FALL) { e.setCancelled(true); Block b=p.getLocation().subtract(0,0.2,0).getBlock(); if(!ParkourRules.softLanding(b.getType().getKey().getKey(),Tag.BEDS.isTagged(b.getType()))) reset(p,s,null); }
+ } @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
   if(e.getAction()!=Action.PHYSICAL || e.getClickedBlock()==null) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null || s.getCompletedCheckpoints()!=s.getMaxCheckpoints()) return;
   try { Location end=query().getEndLocation(s.getParkourName()); if(end!=null && end.getBlock().equals(e.getClickedBlock())) { String course=ParkourSql.course(s.getParkourName()); if(course!=null) candidates.put(p.getUniqueId(),new Candidate(s,course,s.getElapsedTimeMillis())); } }
@@ -69,7 +100,9 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   Player p=e.getPlayer(); Candidate candidate=candidates.remove(p.getUniqueId());
   if(candidate!=null && ParkourSessionManager.getSession(p.getUniqueId())!=candidate.session() && candidate.ms()>0) save(p.getUniqueId(),candidate.course(),p.getName(),candidate.ms());
  }
- @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); }
+ @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseCommand(PlayerCommandPreprocessEvent e) { if(ParkourRules.isCourseCommand(e.getMessage())) floors.clear(); }
+ @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseConsoleCommand(ServerCommandEvent e) { if(ParkourRules.isCourseCommand(e.getCommand())) floors.clear(); }
+ @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); peaks.remove(e.getPlayer().getUniqueId()); }
  private void save(UUID id,String course,String name,long ms) { worker.execute(()->{
   try(Connection c=db(); PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,course); s.setString(3,name); s.setLong(4,ms); s.executeUpdate(); refresh(); }
   catch(SQLException ex) { getLogger().log(Level.SEVERE,"Parkour-Bestzeit konnte nicht gespeichert werden fuer "+id,ex); }

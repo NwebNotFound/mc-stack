@@ -4,6 +4,17 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 class ParkourSqlTest {
  @Test void courseIdIsLowercase() { assertEquals("test", ParkourSql.course(" Test ")); assertEquals("lobby_run", ParkourSql.course("LOBBY_RUN")); assertNull(ParkourSql.course(" ")); assertNull(ParkourSql.course(null)); assertEquals(64, ParkourSql.course("x".repeat(80)).length()); }
+ @Test void courseSlugUsesConsistentSeparators() {
+  assertEquals("cave_rush",ParkourSql.course("Cave Rush")); assertEquals("cave_rush",ParkourSql.course("cave  rush"));
+  assertEquals("cave_rush",ParkourSql.course("-Cave-Rush-")); assertEquals("kurs1",ParkourSql.course("kurs1")); assertNull(ParkourSql.course("---"));
+ }
+ @Test void floorCacheLoadsOncePerCourseAndReloadsAfterClear() throws Exception {
+  ParkourSql.FloorCache cache=new ParkourSql.FloorCache(); int[] calls={0};
+  ParkourSql.FloorLoader load=()->{ calls[0]++; return -52.0; };
+  assertEquals(-52.0,cache.get("a",load)); assertEquals(-52.0,cache.get("a",load)); assertEquals(1,calls[0]);
+  cache.get("b",load); assertEquals(2,calls[0]); cache.clear(); cache.get("a",load); assertEquals(3,calls[0]);
+  assertNull(cache.get("missing",()->{ calls[0]++; return null; })); assertNull(cache.get("missing",load)); assertEquals(4,calls[0]);
+ }
  @Test void migrationRekeysOldTableOnlyOnce() {
   assertEquals(List.of(ParkourSql.REKEY), ParkourSql.migration(List.of("uuid")));
   assertEquals(List.of(ParkourSql.REKEY), ParkourSql.migration(List.of()));
@@ -25,5 +36,12 @@ class ParkourSqlTest {
   Map<String, List<ParkourSql.Entry>> m = new TreeMap<>(); m.put("a", List.of(new ParkourSql.Entry("x", 1))); m.put("b", List.of());
   assertEquals("Parkour a - Top 10\n1. x  0:00.001\n\nParkour b - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
   assertEquals("Parkour - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(Map.of()));
+ }
+ @Test void floorIsLowestCoursePointMinusDistance() {
+  assertEquals(-48.0, ParkourSql.locY("world,107.0,-48.0,95.0,0.0,0.0"));
+  assertNull(ParkourSql.locY(null)); assertNull(ParkourSql.locY("kaputt")); assertNull(ParkourSql.locY("w,1,x,3"));
+  assertEquals(-52.0, ParkourSql.floor(Arrays.asList(-32.0, -48.0, -43.0, null), 4));
+  assertEquals(-33.0, ParkourSql.floor(List.of(-32.0), 0));
+  assertNull(ParkourSql.floor(List.of(), 4));
  }
 }

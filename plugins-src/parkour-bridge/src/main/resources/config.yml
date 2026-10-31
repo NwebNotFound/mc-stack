@@ -1,3 +1,4 @@
-# Rueckkehr, wenn der Spieler diese Anzahl Bloecke unter dem letzten Checkpoint ist.
-fall-distance-below-checkpoint: 4.0
+# Rueckkehr zum letzten Checkpoint erst, wenn der Spieler so viele Bloecke unter dem tiefsten Kurspunkt
+# (Start, Checkpoints, Ziel) ist. Kurze Spruenge nach unten sind damit erlaubt.
+fall-distance-below-floor: 4.0
 # Mit /parkour setboard setzen. Koordinaten werden in dieser Datei gespeichert.
