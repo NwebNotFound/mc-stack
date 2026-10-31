@@ -17,7 +17,7 @@ Status: Plan, kein Code. Reihenfolge: Ränge ✓ → NPCs ✓ → **PvP** → VI
 
 ## Lebenszyklus (on demand)
 - Zustände: `offline` (deaktiviert per Config) · `sleeping` (aus, startbar) · `starting` · `online`.
-- Start: Sobald in der Lobby-Queue **2 Spieler gematcht** sind, startet Velocity den Server (Velocity-Plugin/CraftCore-Velocity-Modul → `docker start mc-stack-pvp-1` über einen kleinen Start-Hook, z. B. Docker-Socket-Proxy nur mit `start`/`stop`/`inspect`). Kaltstart erwartet **15–30 s**; Spieler sehen „PvP-Server startet …“ in der Actionbar, Queue bleibt erhalten.
+- Start: Sobald in der Lobby-Queue **2 Spieler gematcht** sind, startet Velocity den Server über einen kleinen **Host-Dienst** (lauscht nur auf `127.0.0.1`), der ausschließlich `start`, `stop` und `status` für den Container `mc-stack-pvp-1` kann. **Kein** allgemeiner Docker-Socket-Proxy und kein Docker-Socket in einem Container (Entscheidung Luna). Kaltstart erwartet **15–30 s**; Spieler sehen „PvP-Server startet …“ in der Actionbar, Queue bleibt erhalten.
 - Wenn online: Velocity verschiebt beide Spieler, Match startet.
 - Stopp: Server leer **und** niemand baut **und** keine Queue → nach Grace (Vorschlag 120 s) `stop` → `sleeping`.
 - Fehlschlag (Start > 60 s): Queue informieren, Spieler bleiben in der Lobby, Log + State `offline`.
@@ -90,6 +90,5 @@ CREATE TABLE pvp_matches (
 - Belohnungen (Coins/Vault) für Siege? Wenn ja, wie viel, und Schutz gegen Absprachen (Win-Trading)?
 - Ranked/Elo jetzt oder später?
 - Grace bis zum Stoppen (Vorschlag 120 s) ok?
-- Darf Velocity den Container über einen eingeschränkten Docker-Socket-Proxy starten (Sicherheitsabwägung), oder lieber ein kleiner Host-Dienst?
 - Zuschauer-Modus gewünscht?
 - Wer neben builder/admin darf Arenen/Kits bauen?
