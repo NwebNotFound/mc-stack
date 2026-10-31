@@ -767,6 +767,10 @@ async def maybe_push_history(session, token, now=None):
         await push_economy(session, token)
     except Exception as e:  # fail-soft: Economy darf History nie stoeren
         log.warning("economy_daily Push fehlgeschlagen (%s)", type(e).__name__)
+    try:
+        await push_ranks(session, token)
+    except Exception as e:  # fail-soft: Raenge duerfen History nie stoeren
+        log.warning("player_ranks Push fehlgeschlagen (%s)", type(e).__name__)
     return ok
 
 
@@ -815,6 +819,43 @@ async def push_economy(session, token):
     _econ["warned"] = False
     data = build_economy(*res)
     st, _ = await _post(session, token, {"economy_daily": data}, "Economy-Daily")
+    return st < 300
+
+
+RANKS_MAX = 500
+_ranks = {"warned": False}
+
+
+def build_ranks(cols, rows, limit=RANKS_MAX):
+    """v_player_rank -> [{uuid, name, rank, color, weight}], sortiert nach weight absteigend, dann Name."""
+    idx = {c: i for i, c in enumerate(cols)}
+    if "uuid" not in idx or "rank" not in idx:
+        return []
+    out = []
+    for r in rows:
+        g = lambda c: r[idx[c]] if c in idx else None
+        if not g("uuid") or not g("rank"):
+            continue
+        try:
+            w = int(g("weight") or 0)
+        except (TypeError, ValueError):
+            w = 0
+        out.append({"uuid": str(g("uuid")), "name": str(g("name") or ""), "rank": str(g("rank")),
+                    "color": str(g("color") or "&7"), "weight": w})
+    out.sort(key=lambda e: (-e["weight"], e["name"].lower()))
+    return out[:limit]
+
+
+async def push_ranks(session, token):
+    """player_ranks im 5-Minuten-Takt; fehlt v_player_rank -> einmal loggen, Key weglassen."""
+    res = await asyncio.to_thread(fetch_rows, "v_player_rank")
+    if not res:
+        if not _ranks["warned"]:
+            log.warning("v_player_rank nicht lesbar, player_ranks wird weggelassen")
+            _ranks["warned"] = True
+        return None
+    _ranks["warned"] = False
+    st, _ = await _post(session, token, {"player_ranks": build_ranks(*res)}, "Player-Ranks")
     return st < 300
 
 

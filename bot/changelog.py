@@ -39,11 +39,11 @@ COLOR = 0xFFAA00
 FOOTER = "Creepy \u00b7 Changelog"
 
 
-def render(date, items, table=None):
+def render(date, items, table=None, version=None):
     """Einheitliches Format fuer ALLE Changelog-Posts:
-    Titel "Update DD.MM.YYYY", Felder "<Bereich> \u00b7 <Art>", gleiche Farbe, gleicher Footer.
+    Titel "Update DD.MM.YYYY \u00b7 vX.Y" (Version optional), Felder "<Bereich> \u00b7 <Art>", gleiche Farbe, gleicher Footer.
     items: [{"area": "minecraft"|"discord", "type": "neu"|"verbessert"|"fix", "text": ...}]"""
-    e = discord.Embed(title=f"Update {date}", color=COLOR)
+    e = discord.Embed(title=f"Update {date}" + (f" \u00b7 v{version}" if version else ""), color=COLOR)
     for c in items:
         if _is_table(c.get("text")):
             table_fields(e, c["text"])
@@ -69,7 +69,7 @@ def render(date, items, table=None):
 
 def embed(entry):
     """Eintrag aus changelog.json; "area" pro Change optional (Default discord)."""
-    return render(entry["date"], [dict(c, area=c.get("area", "discord")) for c in entry["changes"]], entry.get("table"))
+    return render(entry["date"], [dict(c, area=c.get("area", "discord")) for c in entry["changes"]], entry.get("table"), entry.get("version"))
 
 
 def _is_table(text):
@@ -123,7 +123,7 @@ def mc_embed(entry):
     """Eintrag aus changelog-mc.json -> gleiches Format wie embed()."""
     items = [dict(c, area="minecraft") for c in entry.get("changes", [])]
     items += [{"area": "discord", "type": "neu", "text": t} for t in entry.get("discord", [])]
-    return render(entry["date"], items, entry.get("table"))
+    return render(entry["date"], items, entry.get("table"), entry.get("version"))
 
 
 async def post_mc(bot):

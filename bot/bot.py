@@ -28,7 +28,7 @@ log = logging.getLogger("bot")
 NAME = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 DATA = Path("/app/data")
 PENDING = Path("/link-pending")
-LP_HOST = os.getenv("LP_HOST", "lobby")  # LuckPerms laeuft nur auf der Lobby (H2-Speicher)
+LP_HOST = os.getenv("LP_HOST", "lobby")  # LuckPerms auf Lobby+Survival mit gemeinsamer MariaDB (luckperms); Sync schreibt ueber die Lobby
 BACKENDS = (os.getenv("LOBBY_HOST", "lobby"), os.getenv("SURVIVAL_HOST", "survival"))
 SERVER_HOSTS = {"lobby": BACKENDS[0], "survival": BACKENDS[1]}
 SYNC_SERVERS = tuple(x.strip().lower() for x in os.getenv("SYNC_SERVERS", "survival").split(",") if x.strip().lower() in SERVER_HOSTS)  # Chat-/Presence-Sync
@@ -256,7 +256,7 @@ class Bot(discord.Client):
         except Exception:
             log.exception("Leaderboard fehlgeschlagen")
         try:
-            hourly = time.time() - getattr(self, "lp_full", 0) > 3600
+            hourly = time.time() - getattr(self, "lp_full", 0) > int(os.getenv("LP_FULL_SYNC_SEC", "600") or 600)
             if hourly:
                 self.lp_full = time.time()
             await self.sync_lp(force=hourly)
@@ -616,20 +616,24 @@ class Bot(discord.Client):
         for stale in DATA.glob("leaderboard-message*.txt"):
             stale.unlink(missing_ok=True)
 
-    # ---------- Rollen-Sync Discord -> LuckPerms ----------
-    SYNC_GROUPS = {"Builder": "builder", "VIP": "vip"}
+    # ---------- Rollen-Sync Discord -> LuckPerms (Discord fuehrt) ----------
+    SYNC_GROUPS = {"Builder": "builder", "VIP": "vip", "MVP": "mvp"}  # Rollenname -> Gruppe (nur fuer ensure_sync_roles)
 
     async def ensure_sync_roles(self, guild):
-        colors = {"Builder": 0xE67E22, "VIP": 0xF1C40F}
-        for rname in self.SYNC_GROUPS:
-            if not self.find_role(guild, rname):
-                try:
-                    await guild.create_role(name=rname, color=discord.Color(colors[rname]), reason="Rollen-Sync LuckPerms")
-                    log.info("Rolle %s angelegt", rname)
-                except discord.HTTPException:
-                    log.exception("Rolle %s konnte nicht angelegt werden", rname)
+        colors = {"Builder": 0x2ECC71, "VIP": 0xF1C40F, "MVP": 0xE91E63}
+        ids = sync_role_ids()
+        for rname, g in self.SYNC_GROUPS.items():
+            if guild.get_role(ids.get(g, 0)) or self.find_role(guild, rname):
+                continue
+            try:
+                await guild.create_role(name=rname, color=discord.Color(colors[rname]), reason="Rollen-Sync LuckPerms")
+                log.info("Rolle %s angelegt", rname)
+            except discord.HTTPException:
+                log.exception("Rolle %s konnte nicht angelegt werden", rname)
 
     async def sync_lp(self, force=False):
+        """Discord-Rollen (VIP/MVP/Builder) -> LuckPerms per `lp user <uuid> parent add/remove`.
+        Nie parent set, nie /rank set, nie admin/default. force = voller Abgleich (Bot-Status wird ignoriert)."""
         guild = self.get_guild(int(self.cfg["GUILD_ID"]))
         if not guild:
             return
@@ -639,38 +643,53 @@ class Bot(discord.Client):
             done = json.loads(state_file.read_text())
         except Exception:
             done = {}
-        if force:
-            for g in self.SYNC_GROUPS.values():
-                try:
-                    await asyncio.to_thread(rcon, LP_HOST, f"lp creategroup {g}")
-                except Exception:
-                    pass
-        changed = False
-        for did, uuid in self.db.execute("SELECT discord_id, uuid FROM links WHERE state='active'").fetchall():
-            member = guild.get_member(did)
-            if member is None:
-                continue
-            want = sorted(g for r, g in self.SYNC_GROUPS.items() if (role := self.find_role(guild, r)) and role in member.roles)
-            have = done.get(uuid)
-            if have == want and not force:
+        ids = sync_role_ids()
+        links = {uuid: (did, name) for did, uuid, name in self.db.execute("SELECT discord_id, uuid, name FROM links WHERE state='active'").fetchall()}
+        top = await asyncio.to_thread(player_top_ranks) if force else {}
+        changed, lines = False, []
+        for uuid in sorted(set(links) | set(done)):
+            if uuid in links:
+                did, name = links[uuid]
+                member = guild.get_member(did)
+                if member is None:
+                    continue  # Austritt laeuft ueber on_member_remove -> reconcile -> Link weg -> naechster Lauf raeumt auf
+                want = wanted_groups({r.id for r in member.roles}, ids)
+            else:
+                did, name, want = None, uuid, []  # entknuepft oder Server verlassen: nur Bot-gesetzte Gruppen entfernen
+            prev = done.get(uuid)
+            have = None if force and uuid in links else prev
+            cmds = plan_lp(uuid, want, have, top.get(uuid.replace("-", "").lower()))
+            if not cmds and prev == want:
                 continue
             try:
-                # Nur hinzufuegen, was Discord vorgibt; entfernen nur, was der Bot selbst vorher gesetzt hat
-                for g in self.SYNC_GROUPS.values():
-                    if g in want and (force or have is None or g not in have):
-                        cmd = f"lp user {uuid} parent add {g}"
-                    elif have and g in have and g not in want:
-                        cmd = f"lp user {uuid} parent remove {g}"
-                    else:
-                        continue
+                for cmd in cmds:
                     await asyncio.to_thread(rcon, LP_HOST, cmd)
                     await asyncio.sleep(0.3)
-                done[uuid] = want
+                if want:
+                    done[uuid] = want
+                else:
+                    done.pop(uuid, None)
                 changed = True
+                ch = log_changes(cmds, prev)
+                if ch:
+                    who = f"<@{did}>" if did else "(nicht mehr verknüpft)"
+                    lines.append(f"\U0001F3F7\uFE0F Rang-Sync: {who} **{discord.utils.escape_markdown(str(name))}** → " + ", ".join(f"`{c}`" for c in ch))
             except Exception:
                 log.exception("LuckPerms-Sync für %s fehlgeschlagen", uuid)
         if changed or force:
             state_file.write_text(json.dumps(done))
+        await self.rank_log(guild, lines)
+
+    async def rank_log(self, guild, lines):
+        if not lines:
+            return
+        try:
+            import invites
+            ch = invites.channel_by(guild, "ADMIN_LOG_CHANNEL_ID", invites.ADMIN_LOG_NAME)
+            if ch:
+                await ch.send("\n".join(lines)[:1900], allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            log.warning("admin-log fuer Rang-Sync nicht beschreibbar")
 
     def find_role(self, guild, name):
         return discord.utils.find(lambda r: r.name.lower() == name.lower(), guild.roles)
@@ -1014,6 +1033,66 @@ class Bot(discord.Client):
             async with self.lock:
                 await self.reconcile()
 
+
+
+# ---------- Rang-Sync: reine Helfer (testbar ohne Discord) ----------
+SYNCABLE = ("vip", "mvp", "builder")  # admin/default fasst der Sync nie an
+
+
+def sync_role_ids():
+    """{gruppe: discord_role_id} aus ENV, Defaults = Rollen auf Nils' Server."""
+    defaults = {"vip": ("VIP_ROLE_ID", 1565044626736292021), "mvp": ("MVP_ROLE_ID", 1566125881540476948),
+                "builder": ("BUILDER_ROLE_ID", 1565044625511809127)}
+    out = {}
+    for g, (env, d) in defaults.items():
+        v = os.getenv(env, "").strip()
+        out[g] = int(v) if v.isdigit() else d
+    return out
+
+
+def wanted_groups(role_ids, ids):
+    return sorted(g for g, rid in ids.items() if g in SYNCABLE and rid in role_ids)
+
+
+def plan_lp(uuid, want, have, top=None):
+    """RCON-Befehle fuer einen Spieler. have=None -> unbekannt (voller Abgleich): alle gewollten adden,
+    alle nicht gewollten removen. Sonst nur Differenz. top = hoechster Rang aus v_player_rank (spart add, wenn schon da)."""
+    out = []
+    for g in SYNCABLE:
+        if g in want and (have is None or g not in have):
+            if have is None and top == g:
+                continue
+            out.append(f"lp user {uuid} parent add {g}")
+        elif g not in want and (have is None or g in have):
+            out.append(f"lp user {uuid} parent remove {g}")
+    assert all(" parent add " in c or " parent remove " in c for c in out)
+    return out
+
+
+def log_changes(cmds, prev):
+    """Nur echte Aenderungen gegenueber dem letzten Bot-Stand fuers admin-log (voller Abgleich spamt sonst)."""
+    out = []
+    for c in cmds:
+        op, g = c.split(" parent ", 1)[1].split()
+        if (op == "add" and (prev is None or g not in prev)) or (op == "remove" and prev and g in prev):
+            out.append(f"{op} {g}")
+    return out
+
+
+def player_top_ranks():
+    """{uuid ohne Bindestriche: rang} aus v_player_rank; {} wenn View fehlt."""
+    try:
+        import ingest
+        res = ingest.fetch_rows("v_player_rank")
+    except Exception:
+        return {}
+    if not res:
+        return {}
+    cols, rows = res
+    if "uuid" not in cols or "rank" not in cols:
+        return {}
+    iu, ir = cols.index("uuid"), cols.index("rank")
+    return {str(r[iu]).replace("-", "").lower(): str(r[ir]) for r in rows if r[iu]}
 
 LINK_ADDR = "mc.nwebnotfound.dev"
 

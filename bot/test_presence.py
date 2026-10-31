@@ -193,9 +193,6 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(ingest.INTERVAL if "INGEST_INTERVAL_SEC" in os.environ else 30, ingest.INTERVAL)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class EconomyDailyTest(unittest.TestCase):
     def test_build_economy(self):
@@ -227,3 +224,7 @@ class EconomyDailyTest(unittest.TestCase):
             self.assertEqual(len(cm.output), 1)
         asyncio.run(run())
         self.assertEqual(posted, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

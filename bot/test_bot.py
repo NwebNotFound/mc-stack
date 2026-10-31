@@ -161,7 +161,7 @@ class GuiV110Tests(unittest.IsolatedAsyncioTestCase):
 
     def test_changelog_latest(self):
         import json
-        self.assertEqual(json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))[-1]["version"], "1.13")
+        self.assertEqual(json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))[-1]["version"], "1.14")
 
 class InviteTests(unittest.TestCase):
     def test_limit_is_two(self):
@@ -215,7 +215,7 @@ class McChangelogTests(unittest.TestCase):
         import json, changelog
         data = json.loads((Path(__file__).parent.parent / "changelog-mc.json").read_text(encoding="utf-8")) if (Path(__file__).parent.parent / "changelog-mc.json").exists() else [{"version": "x", "date": "1.1.", "changes": [{"type": "neu", "text": "a" * 300}] * 8, "discord": ["d"]}]
         e = changelog.mc_embed(data[0])
-        self.assertTrue(e.title.startswith("Was ist neu"))
+        self.assertTrue(e.title.startswith("Update "))
         self.assertTrue(any(f.name.startswith("\u26CF") for f in e.fields))
         self.assertTrue(all(len(f.value) <= 1024 for f in e.fields))
         self.assertLessEqual(len(e), 6000)
