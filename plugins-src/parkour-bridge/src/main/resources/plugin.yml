@@ -4,6 +4,13 @@ main: de.mcstack.parkour.ParkourBridge
 api-version: '26.3'
 depend: [Lobby-Parkour]
 commands:
+  cc:
+    description: CraftCore administration
+    permission: craftcore.holo.admin
   parkour:
     description: Parkour verlassen oder Bestenliste platzieren
     usage: /parkour leave|setboard
+
+permissions:
+  craftcore.holo.admin:
+    default: op

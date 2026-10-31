@@ -8,6 +8,24 @@ class ParkourSqlTest {
   assertEquals("cave_rush",ParkourSql.course("Cave Rush")); assertEquals("cave_rush",ParkourSql.course("cave  rush"));
   assertEquals("cave_rush",ParkourSql.course("-Cave-Rush-")); assertEquals("kurs1",ParkourSql.course("kurs1")); assertNull(ParkourSql.course("---"));
  }
+ @Test void iconAndDisplayFallback() {
+  assertEquals("diamond_sword",ParkourSql.icon("minecraft:DIAMOND_SWORD")); assertEquals("paper",ParkourSql.icon("PAPER"));
+  assertNull(ParkourSql.icon("other:paper")); assertNull(ParkourSql.icon("a-b")); assertNull(ParkourSql.icon("x".repeat(49))); assertNull(ParkourSql.icon(""));
+  assertEquals("cave_rush",ParkourSql.displayName("cave_rush"," ")); assertEquals("Cave Rush",ParkourSql.displayName("cave_rush","Cave Rush"));
+ }
+ @Test void courseMigrationIsIdempotentAndViewHasExactColumns() throws Exception {
+  try(var c=java.sql.DriverManager.getConnection("jdbc:h2:mem:courses;MODE=MariaDB;DB_CLOSE_DELAY=-1"); var s=c.createStatement()) {
+   s.execute("CREATE TABLE parkour_times (course VARCHAR(64))"); s.execute("INSERT INTO parkour_times VALUES ('cave_rush'),('other')");
+   for(int i=0;i<2;i++) {
+    for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
+    if(i==0) s.execute("UPDATE parkour_courses SET display_name='Custom', icon='stone' WHERE slug='other'");
+   }
+   try(var r=s.executeQuery("SELECT * FROM v_parkour_courses ORDER BY slug")) {
+    assertEquals(3,r.getMetaData().getColumnCount()); assertEquals("SLUG",r.getMetaData().getColumnLabel(1)); assertEquals("COURSE_NAME",r.getMetaData().getColumnLabel(2)); assertEquals("COURSE_ICON",r.getMetaData().getColumnLabel(3));
+    assertTrue(r.next()); assertEquals("Cave Rush",r.getString(2)); assertEquals("paper",r.getString(3)); assertTrue(r.next()); assertEquals("Custom",r.getString(2)); assertEquals("stone",r.getString(3)); assertFalse(r.next());
+   }
+  }
+ }
  @Test void floorCacheLoadsOncePerCourseAndReloadsAfterClear() throws Exception {
   ParkourSql.FloorCache cache=new ParkourSql.FloorCache(); int[] calls={0};
   ParkourSql.FloorLoader load=()->{ calls[0]++; return -52.0; };
@@ -25,16 +43,16 @@ class ParkourSqlTest {
   assertTrue(ParkourSql.CREATE.contains("PRIMARY KEY (uuid, course)"));
   assertTrue(ParkourSql.ADD_COURSE.contains("IF NOT EXISTS") && ParkourSql.ADD_COURSE.contains("NOT NULL DEFAULT 'lobby'"));
  }
- @Test void upsertKeepsBestPerPlayerAndCourse() { assertTrue(ParkourSql.UPSERT.contains("(uuid,course,name,best_ms,updated_at)")); assertTrue(ParkourSql.UPSERT.contains("LEAST(best_ms,VALUES(best_ms))")); }
- @Test void topIsTenPerCourse() { assertTrue(ParkourSql.TOP.contains("PARTITION BY course")); assertTrue(ParkourSql.TOP.contains("rn<=10")); }
+ @Test void upsertKeepsBestPerPlayerAndCourse() { assertTrue(ParkourSql.UPSERT.contains("(uuid,course,course_name,name,best_ms,updated_at)")); assertTrue(ParkourSql.UPSERT.contains("LEAST(best_ms,VALUES(best_ms))")); }
+ @Test void oldRowsRemainReadableAndSorted() { assertTrue(ParkourSql.ADD_COURSE_NAME.contains("IF NOT EXISTS")); assertTrue(ParkourSql.TOP.contains("ORDER BY best_ms ASC")); }
  @Test void boardsPerCourse() {
   List<ParkourSql.Entry> e = new ArrayList<>(); for (int i = 1; i <= 12; i++) e.add(new ParkourSql.Entry("p" + i, i * 1000L));
   String b = ParkourSql.board("test", e);
-  assertTrue(b.startsWith("Parkour test - Top 10\n1. p1  0:01.000"));
+  assertTrue(b.startsWith("test\nTop 10\n1. p1  0:01.000"));
   assertTrue(b.contains("\n10. p10  0:10.000")); assertFalse(b.contains("11."));
-  assertEquals("Parkour test - Top 10\nNoch keine Bestzeiten", ParkourSql.board("test", List.of()));
+  assertEquals("test\nTop 10\nNoch keine Bestzeiten", ParkourSql.board("test", List.of()));
   Map<String, List<ParkourSql.Entry>> m = new TreeMap<>(); m.put("a", List.of(new ParkourSql.Entry("x", 1))); m.put("b", List.of());
-  assertEquals("Parkour a - Top 10\n1. x  0:00.001\n\nParkour b - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
+  assertEquals("a\nTop 10\n1. x  0:00.001\n\nb\nTop 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
   assertEquals("Parkour - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(Map.of()));
  }
  @Test void floorIsLowestCoursePointMinusDistance() {
