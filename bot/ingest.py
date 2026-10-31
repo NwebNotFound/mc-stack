@@ -524,12 +524,15 @@ PARKOUR_MAX = 1000
 PARKOUR_COURSE_MAX = 32  # Website-Limit fuer Kurs-IDs
 
 
-def build_parkour(cols, rows):
+import parkour
+
+
+def build_parkour(cols, rows, meta=None):
     """Bestzeit pro Spieler und Kurs aus parkour_times: [{course, mc_uuid, mc_name, time_ms, set_at}] (set_at ISO-UTC)."""
     best = {}
     for row in rows or ():
         r = dict(zip(cols, row))
-        course = str(r.get("course") or "").strip().lower()
+        course = parkour.slug(r.get("course"))
         uuid = str(r.get("uuid") or "").strip().lower()
         ms = _num(r.get("best_ms"))
         if not course or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
@@ -544,6 +547,12 @@ def build_parkour(cols, rows):
         except Exception:
             set_at = None
         e = {"course": course, "mc_uuid": uuid, "mc_name": str(r.get("name") or "")[:16], "time_ms": int(ms), "set_at": set_at}
+        mn, mi = (meta or {}).get(course, (None, None))
+        cn = mn or parkour.clean_name(r.get("course_name"))
+        e["course_name"] = cn or parkour.pretty(course)
+        ic = mi or parkour.icon(r.get("course_icon"))
+        if ic:
+            e["course_icon"] = ic
         old = best.get((course, uuid))
         if old is None or e["time_ms"] < old["time_ms"]:
             best[(course, uuid)] = e
@@ -703,7 +712,8 @@ async def push_once(bot, session=None):
         payload["price_reset_at"] = reset
     pk = await asyncio.to_thread(fetch_rows, "parkour_times")
     if pk:
-        payload["parkour"] = build_parkour(*pk)
+        pc = await asyncio.to_thread(fetch_rows, "v_parkour_courses")
+        payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None)
     h = payload_hash(payload)
     own = session is None
     session = session or aiohttp.ClientSession()

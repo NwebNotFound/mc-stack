@@ -3,7 +3,8 @@
 raw = [(uuid, name, best_ms, updated_at, course[, course_name])]
 - course: Kurs-ID. Alt: kleingeschriebener Lobby-Parkour-Name ("cave rush", "kurs1"),
   neu: fester Slug von Craft ("cave_rush"). Beide werden ueber slug() zusammengefuehrt.
-- course_name: Anzeigename ("Cave Rush"), optional; fehlt er, wird die ID angezeigt.
+- course_name: Anzeigename ("Cave Rush"), optional; fehlt er, wird der Slug huebsch gemacht (pretty()).
+- course_icon (Index 6, optional): Minecraft-Material, nur fuer die Website.
 - course darf None sein (alte Tabelle ohne Spalte).
 Ergebnis von rank() wie bisher: [(rang, name, ms, uuid)].
 """
@@ -20,8 +21,55 @@ def slug(c):
 norm_course = slug  # Abwaertskompatibel
 
 
+def pretty(c):
+    """Slug -> Anzeige ohne Unterstriche: 'cave_rush' -> 'Cave Rush'."""
+    s = re.sub(r"[_\s\-]+", " ", str(c or "")).strip()
+    return " ".join(w[:1].upper() + w[1:] for w in s.split(" ")) if s else ""
+
+
+ICON_RE = re.compile(r"^[a-z0-9_]{1,48}$")
+
+
+def icon(v):
+    """Minecraft-Material kleingeschrieben ohne 'minecraft:'; ungueltig -> None."""
+    v = str(v or "").strip().lower()
+    v = v[10:] if v.startswith("minecraft:") else v
+    return v if ICON_RE.match(v) else None
+
+
+CTRL_RE = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2066-\u2069]")
+
+
+def clean_name(v):
+    """Anzeigename: Steuer-/Bidi-Zeichen raus, max. 48 Zeichen; Markdown-Escaping macht die Ausgabe."""
+    return re.sub(r"\s+", " ", CTRL_RE.sub("", str(v or ""))).strip()[:48]
+
+
+def course_meta(cols, rows):
+    """v_parkour_courses (slug, course_name, course_icon) -> {slug: (name, icon)}; Icon validiert."""
+    out = {}
+    for row in rows or ():
+        r = dict(zip(cols, row))
+        s = slug(r.get("slug"))
+        if s:
+            out[s] = (clean_name(r.get("course_name")), icon(r.get("course_icon")))
+    return out
+
+
+def apply_meta(raw, meta):
+    """Name/Icon aus v_parkour_courses in raw-Tupel (Index 5/6) einsetzen; View gewinnt."""
+    if not meta:
+        return raw
+    out = []
+    for r in raw:
+        r = tuple(r) + (None,) * (7 - len(r))
+        n, ic = meta.get(slug(r[4]), (None, None))
+        out.append(r[:5] + (n or r[5], ic or r[6]) + r[7:])
+    return out
+
+
 def _name(r):
-    return str(r[5]).strip() if len(r) > 5 and r[5] and str(r[5]).strip() else ""
+    return clean_name(r[5]) if len(r) > 5 and r[5] else ""
 
 
 def course_names(raw):
@@ -35,7 +83,7 @@ def course_names(raw):
         if n:
             out[s] = n  # echter Name gewinnt immer
         elif s not in out:
-            out[s] = str(r[4]).strip()
+            out[s] = pretty(s)
     return out
 
 
@@ -48,7 +96,7 @@ def display(raw, course):
     """Anzeigename fuer eine Kurs-Eingabe (Slug, alte ID oder Name); unbekannt -> Eingabe selbst."""
     if not course or course == ALL:
         return None
-    return course_names(raw).get(slug(course), str(course).strip())
+    return course_names(raw).get(slug(course)) or pretty(slug(course))
 
 
 def rank(raw, course=None):

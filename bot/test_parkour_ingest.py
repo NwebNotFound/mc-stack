@@ -11,7 +11,7 @@ class ParkourIngestTest(unittest.TestCase):
     def test_shape_and_iso_utc(self):
         rows = [(U1, "test", "Nils", 12345, datetime.datetime(2026, 10, 30, 13, 5, 7, 250000))]
         self.assertEqual(ingest.build_parkour(COLS, rows), [
-            {"course": "test", "mc_uuid": U1, "mc_name": "Nils", "time_ms": 12345, "set_at": "2026-10-30T13:05:07.250Z"}])
+            {"course": "test", "mc_uuid": U1, "mc_name": "Nils", "time_ms": 12345, "set_at": "2026-10-30T13:05:07.250Z", "course_name": "Test"}])
 
     def test_best_per_player_and_course(self):
         t = datetime.datetime(2026, 10, 30, 12, 0, 0)
@@ -25,7 +25,7 @@ class ParkourIngestTest(unittest.TestCase):
         rows = [(U1, "test", "Nils", 100, "2026-10-30T14:00:00+01:00"), (U2, "", "x", 5, None),
                 (U2, "test", "x", 0, None), (None, "test", "x", 5, None), (U2, "test", "Bob", 50, "kaputt")]
         out = ingest.build_parkour(COLS, rows)
-        self.assertEqual(out[0], {"course": "test", "mc_uuid": U2, "mc_name": "Bob", "time_ms": 50})
+        self.assertEqual(out[0], {"course": "test", "mc_uuid": U2, "mc_name": "Bob", "time_ms": 50, "course_name": "Test"})
         self.assertEqual(out[1]["set_at"], "2026-10-30T13:00:00.000Z")
         self.assertEqual(len(out), 2)
 
