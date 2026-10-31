@@ -107,6 +107,21 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  }
  /** Hoechster Y-Wert seit dem letzten Bodenkontakt, pro Spieler im Lauf. */
  private final Map<UUID, Double> peaks=new HashMap<>();
+ private final Map<UUID, Long> bounceGrace=new HashMap<>();
+ private record Landing(List<String> keys, boolean bed) {
+  boolean soft() { return ParkourRules.softLandingAny(keys,bed); }
+  boolean slime() { return keys.contains("slime_block"); }
+ }
+ private Landing landing(Location location,boolean centerFallback) {
+  List<String> keys=new ArrayList<>(); boolean bed=false; int i=0;
+  for(double[] point:ParkourRules.footprint(location.getX(),location.getZ())) {
+   Location sample=location.clone(); sample.setX(point[0]); sample.setZ(point[1]); sample.subtract(0,0.2,0);
+   Block block=sample.getBlock(); if(i++==0 && centerFallback && block.getType().isAir()) block=sample.subtract(0,1,0).getBlock();
+   keys.add(block.getType().getKey().getKey()); bed|=Tag.BEDS.isTagged(block.getType());
+  }
+  return new Landing(keys,bed);
+ }
+ private void slimeGrace(UUID id,Landing landing,long now) { if(landing.slime()) { peaks.remove(id); bounceGrace.put(id,now+1500); } }
  private void reset(Player p,ParkourSession s,PlayerMoveEvent e) {
   peaks.remove(p.getUniqueId());
   try { Location cp=checkpoint(s); if(cp==null) { p.sendMessage("Parkour: Checkpoint nicht gefunden."); return; } cp.setYaw(s.getLastCheckpointYaw()); cp.setPitch(s.getLastCheckpointPitch()); p.setFallDistance(0); p.setVelocity(new Vector()); if(e!=null) e.setTo(cp); else p.teleport(cp); }
@@ -121,8 +136,9 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   boolean climbable=Tag.CLIMBABLE.isTagged(e.getFrom().getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.getBlock().getType())
    || Tag.CLIMBABLE.isTagged(e.getFrom().clone().add(0,1,0).getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.clone().add(0,1,0).getBlock().getType());
   if(climbable || !p.isOnGround()) { Double peak=ParkourRules.nextPeak(peaks.get(p.getUniqueId()),e.getFrom().getY(),to.getY(),false,climbable); if(peak==null) peaks.remove(p.getUniqueId()); else peaks.put(p.getUniqueId(),peak); }
-  else { Double peak=peaks.remove(p.getUniqueId()); if(peak!=null) { Block b=to.clone().subtract(0,0.2,0).getBlock(); if(b.getType().isAir()) b=to.clone().subtract(0,1.2,0).getBlock();
-   if(ParkourRules.fallResets(peak-to.getY(),b.getType().getKey().getKey(),Tag.BEDS.isTagged(b.getType()))) { reset(p,s,e); return; } } }
+  else { Double peak=peaks.remove(p.getUniqueId()); Landing landing=landing(to,true); long now=System.currentTimeMillis();
+   if(peak!=null && peak-to.getY()>ParkourRules.SAFE_FALL && !landing.soft() && !ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now)) { reset(p,s,e); return; }
+   slimeGrace(p.getUniqueId(),landing,now); }
   // Fallback: weit unter dem tiefsten Kurspunkt
   try { Location cp=checkpoint(s); Double floor=floorY(s.getParkourName()); if(cp!=null && floor!=null && cp.getWorld().equals(to.getWorld()) && to.getY()<floor) reset(p,s,e); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
@@ -131,7 +147,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(!(e.getEntity() instanceof Player p)) return;
   ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) return;
   if(e.getCause()==EntityDamageEvent.DamageCause.VOID) { e.setCancelled(true); reset(p,s,null); return; }
-  if(e.getCause()==EntityDamageEvent.DamageCause.FALL) { e.setCancelled(true); Block b=p.getLocation().subtract(0,0.2,0).getBlock(); if(!ParkourRules.softLanding(b.getType().getKey().getKey(),Tag.BEDS.isTagged(b.getType()))) reset(p,s,null); }
+  if(e.getCause()==EntityDamageEvent.DamageCause.FALL) { e.setCancelled(true); Landing landing=landing(p.getLocation(),false); long now=System.currentTimeMillis(); if(!landing.soft() && !ParkourRules.inGrace(bounceGrace.get(p.getUniqueId()),now)) reset(p,s,null); else slimeGrace(p.getUniqueId(),landing,now); }
  } @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
   if(e.getAction()!=Action.PHYSICAL || e.getClickedBlock()==null) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null || s.getCompletedCheckpoints()!=s.getMaxCheckpoints()) return;
@@ -145,7 +161,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  }
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseCommand(PlayerCommandPreprocessEvent e) { if(ParkourRules.isCourseCommand(e.getMessage())) floors.clear(); }
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseConsoleCommand(ServerCommandEvent e) { if(ParkourRules.isCourseCommand(e.getCommand())) floors.clear(); }
- @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); peaks.remove(e.getPlayer().getUniqueId()); }
+ @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); peaks.remove(e.getPlayer().getUniqueId()); bounceGrace.remove(e.getPlayer().getUniqueId()); }
  private void save(UUID id,String course,String name,long ms) { worker.execute(()->{
   try(Connection c=db()) { try(PreparedStatement add=c.prepareStatement("INSERT INTO parkour_courses (slug) VALUES (?) ON DUPLICATE KEY UPDATE slug=VALUES(slug)")) { add.setString(1,ParkourSql.course(course)); add.executeUpdate(); } try(PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,ParkourSql.course(course)); s.setString(3,course); s.setString(4,name); s.setLong(5,ms); s.executeUpdate(); refresh(); } }
   catch(SQLException ex) { getLogger().log(Level.SEVERE,"Parkour-Bestzeit konnte nicht gespeichert werden fuer "+id,ex); }

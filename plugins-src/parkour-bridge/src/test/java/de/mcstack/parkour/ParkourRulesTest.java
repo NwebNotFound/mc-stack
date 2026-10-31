@@ -1,7 +1,25 @@
 package de.mcstack.parkour;
 import org.junit.jupiter.api.Test;
+import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 class ParkourRulesTest {
+ @Test void footprintIncludesCenterAndCorners() {
+  double[][] points=ParkourRules.footprint(10,20); assertEquals(5,points.length);
+  assertArrayEquals(new double[]{10,20},points[0],1e-9);
+  assertArrayEquals(new double[]{9.701,19.701},points[1],1e-9);
+  assertArrayEquals(new double[]{9.701,20.299},points[2],1e-9);
+  assertArrayEquals(new double[]{10.299,19.701},points[3],1e-9);
+  assertArrayEquals(new double[]{10.299,20.299},points[4],1e-9);
+ }
+ @Test void anySoftFootprintBlockPreventsReset() {
+  assertTrue(ParkourRules.softLandingAny(List.of("air","slime_block"),false));
+  assertFalse(ParkourRules.softLandingAny(List.of("air","stone"),false));
+  assertTrue(ParkourRules.softLandingAny(List.of("air","stone"),true));
+ }
+ @Test void graceExpiresAtDeadline() {
+  assertFalse(ParkourRules.inGrace(null,100)); assertTrue(ParkourRules.inGrace(100L,99));
+  assertFalse(ParkourRules.inGrace(100L,100)); assertFalse(ParkourRules.inGrace(100L,101));
+ }
  @Test void climbingClearsPeakBeforeRelease() {
   Double peak=ParkourRules.nextPeak(null,100,99,false,false);
   peak=ParkourRules.nextPeak(peak,99,90,false,true); assertNull(peak);
