@@ -42,9 +42,9 @@ class MarketEffectiveViewTest {
       }
       Row wheat = row(connection, "WHEAT");
       assertEquals(0.5, wheat.buy(), 1e-9);
-      assertNull(wheat.sell());
+      assertEquals(0.25, wheat.sell(), 1e-9);
       assertTrue(wheat.buyEnabled());
-      assertFalse(wheat.sellEnabled());
+      assertTrue(wheat.sellEnabled());
       Row bread = row(connection, "BREAD");
       assertEquals(1.35, bread.buy(), 1e-9);
       assertEquals(0.675, bread.sell(), 1e-9);
@@ -67,9 +67,9 @@ class MarketEffectiveViewTest {
       assertFalse(diamond.buyEnabled());
       Row block = row(connection, "DIAMOND_BLOCK");
       assertNull(block.buy());
-      assertNull(block.sell());
+      assertEquals(405.0, block.sell(), 1e-9);
       assertFalse(block.buyEnabled());
-      assertFalse(block.sellEnabled());
+      assertTrue(block.sellEnabled());
       Row totem = row(connection, "TOTEM_OF_UNDYING");
       assertNull(totem.buy());
       assertEquals(266.5, totem.sell(), 1e-9);

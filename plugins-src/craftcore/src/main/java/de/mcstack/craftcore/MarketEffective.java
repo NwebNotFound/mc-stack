@@ -24,10 +24,10 @@ final class MarketEffective {
   record Quote(Double buy, double sell, double base) {}
   private static final String VIEW = "CREATE OR REPLACE VIEW market_effective AS SELECT p.item AS item,"
     + "CASE WHEN COALESCE(l.lock_buy,FALSE) OR COALESCE(f.lock_buy,FALSE) THEN NULL ELSE p.buy_price END AS buy_price,"
-    + "CASE WHEN COALESCE(l.lock_sell,FALSE) OR COALESCE(f.lock_sell,FALSE) THEN NULL ELSE p.sell_price END AS sell_price,"
+    + "p.sell_price AS sell_price,"
     + "p.base_price AS base_price,"
     + "(p.buy_price IS NOT NULL AND NOT (COALESCE(l.lock_buy,FALSE) OR COALESCE(f.lock_buy,FALSE))) AS buy_enabled,"
-    + "(p.sell_price IS NOT NULL AND NOT (COALESCE(l.lock_sell,FALSE) OR COALESCE(f.lock_sell,FALSE))) AS sell_enabled "
+    + "(p.sell_price IS NOT NULL) AS sell_enabled "
     + "FROM market_effective_price p "
     + "LEFT JOIN market_locks l ON l.item=p.item "
     + "LEFT JOIN market_lock_fallback f ON f.item=p.item";

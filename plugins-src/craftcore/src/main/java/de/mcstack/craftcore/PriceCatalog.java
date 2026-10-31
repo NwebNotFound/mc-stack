@@ -15,7 +15,7 @@ final class PriceCatalog {
     File file=new File(core.getDataFolder(),"prices-base.yml"); if(!file.exists()) core.saveResource("prices-base.yml",false);
     YamlConfiguration cfg=YamlConfiguration.loadConfiguration(file);
     List<Recipe> recipes=new ArrayList<>(); Bukkit.recipeIterator().forEachRemaining(recipes::add);
-    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList());
+    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList(), Material::isItem, PriceCatalog::category);
   }
   record CatalogRecipe(Material output, int amount, List<List<Material>> ingredients, boolean cooking) {
     CatalogRecipe(Material output, int amount, List<List<Material>> ingredients) { this(output,amount,ingredients,false); }
