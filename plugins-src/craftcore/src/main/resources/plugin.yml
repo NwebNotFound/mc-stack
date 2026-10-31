@@ -5,6 +5,8 @@ api-version: '26.3'
 depend: [Vault]
 softdepend: [LuckPerms, Citizens]
 commands:
+  pvp:
+    description: PvP Build-Verwaltung
   rank:
     description: Rang setzen
     usage: /rank set <spieler> <rang>
@@ -97,6 +99,8 @@ commands:
     description: MineRush Loot-Editor
     permission: craftcore.minerush.edit
 permissions:
+  craftcore.build.pvp:
+    default: op
   craftcore.rank.set:
     default: op
   craftcore.admin.npc:
