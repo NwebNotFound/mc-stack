@@ -691,3 +691,10 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - v_player_rank als craft_admin angelegt; creepy_ro liest die View, luckperms.* verweigert.
 - Tests: vip+builder -> builder/80, nur vip -> vip/40, zurück auf admin/100. Messaging-Sync Lobby -> Survival ok (meta testsync gesetzt/entfernt).
 - Offen: Startup-Warnungen `GRANT command denied` für User craftcore (CraftCore versucht Grants beim Start), nicht neu durch Ränge; Prefix-Leerzeichen gingen per RCON verloren (nur kosmetisch in LP, CraftCore nutzt eigene Labels). Ingame-Test mit 2 Accounts steht aus.
+
+## 2026-10-31 18:05 - NPCs + GRANT-Fix deployt (PR #37 Merge 14731a6, PR #38 Merge d07b600)
+- Backup `backups/daily-20261031-180009-306`, alte CraftCore-Jars in `backups/npcs-deploy-20261031-180012`.
+- CraftCore SHA256 `AA6487898F66DFF9ABA6C5B3CF65370B696807C45288C030AD1685A138C14570` auf Lobby und Survival; Citizens 2.0.44-b4268 (SHA256 `908E5C54…256D67`) nur Lobby.
+- Wichtig: Plugins kommen beim Start aus `config/lobby-plugins` bzw. `config/survival-plugins` (COPY_PLUGINS_SRC) und überschreiben `data/*/plugins`. Jars dort ablegen.
+- `scripts/creepy-ro-grants.sql` als craft_admin ausgeführt. Log: keine GRANT-Warnungen mehr, nur die INFO-Zeile. creepy_ro liest `v_player_rank`, `v_economy_daily`, `v_player_balance`.
+- Citizens geladen (0 NPCs). `/cc npc list` per Konsole ok; `create` geht nur im Spiel („Nur im Spiel“), Ingame-Test der NPCs offen.
