@@ -65,6 +65,12 @@ final class ParkourSql {
   Double min = null; for (Double y : ys) if (y != null && (min == null || y < min)) min = y;
   return min == null ? null : min - Math.max(1, distance);
  }
+ static Double effectiveFloor(Double computed, Double override) { return override!=null?override:computed; }
+ static Double courseFloor(Map<String,?> section, String course) {
+  if(course==null) return null;
+  for(var entry:section.entrySet()) if(entry.getKey().equalsIgnoreCase(course) && entry.getValue() instanceof Number value) return value.doubleValue();
+  return null;
+ }
  record Entry(String name, long ms) {} static String board(String course, List<Entry> entries) {
   StringBuilder t = new StringBuilder(course).append("\nTop 10");
   for (int i = 0; i < Math.min(10, entries.size()); i++) t.append("\n").append(i + 1).append(". ").append(entries.get(i).name()).append("  ").append(TimeFormat.format(entries.get(i).ms()));

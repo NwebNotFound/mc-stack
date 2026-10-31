@@ -1,6 +1,7 @@
 package de.mcstack.parkour;
 import org.junit.jupiter.api.Test;
 import java.util.List;
+import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 class ParkourRulesTest {
  @Test void footprintIncludesCenterAndCorners() {
@@ -15,6 +16,18 @@ class ParkourRulesTest {
   assertTrue(ParkourRules.softLandingAny(List.of("air","slime_block"),false));
   assertFalse(ParkourRules.softLandingAny(List.of("air","stone"),false));
   assertTrue(ParkourRules.softLandingAny(List.of("air","stone"),true));
+ }
+ @Test void caveRushDropAndFloorOverride() {
+  double drop=-32 - (-54);
+  assertFalse(ParkourRules.fallResets(drop,"slime_block",false));
+  assertFalse(ParkourRules.fallResets(drop,"honey_block",false));
+  assertTrue(drop>ParkourRules.SAFE_FALL && ParkourRules.softLandingAny(List.of("air","slime_block"),false));
+  Double override=ParkourSql.courseFloor(Map.of("CaVe_RuSh",-60),"cave_rush");
+  assertEquals(-60.0,ParkourSql.effectiveFloor(-52.0,override));
+  assertTrue(-54>=ParkourSql.effectiveFloor(-52.0,override));
+  assertTrue(-54<ParkourSql.effectiveFloor(-52.0,null));
+  assertNull(ParkourSql.courseFloor(Map.of("other",-60),"cave_rush"));
+  assertNull(ParkourSql.effectiveFloor(null,null));
  }
  @Test void graceExpiresAtDeadline() {
   assertFalse(ParkourRules.inGrace(null,100)); assertTrue(ParkourRules.inGrace(100L,99));

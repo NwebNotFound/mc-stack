@@ -64,7 +64,6 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
   for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
-  try { s.execute("GRANT SELECT ON v_parkour_courses TO 'creepy_ro'@'%'"); } catch(SQLException ex) { getLogger().log(Level.WARNING,"SELECT-Grant fuer creepy_ro konnte nicht gesetzt werden",ex); }
   try { syncCourses(c); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht synchronisiert werden",ex); }
  }
  private void syncCourses(Connection c) throws SQLException {
@@ -95,15 +94,18 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try { Location l=checkpoint(s); if(l==null) { p.sendMessage("Parkour: Checkpoint nicht gefunden."); return; } l.setYaw(s.getLastCheckpointYaw()); l.setPitch(s.getLastCheckpointPitch()); p.setFallDistance(0); p.setVelocity(new Vector()); p.teleport(l); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
- /** Kursboden: tiefster Punkt (Start, Checkpoints, Ziel) minus fall-distance-below-floor. Erst darunter wird zurueckgesetzt. */
+ /** Kursboden: konfigurierte Grenze oder tiefster Kurspunkt minus fall-distance-below-floor. */
  private Double floorY(String parkourName) throws SQLException {
   return floors.get(parkourName,()->loadFloorY(parkourName));
  }
  private Double loadFloorY(String parkourName) throws SQLException {
+  var section=getConfig().getConfigurationSection("course-floors");
+  Double override=ParkourSql.courseFloor(section==null?Map.of():section.getValues(false),parkourName);
+  if(override!=null) return ParkourSql.effectiveFloor(null,override);
   List<Double> ys=new ArrayList<>(); Connection c=ParkoursDatabase.getConnection();
   try(PreparedStatement p=c.prepareStatement("SELECT start_cp,end_cp FROM parkours WHERE pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) { ys.add(ParkourSql.locY(r.getString(1))); ys.add(ParkourSql.locY(r.getString(2))); } } }
   try(PreparedStatement p=c.prepareStatement("SELECT c.location FROM checkpoints c JOIN parkours k ON k.id=c.parkour_id WHERE k.pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) ys.add(ParkourSql.locY(r.getString(1))); } }
-  return ParkourSql.floor(ys,getConfig().getDouble("fall-distance-below-floor",getConfig().getDouble("fall-distance-below-checkpoint",4)));
+  return ParkourSql.effectiveFloor(ParkourSql.floor(ys,getConfig().getDouble("fall-distance-below-floor",getConfig().getDouble("fall-distance-below-checkpoint",4))),override);
  }
  /** Hoechster Y-Wert seit dem letzten Bodenkontakt, pro Spieler im Lauf. */
  private final Map<UUID, Double> peaks=new HashMap<>();
