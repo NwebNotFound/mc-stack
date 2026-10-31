@@ -84,7 +84,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
       try { Class.forName("org.mariadb.jdbc.Driver"); driverLoaded=true; } catch (ClassNotFoundException | LinkageError e) { driverLoaded=false; }
       String error=ServerProfile.pvpStartupError(password,driverLoaded);
       if(error!=null) { getLogger().severe(error); getServer().getPluginManager().disablePlugin(this); return; }
-      new de.mcstack.craftcore.pvp.PvpModule(this, this::connection).start(); return;
+      new de.mcstack.craftcore.pvp.PvpModule(this, this::connection).start();
+      rankDisplays=new RankDisplays(this,server); rankDisplays.start(); return;
     }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
     try {
@@ -195,14 +196,14 @@ public final class CraftCore extends JavaPlugin implements Listener {
       if(args.length==1) return sender.hasPermission("craftcore.admin.npc") ? UserMenu.complete(args[0],"portal","launch","deaths","npc") : UserMenu.complete(args[0],"portal","launch","deaths");
       if(args.length==2 && args[0].equalsIgnoreCase("deaths")) return UserMenu.complete(args[1],"backfill");
       String[] rest=Arrays.copyOfRange(args,1,args.length);
-      if(args[0].equalsIgnoreCase("portal")) return portals.onTabComplete(sender,command,alias,rest);
-      if(args[0].equalsIgnoreCase("launch")) return launchPads.onTabComplete(sender,command,alias,rest);
+      if(args[0].equalsIgnoreCase("portal")) return portals==null ? List.of() : portals.onTabComplete(sender,command,alias,rest);
+      if(args[0].equalsIgnoreCase("launch")) return launchPads==null ? List.of() : launchPads.onTabComplete(sender,command,alias,rest);
       return List.of();
     }
     if(command.getName().equals("balance")) return List.of();
     if(command.getName().equals("team") && args.length==1) return UserMenu.complete(args[0], "create", "invite", "join", "leave", "kick", "info", "promote", "demote", "color");
     if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("color")) return RankDisplay.TEAM_COLORS.keySet().stream().filter(n->n.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
-    if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("invite")) return teamInvites.complete(args[1]);
+    if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("invite")) return teamInvites==null ? List.of() : teamInvites.complete(args[1]);
     if(command.getName().equals("claim") && args.length==1) return UserMenu.complete(args[0], "create", "list");
     if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search", "zurueckziehen", "cancel");
     if(command.getName().equals("ah") && args.length==2 && sender instanceof Player p && Set.of("zurueckziehen","zur?ckziehen","cancel").contains(args[0].toLowerCase(Locale.ROOT))) try {
@@ -274,17 +275,22 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(sender instanceof Player) return ShopBuyDispatch.Caller.PLAYER;
     return ShopBuyDispatch.Caller.OTHER;
   }
+  static boolean moduleAvailable(Object module, java.util.function.Consumer<String> reply) {
+    if(module!=null) return true;
+    reply.accept("Dieser Befehl ist auf diesem Server nicht verfuegbar.");
+    return false;
+  }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
     if(!ServerProfile.commandAllowed(economyEnabled,command.getName())) { sender.sendMessage("Dieser Befehl ist auf dem PvP-Server deaktiviert."); return true; }
-    if(command.getName().equals("rank")) return rankDisplays.command(sender,args);
+    if(command.getName().equals("rank")) return !moduleAvailable(rankDisplays,sender::sendMessage) || rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
       if(args.length>0 && args[0].equalsIgnoreCase("npc")) { if (!sender.hasPermission("craftcore.admin.npc")) sender.sendMessage("Keine Berechtigung."); else if (citizensNpcs == null) sender.sendMessage("Citizens-NPCs sind nicht verfuegbar."); else citizensNpcs.command(sender,Arrays.copyOfRange(args,1,args.length)); return true; }
       if(!sender.hasPermission("craftcore.admin")) return true;
       if(args.length>0) {
         String[] rest=Arrays.copyOfRange(args,1,args.length);
-        if(args[0].equalsIgnoreCase("deaths")) { if(args.length==2 && args[1].equalsIgnoreCase("backfill")) deathEvents.backfill(sender); else sender.sendMessage("/cc deaths backfill"); return true; }
-        if(args[0].equalsIgnoreCase("portal")) return portals.onCommand(sender,command,label,rest);
-        if(args[0].equalsIgnoreCase("launch")) { if(launchPads.onCommand(sender,command,label,rest)) return true; }
+        if(args[0].equalsIgnoreCase("deaths")) { if(!moduleAvailable(deathEvents,sender::sendMessage)) return true; if(args.length==2 && args[1].equalsIgnoreCase("backfill")) deathEvents.backfill(sender); else sender.sendMessage("/cc deaths backfill"); return true; }
+        if(args[0].equalsIgnoreCase("portal")) return !moduleAvailable(portals,sender::sendMessage) || portals.onCommand(sender,command,label,rest);
+        if(args[0].equalsIgnoreCase("launch")) { if(!moduleAvailable(launchPads,sender::sendMessage)) return true; if(launchPads.onCommand(sender,command,label,rest)) return true; }
       }
       sender.sendMessage(Component.text("Admin: ").append(Component.text("[Portale]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc portal list"))).append(Component.text(" [LaunchPads]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc launch list")))); return true;
     }
@@ -373,9 +379,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
     }
     if(!(sender instanceof Player p)) { sender.sendMessage("Nur fÃƒÂ¼r Spieler."); return true; }
     try {
-      if(args.length==0 && Set.of("pay","team","claim","home","trade","vip").contains(command.getName())) { userMenu.open(p,command.getName()); return true; }
+      if(args.length==0 && Set.of("pay","team","claim","home","trade","vip").contains(command.getName())) { if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); return true; }
       switch(command.getName()) {
-        case "vip": userMenu.open(p,command.getName()); break;
+        case "vip": if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); break;
         case "abholen": Deliveries.collect(this,p); break;
         case "feedback": p.sendMessage(Feedback.line(Feedback.url(getConfig()))); break;
         case "balance": if(args.length!=0) p.sendMessage("Fuer deinen Kontostand nutze /geld ohne weitere Eingaben."); else p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
@@ -386,13 +392,13 @@ public final class CraftCore extends JavaPlugin implements Listener {
           long n=Money.cents(args[1]); if(transfer(p.getUniqueId(),recipient,n)){ p.sendMessage("Gesendet an "+args[0]+": "+Money.format(n)); if(other!=null) other.sendMessage(p.getName()+" sendet dir "+Money.format(n)); } else p.sendMessage("UngÃƒÂ¼ltiger Betrag, eigenes Konto oder nicht genug CP."); break;
         }
         case "team": team(p,args); break;
-        case "shop": Shop.instance.command(p,args); break;
-        case "ah": Auction.instance.command(p,args); break;
-        case "trade": trade.command(p,args); break;
-        case "npc": npcs.command(p,args); break;
-        case "verkaufen": Market.instance.openSell(p); break;
-        case "bank": case "market": Market.instance.command(p,command.getName(),args); break;
-        case "claim": case "unclaim": case "spawn": case "home": case "sethome": Features.instance.command(p,command.getName(),args); break;
+        case "shop": if(moduleAvailable(Shop.instance,p::sendMessage)) Shop.instance.command(p,args); break;
+        case "ah": if(moduleAvailable(Auction.instance,p::sendMessage)) Auction.instance.command(p,args); break;
+        case "trade": if(moduleAvailable(trade,p::sendMessage)) trade.command(p,args); break;
+        case "npc": if(moduleAvailable(npcs,p::sendMessage)) npcs.command(p,args); break;
+        case "verkaufen": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.openSell(p); break;
+        case "bank": case "market": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.command(p,command.getName(),args); break;
+        case "claim": case "unclaim": case "spawn": case "home": case "sethome": if(moduleAvailable(Features.instance,p::sendMessage)) Features.instance.command(p,command.getName(),args); break;
       }
     } catch(NumberFormatException | ArithmeticException e) { p.sendMessage("UngÃƒÂ¼ltiger Betrag (maximal zwei Nachkommastellen)."); }
     catch(Exception e) { getLogger().warning("CraftCore Fehler: "+e); p.sendMessage("Aktion fehlgeschlagen. Bitte spÃƒÂ¤ter erneut versuchen."); }
@@ -401,7 +407,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private void team(Player p,String[] a) throws Exception {
     if(a.length==0){UserMenu.help(p,"team");return;}
     String op=a[0].toLowerCase(Locale.ROOT); UUID id=p.getUniqueId();
-    if(op.equals("invite") || op.equals("accept") || op.equals("decline") || op.equals("join")) { teamInvites.command(p,op,a); return; }
+    if(op.equals("invite") || op.equals("accept") || op.equals("decline") || op.equals("join")) { if(moduleAvailable(teamInvites,p::sendMessage)) teamInvites.command(p,op,a); return; }
     Player other=(a.length>1 && Set.of("kick","promote","demote").contains(op))?target(a[1]):null;
     if(Set.of("kick","promote","demote").contains(op) && other==null){p.sendMessage("Zielspieler muss auf diesem Server online sein.");return;}
     String result=tx(c->{
