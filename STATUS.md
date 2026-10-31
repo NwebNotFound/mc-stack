@@ -720,4 +720,4 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - install-task.ps1 ausgeführt: Aufgabe "mc-stack PvP host service" = Repo-Version (run.ps1, bei Anmeldung, Neustart 3x/1 min), Dienst läuft (127.0.0.1:25599, ohne Token 401).
 - pvp mit Haupt-compose neu angelegt; Start/Stop über Host-Dienst aus Velocity: sleeping -> online -> sleeping. CraftCore 0.1.1 enabled, "PvP-Profil: Economy-Module deaktiviert", CRAFTCORE_DB_USER=craft_pvp; TCP pvp:25565 aus Velocity ok; craft_pvp Insert/Select/Delete auf pvp_matches ok, v_player_rank lesbar (5 Zeilen). mc-stack-pvp-1 wieder gestoppt.
 - Hinweis: Wenn der Host von creepy_ro eingeschränkt wird (statt '%'), craft_pvp genauso einschränken (scripts/pvp-db-user.sql anpassen).
-- Offen: Arena-Templates ohne Block-Entities; pvp nutzt config/lobby-paper.
+- Offen: Arena-Templates ohne Block-Entities; pvp nutzt config/lobby-paper. Host-Dienst-Aufgabe startet bei Anmeldung, nicht beim Systemstart; auf dem späteren Mini-PC muss sie beim Systemstart laufen (Trigger AtStartup, ohne Anmeldung).
