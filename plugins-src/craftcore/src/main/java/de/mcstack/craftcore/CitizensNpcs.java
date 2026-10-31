@@ -7,6 +7,8 @@ import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.event.NPCLeftClickEvent;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.npc.NPC;
+import net.citizensnpcs.api.npc.NPCRegistry;
+import net.citizensnpcs.api.npc.MemoryNPCDataStore;
 import net.citizensnpcs.trait.LookClose;
 import net.citizensnpcs.trait.SkinTrait;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
@@ -28,6 +30,8 @@ final class CitizensNpcs implements Listener {
   private final YamlConfiguration config;
   private final Map<String,NpcDefinitions.NpcDef> definitions=new LinkedHashMap<>();
   private final Map<String,NPC> npcs=new HashMap<>();
+  private final NpcLifecycle<NPC> lifecycle=new NpcLifecycle<>();
+  private NPCRegistry registry;
   private boolean active;
   CitizensNpcs(CraftCore core, UserMenu menu) { this.core=core; this.menu=menu; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
   void start() {
@@ -38,28 +42,44 @@ final class CitizensNpcs implements Listener {
       definitions.put(key,NpcDefinitions.load(key,entry.getValues(false)));
     } catch(RuntimeException ex) { core.getLogger().warning("NPC " + key + ": " + ex.getMessage()); }
     Bukkit.getPluginManager().registerEvents(this,core);
-    activate();
+    Bukkit.getScheduler().runTaskLater(core,this::activate,200L);
     Bukkit.getScheduler().runTaskTimer(core,this::actionbars,5L,5L);
   }
   void activate() {
-    if(active || !Bukkit.getPluginManager().isPluginEnabled("Citizens")) return;
+    if(lifecycle.isActive() || !Bukkit.getPluginManager().isPluginEnabled("Citizens")) return;
+    registry=CitizensAPI.getNamedNPCRegistry("craftcore");
+    if(registry==null) registry=CitizensAPI.createNamedNPCRegistry("craftcore",new MemoryNPCDataStore());
+    List<NpcLifecycle.LegacyId> legacy=new ArrayList<>();
+    for(var def:definitions.values()) {
+      String path="npcs."+def.key();
+      legacy.add(new NpcLifecycle.LegacyId(config.contains(path+".citizensId") ? config.getInt(path+".citizensId") : null,config.getString(path+".citizensUuid")));
+    }
+    var result=lifecycle.activate(new NpcLifecycle.Registry<>() {
+      public List<NPC> owned() { return snapshot(registry); }
+      public List<NPC> defaults() { return snapshot(CitizensAPI.getNPCRegistry()); }
+      public int id(NPC npc) { return npc.getId(); }
+      public String uuid(NPC npc) { return npc.getUniqueId().toString(); }
+      public boolean tagged(NPC npc) { return npc.data().has("craftcore-npc"); }
+      public void remove(NPC npc) { npc.destroy(); }
+      public void create(String key) { apply(definitions.get(key)); }
+    },definitions.keySet(),legacy);
     active=true;
-    for(var def:definitions.values()) apply(def);
     save();
+    core.getLogger().info("NPCs: removed " + result.removed() + ", spawned " + result.spawned());
+  }
+  private static List<NPC> snapshot(NPCRegistry registry) {
+    List<NPC> result=new ArrayList<>();
+    for(NPC npc:registry) result.add(npc);
+    return result;
   }
   @EventHandler public void citizensReady(net.citizensnpcs.api.event.CitizensEnableEvent e) { activate(); }
-  @EventHandler public void enable(org.bukkit.event.server.PluginEnableEvent e) { if(e.getPlugin().getName().equalsIgnoreCase("Citizens")) activate(); }
-  @EventHandler public void disable(PluginDisableEvent e) { if(e.getPlugin().getName().equalsIgnoreCase("Citizens")) { active=false; npcs.clear(); } }
+  @EventHandler public void disable(PluginDisableEvent e) { if(e.getPlugin().getName().equalsIgnoreCase("Citizens")) { active=false; lifecycle.reset(); npcs.clear(); registry=null; } }
   private void apply(NpcDefinitions.NpcDef def) {
     String path="npcs."+def.key();
     NPC npc=npcs.get(def.key());
-    if(npc==null && config.contains(path+".citizensId")) {
-      NPC found=CitizensAPI.getNPCRegistry().getById(config.getInt(path+".citizensId"));
-      if(found!=null && found.getUniqueId().toString().equals(config.getString(path+".citizensUuid"))) npc=found;
-    }
-    if(npc==null) npc=CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color(def.displayName()));
+    if(npc==null) npc=registry.createNPC(EntityType.PLAYER, color(def.displayName()));
     npcs.put(def.key(),npc);
-    config.set(path+".citizensId",npc.getId()); config.set(path+".citizensUuid",npc.getUniqueId().toString());
+    npc.data().set("craftcore-npc",def.key());
     npc.setName(color(def.displayName()));
     npc.data().setPersistent(NPC.Metadata.NAMEPLATE_VISIBLE, true);
     if(!def.skin().isBlank()) npc.getOrAddTrait(SkinTrait.class).setSkinName(def.skin(),true);
@@ -69,7 +89,11 @@ final class CitizensNpcs implements Listener {
   }
   private static String color(String value) { return ChatColor.translateAlternateColorCodes('&',value); }
   private void save() {
-    for(var def:definitions.values()) for(var entry:NpcDefinitions.save(def).entrySet()) config.set("npcs."+def.key()+"."+entry.getKey(),entry.getValue());
+    for(var def:definitions.values()) {
+      String path="npcs."+def.key();
+      for(var entry:NpcDefinitions.save(def).entrySet()) config.set(path+"."+entry.getKey(),entry.getValue());
+      config.set(path+".citizensId",null); config.set(path+".citizensUuid",null);
+    }
     try { core.getDataFolder().mkdirs(); config.save(file); } catch(IOException ex) { core.getLogger().severe("NPC-Datei konnte nicht gespeichert werden: "+ex.getMessage()); }
   }
   private void actionbars() {
