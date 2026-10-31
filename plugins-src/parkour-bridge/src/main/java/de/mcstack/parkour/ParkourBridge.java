@@ -64,7 +64,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
   for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
-  try { s.execute("GRANT SELECT ON v_parkour_courses TO creepy_ro"); } catch(SQLException ex) { getLogger().log(Level.WARNING,"SELECT-Grant fuer creepy_ro konnte nicht gesetzt werden",ex); }
+  try { s.execute("GRANT SELECT ON v_parkour_courses TO 'creepy_ro'@'%'"); } catch(SQLException ex) { getLogger().log(Level.WARNING,"SELECT-Grant fuer creepy_ro konnte nicht gesetzt werden",ex); }
   try { syncCourses(c); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht synchronisiert werden",ex); }
  }
  private void syncCourses(Connection c) throws SQLException {
