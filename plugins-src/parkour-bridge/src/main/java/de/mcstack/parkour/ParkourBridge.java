@@ -32,7 +32,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(password==null || password.isBlank()) { getLogger().severe("Datenbankpasswort fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
   try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=db(); Statement s=c.createStatement()) { migrate(c,s); } }
   catch(Exception e) { getLogger().log(Level.SEVERE,"Parkour-Datenbank nicht verfuegbar",e); getServer().getPluginManager().disablePlugin(this); return; }
-  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); removeRetiredBoards(); refresh();
+  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); refresh();
  }
  private void migrate(Connection c,Statement s) throws SQLException {
   s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE); s.execute(ParkourSql.ADD_COURSE_NAME);
