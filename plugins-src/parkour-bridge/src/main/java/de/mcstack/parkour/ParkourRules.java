@@ -6,6 +6,12 @@ import java.util.Collection;
 /** Reine Regeln fuer Parkour-Ruecksetzungen (ohne Bukkit, testbar). */
 final class ParkourRules {
  private ParkourRules() {}
+ static boolean validWaterMode(String raw) {
+  return raw!=null && Set.of("feet","touch","off").contains(raw.trim().toLowerCase(java.util.Locale.ROOT));
+ }
+ static String waterMode(String raw) {
+  return validWaterMode(raw) ? raw.trim().toLowerCase(java.util.Locale.ROOT) : "feet";
+ }
  static double waterSurface(int level) { return level>=8 ? 1.0 : (8-level)/9.0; }
  static boolean waterReset(String mode, boolean touching, boolean feetWater, int level, double yInBlock) {
   if("off".equalsIgnoreCase(mode)) return false;

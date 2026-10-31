@@ -4,6 +4,17 @@ import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 class ParkourRulesTest {
+ @Test void waterModeNormalizesAndValidates() {
+  assertEquals("feet",ParkourRules.waterMode("FEET"));
+  assertEquals("off",ParkourRules.waterMode(" off "));
+  assertEquals("feet",ParkourRules.waterMode("bogus"));
+  assertEquals("feet",ParkourRules.waterMode(null));
+  assertFalse(ParkourRules.validWaterMode("bogus"));
+  assertTrue(ParkourRules.validWaterMode("touch"));
+  String fallback=ParkourRules.waterMode("bogus");
+  assertFalse(ParkourRules.waterReset(fallback,true,false,0,0.5));
+  assertTrue(ParkourRules.waterReset(fallback,false,true,0,0.5));
+ }
  @Test void waterResetRespectsModeAndFluidSurface() {
   assertFalse(ParkourRules.waterReset("feet",true,false,0,0.5));
   assertTrue(ParkourRules.waterReset("feet",false,true,0,0.5));

@@ -739,3 +739,8 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - Gefunden: vipworld-Slots erben die Whitelist (leer) -> echte Spieler wuerden gekickt. Fix in PR #63 (offen, nicht deployt).
 - Hinweis: config/vip-plugins enthielt schon vipworlds-afk.jar (VipWorldsAFK 1.0.0, 28.10., nicht im Repo); laeuft auf den Slots mit, unveraendert gelassen.
 - Offen: #63 Review/Merge; Host meldet "online" schon bei laufendem Container, nicht erst wenn Paper bereit ist (Connect direkt nach Start kann fehlschlagen); Queue, Mitglieder, Backups, /vwadmin, Welttyp, Frage 11 (Ablauf), Frage 16 (Panel); Ingame-Test durch Nils.
+
+
+## TODO
+
+- ParkourBridge: move() kehrt fruehzeitig zurueck, wenn sich der Y-Wert nicht aendert (Y-Early-Return). Beim ebenen Hineinlaufen in eine Wasserstroemung wird daher der Wasser-Reset nicht ausgeloest. Spaeter pruefen, ob die Wasserpruefung vor diesem Early-Return stattfinden sollte.
