@@ -90,11 +90,48 @@ ram:
             self.assertEqual(401, self.vip("GET", "/vip/status", token=None)[0])
             self.assertEqual(401, self.vip("GET", "/vip/status", token="test")[0])
             self.assertEqual(400, self.vip("POST", "/vip/start", {"worldId": "../bad"})[0])
-            self.assertEqual(404, self.vip("POST", "/vip/start", {"worldId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})[0])
             self.assertEqual(400, self.vip("POST", "/vip/stop", {"slot": "survival"})[0])
             run.assert_not_called()
             self.assertEqual((200, {"status": "stopping"}), self.vip("POST", "/vip/stop", {"slot": "vipworld-2"}))
             self.assertEqual(["docker", "stop", "mc-stack-vipworld-2-1"], run.call_args.args[0])
+
+    def test_world_directory_created_and_existing_kept(self):
+        base = self.root / "data" / "vipworlds"
+        new_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        marker = base / self.WORLD / "keep.txt"
+        marker.write_text("keep", encoding="utf-8")
+        with patch("service.subprocess.run", return_value=self.docker_result()):
+            self.assertEqual(202, self.vip("POST", "/vip/start", {"worldId": new_id})[0])
+            self.assertTrue((base / new_id).is_dir())
+            self.assertEqual(202, self.vip("POST", "/vip/start", {"worldId": self.WORLD})[0])
+        self.assertEqual("keep", marker.read_text(encoding="utf-8"))
+
+    def test_invalid_world_paths(self):
+        base = self.root / "data" / "vipworlds"
+        with patch("service.subprocess.run") as run:
+            for world_id in ("../" + self.WORLD, self.WORLD + "/..", "..\\" + self.WORLD):
+                with self.subTest(world_id=world_id):
+                    self.assertEqual(400, self.vip("POST", "/vip/start", {"worldId": world_id})[0])
+            file_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            (base / file_id).write_text("keep", encoding="utf-8")
+            self.assertEqual(400, self.vip("POST", "/vip/start", {"worldId": file_id})[0])
+            self.assertEqual("keep", (base / file_id).read_text(encoding="utf-8"))
+            link_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            try:
+                (base / link_id).symlink_to(base / self.WORLD, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            self.assertEqual(400, self.vip("POST", "/vip/start", {"worldId": link_id})[0])
+            run.assert_not_called()
+
+    def test_missing_base(self):
+        import shutil
+        shutil.rmtree(self.root / "data" / "vipworlds")
+        with patch("service.subprocess.run") as run:
+            self.assertEqual((500, {"status": "error", "code": "base_missing"}),
+                             self.vip("POST", "/vip/start", {"worldId": self.WORLD}))
+            run.assert_not_called()
+        self.assertFalse((self.root / "data" / "vipworlds").exists())
 
     def test_start_and_status(self):
         with patch("service.subprocess.run") as run:

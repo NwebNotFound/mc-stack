@@ -140,9 +140,21 @@ class Handler(BaseHTTPRequestHandler):
             world_id = payload.get("worldId")
             if not isinstance(world_id, str) or not UUID_RE.fullmatch(world_id):
                 self.json_response(400, {"status": "error", "code": "invalid_world_id"}); return
-            world_dir = root / "data" / "vipworlds" / world_id
-            if not world_dir.is_dir():
-                self.json_response(404, {"status": "error", "code": "world_not_found"}); return
+            base = root / "data" / "vipworlds"
+            if not base.is_dir():
+                self.json_response(500, {"status": "error", "code": "base_missing"}); return
+            base = base.resolve()
+            world_dir = base / world_id
+            if world_dir.is_symlink() or world_dir.resolve().parent != base:
+                self.json_response(400, {"status": "error", "code": "invalid_world_path"}); return
+            if world_dir.exists() and not world_dir.is_dir():
+                self.json_response(400, {"status": "error", "code": "invalid_world_path"}); return
+            try:
+                os.makedirs(world_dir, exist_ok=True)
+            except FileExistsError:
+                self.json_response(400, {"status": "error", "code": "invalid_world_path"}); return
+            if world_dir.is_symlink() or not world_dir.is_dir() or world_dir.resolve().parent != base:
+                self.json_response(400, {"status": "error", "code": "invalid_world_path"}); return
         slots = [inspect_slot(slot) for slot in cfg["slots"]]
         active = [slot for slot in slots if slot["status"] in ("online", "starting")]
         if self.path == "/vip/status":
