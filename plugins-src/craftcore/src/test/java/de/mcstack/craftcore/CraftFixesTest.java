@@ -34,6 +34,25 @@ class CraftFixesTest {
     long sell=Market.cents(cfg,Material.STONE,5.0,false), b=Market.cents(cfg,Material.STONE,5.0,true);
     assertEquals(187,sell); assertEquals(750,b); assertTrue(sell>0.2*b);
   }
+  @Test void sellLocksDoNotAffectBankPurchasesOrSales() throws Exception {
+    try(Connection c=DriverManager.getConnection("jdbc:h2:mem:sell_all;MODE=MySQL"); Statement s=c.createStatement()) {
+      s.execute("CREATE TABLE market_locks(item VARCHAR(64) PRIMARY KEY,lock_buy BOOLEAN,lock_sell BOOLEAN)");
+      s.execute("INSERT INTO market_locks VALUES('DIRT',TRUE,TRUE)");
+      var cfg=new YamlConfiguration(); cfg.set("market.unsellable",List.of("DIRT"));
+      assertNull(Market.sellBlocked(c,cfg,Material.DIRT));
+      assertTrue(Market.sellEnabled(false,"LOCKED"));
+      assertFalse(Market.buyEnabled(false,true,Market.locked(c,Material.DIRT,true)));
+      assertFalse(Market.buyEnabled(false,false,false));
+    }
+  }
+  @Test void minimumSaleIsCappedForRecipeChains() {
+    var recipes=List.of(new PriceCatalog.CatalogRecipe(Material.GOLD_NUGGET,9,List.of(List.of(Material.GOLD_INGOT))));
+    var costs=RecipeCost.derive(Map.of(Material.GOLD_INGOT,9L),recipes);
+    assertEquals(1, Market.safeSell(20,costs.get(Material.GOLD_NUGGET)));
+    assertEquals(1, Market.safeSell(0,null));
+    assertEquals(1, Market.safeSell(0,0.5));
+    assertEquals(5, Market.safeSell(20,5.9));
+  }
   @Test void parsesVanillaStatsJson() {
     String json="{\"stats\":{\"minecraft:killed\":{\"minecraft:sheep\":1},\"minecraft:mined\":{\"minecraft:stone\":12,\"minecraft:dirt\":3},\"minecraft:custom\":{\"minecraft:walk_one_cm\":2247,\"minecraft:play_time\":2009,\"minecraft:fly_one_cm\":7523,\"minecraft:deaths\":2,\"minecraft:player_kills\":1}},\"DataVersion\":5023}";
     UUID u=UUID.randomUUID(); Object[] v=PlayerStats.parseStats(u,json,true);
@@ -63,10 +82,10 @@ class CraftFixesTest {
       r=s.executeQuery("SELECT JSON_EXTRACT(details,'$.blocks_mined.STONE') FROM v_player_stats_ext WHERE uuid='"+u+"'"); assertTrue(r.next()); assertEquals(12,r.getLong(1));
       s.execute("INSERT INTO market_locks(item,lock_buy,lock_sell) VALUES('GRAVEL',0,1) ON DUPLICATE KEY UPDATE lock_sell=1");
       YamlConfiguration cfg=new YamlConfiguration(); cfg.set("market.unsellable",List.of("DIRT"));
-      assertEquals("LOCKED",Market.sellBlocked(c,cfg,Material.GRAVEL));
-      assertEquals("UNSELLABLE",Market.sellBlocked(c,cfg,Material.DIRT));
+      assertNull(Market.sellBlocked(c,cfg,Material.GRAVEL));
+      assertNull(Market.sellBlocked(c,cfg,Material.DIRT));
       assertNull(Market.sellBlocked(c,cfg,Material.SAND));
-      r=s.executeQuery("SELECT sell_enabled FROM v_market WHERE item='GRAVEL'"); if(r.next()) assertEquals(0,r.getInt(1));
+      r=s.executeQuery("SELECT sell_enabled FROM v_market WHERE item='GRAVEL'"); if(r.next()) assertEquals(1,r.getInt(1));
     }
   }
 }

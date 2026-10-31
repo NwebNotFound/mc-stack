@@ -31,7 +31,7 @@ class TestRunTest {
     assertTrue(section > 0);
     String block = yaml.substring(section, yaml.indexOf("\n", yaml.indexOf("enabled:", section)));
     assertTrue(block.contains("enabled: false"));
-    String commands = Files.readString(Path.of("src/main/resources/plugin.yml"));
+    String commands = Files.readString(Path.of("src/main/resources/plugin.yml")).replace("\r\n", "\n");
     assertTrue(commands.contains("\n  testrun:\n"));
   }
 

@@ -203,6 +203,19 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
     getConfig().set(path+".course",name); setBoard(p,path); p.sendMessage("Parkour-Bestenliste fuer Kurs "+name+" gesetzt."); return true;
    } catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurs konnte nicht gelesen werden",ex); p.sendMessage("Kurs konnte nicht gelesen werden."); return true; }
   }
-  p.sendMessage("/parkour leave | /parkour setboard [kurs] (OP)"); return true;
+  p.sendMessage(Component.text("Parkour: ").append(Component.text("[Lauf verlassen]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/parkour leave"))).append(Component.text(" - Starte einen Kurs am Startpunkt in der Lobby."))); return true;
  }
+ @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+  if(args.length==2 && sender.isOp() && args[0].equalsIgnoreCase("setboard")) {
+   List<String> courses=new ArrayList<>();
+   try(PreparedStatement q=ParkoursDatabase.getConnection().prepareStatement("SELECT pk_name FROM parkours ORDER BY pk_name");ResultSet r=q.executeQuery()) {
+    while(r.next()) { String name=r.getString(1); if(name!=null && name.matches("[A-Za-z0-9_-]+") && name.toLowerCase(Locale.ROOT).startsWith(args[1].toLowerCase(Locale.ROOT))) courses.add(name); }
+   } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht geladen werden",ex); }
+   return courses;
+  }
+  if(args.length!=1) return List.of();
+  List<String> choices=sender.isOp()?List.of("leave","setboard"):List.of("leave");
+  return choices.stream().filter(x->x.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+ }
+
 }

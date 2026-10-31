@@ -29,11 +29,14 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private String password, server;
   private Economy economy;
   private Trade trade;
+  private LaunchPads launchPads;
+  private Portals portals;
   private UserMenu userMenu;
   private TeamInvites teamInvites;
   private Motivation motivation;
   private PlayerStats playerStats;
   private InventorySync inventorySync;
+  private DeathEvents deathEvents;
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
@@ -65,13 +68,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute("CREATE TABLE IF NOT EXISTS teams (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(16) NOT NULL UNIQUE)");
         s.execute("CREATE TABLE IF NOT EXISTS members (uuid CHAR(36) PRIMARY KEY, team_id BIGINT NOT NULL, role VARCHAR(8) NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE)");
         InviteStore.prepareSchema(c);
+        SidebarPreference.prepare(c);
       }
       if (InventorySync.tracks(server)) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); inventorySync=new InventorySync(this,server); inventorySync.start(); }
+      deathEvents=new DeathEvents(this,server); deathEvents.start();
       teamInvites=new TeamInvites(this,server); teamInvites.start();
       saveDefaultConfig(); ResourceSync.sync(this);
       for (OfflinePlayer known : Bukkit.getOfflinePlayers()) if (known.hasPlayedBefore() && known.getName()!=null) tx(c->{exec(c,"INSERT IGNORE INTO known_players(uuid,name) VALUES (?,?)",known.getUniqueId().toString(),known.getName()); return null;});
       new ServerStatus(this).start();
       new Features(this).start();
+      launchPads=new LaunchPads(this); launchPads.start();
+      portals=new Portals(this); portals.start();
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();
@@ -86,7 +93,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       SaleNotices.start(this);
       WebsiteStats.start(this);
       tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
-      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment")) {
+      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","player_deaths","deaths_by")) {
         try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
         catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       }
@@ -105,7 +112,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];
@@ -139,16 +146,37 @@ public final class CraftCore extends JavaPlugin implements Listener {
   }
   @EventHandler public void join(PlayerJoinEvent e) { try { remember(e.getPlayer().getUniqueId(),e.getPlayer().getName()); } catch(Exception ex) { getLogger().warning("Spielerregistrierung: "+ex); } sidebar(e.getPlayer()); DeliveryNotices.join(this,e.getPlayer()); SaleNotices.notify(this,e.getPlayer(),true); }
   @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
+    if(command.getName().equals("sidebar")) return args.length==1 ? UserMenu.complete(args[0],"an","aus") : List.of();
+    if(command.getName().equals("cc")) {
+      if(!sender.hasPermission("craftcore.admin")) return List.of();
+      if(args.length==1) return UserMenu.complete(args[0],"portal","launch","deaths");
+      if(args.length==2 && args[0].equalsIgnoreCase("deaths")) return UserMenu.complete(args[1],"backfill");
+      String[] rest=Arrays.copyOfRange(args,1,args.length);
+      if(args[0].equalsIgnoreCase("portal")) return portals.onTabComplete(sender,command,alias,rest);
+      if(args[0].equalsIgnoreCase("launch")) return launchPads.onTabComplete(sender,command,alias,rest);
+      return List.of();
+    }
+    if(command.getName().equals("balance")) return List.of();
     if(command.getName().equals("team") && args.length==1) return UserMenu.complete(args[0], "create", "invite", "join", "leave", "kick", "info", "promote", "demote");
     if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("invite")) return teamInvites.complete(args[1]);
     if(command.getName().equals("claim") && args.length==1) return UserMenu.complete(args[0], "create", "list");
-    if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search");
+    if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search", "zurueckziehen", "cancel");
+    if(command.getName().equals("ah") && args.length==2 && sender instanceof Player p && Set.of("zurueckziehen","zur?ckziehen","cancel").contains(args[0].toLowerCase(Locale.ROOT))) try {
+      return Auction.instance.list(p,true,"alle","").stream().map(Auction.Listing::id).filter(id->id.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
+    } catch(Exception ex){return List.of();}
     if(command.getName().equals("npc") && args.length==1) return UserMenu.complete(args[0], "set");
     if(command.getName().equals("npc") && args.length==2) return UserMenu.complete(args[1], "bank", "ah");
     if(command.getName().equals("trade") && args.length==1) { List<String> names=new ArrayList<>(List.of("accept")); Bukkit.getOnlinePlayers().forEach(p->names.add(p.getName())); return names.stream().filter(n->n.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))).toList(); }
     if(command.getName().equals("home") && args.length==1 && sender instanceof Player p) try {return tx(c->{List<String> names=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT name FROM homes WHERE server=? AND uuid=? ORDER BY name")){q.setString(1,server);q.setString(2,p.getUniqueId().toString());try(ResultSet r=q.executeQuery()){while(r.next())if(r.getString(1).startsWith(args[0].toLowerCase(Locale.ROOT)))names.add(r.getString(1));}}return names;});}catch(Exception ex){return List.of();}
     if(command.getName().equals("shop")) {
-      if(args.length==1) try {return tx(c->{List<String> choices=new ArrayList<>(List.of("help","sell","show","remove"));try(PreparedStatement s=c.prepareStatement("SELECT DISTINCT seller_name FROM shop_journal WHERE status='OPEN' ORDER BY seller_name");ResultSet r=s.executeQuery()){while(r.next())choices.add(r.getString(1));}return choices.stream().filter(x->x.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))).distinct().toList();});}catch(Exception ex){getLogger().warning("Shop-Vervollstaendigung: "+ex);return List.of();}
+      if(args.length==1) try {return tx(c->{List<String> choices=new ArrayList<>(List.of("help","sell","show","remove","meine","entfernen"));try(PreparedStatement s=c.prepareStatement("SELECT DISTINCT seller_name FROM shop_journal WHERE status='OPEN' ORDER BY seller_name");ResultSet r=s.executeQuery()){while(r.next())choices.add(r.getString(1));}return choices.stream().filter(x->x.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))).distinct().toList();});}catch(Exception ex){getLogger().warning("Shop-Vervollstaendigung: "+ex);return List.of();}
+      if(args.length==2 && sender instanceof Player p && Set.of("entfernen","remove","undo").contains(args[0].toLowerCase(Locale.ROOT))) try {
+        List<Shop.Listing> own=Shop.instance.listings(p.getUniqueId().toString(),true);
+        List<String> values=new ArrayList<>(); for(int i=0;i<own.size();i++){if(args[0].equalsIgnoreCase("remove")) values.add(Integer.toString(i+1)); else values.add(own.get(i).id());}
+        return values.stream().filter(v->v.toLowerCase(Locale.ROOT).startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
+      } catch(Exception ex){return List.of();}
+      if(args.length==2 && args[0].equalsIgnoreCase("sell")) return UserMenu.complete(args[1],"1","10","100");
+      if(args.length==3 && args[0].equalsIgnoreCase("sell")) return UserMenu.complete(args[2],"1","64");
       return List.of();
     }
     if(command.getName().equals("pay") && args.length==1) try { return tx(c->{ List<String> names=new ArrayList<>(); try(PreparedStatement s=c.prepareStatement("SELECT name FROM known_players ORDER BY name")){try(ResultSet r=s.executeQuery()){while(r.next()){String name=r.getString(1); if(name.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))) names.add(name);}}} return names; }); } catch(Exception ex) { getLogger().warning("Pay-Vervollstaendigung: "+ex); return List.of(); }
@@ -178,6 +206,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   }
   private void sidebar(Player p) {
     try {
+      if (!tx(c->SidebarPreference.enabled(c,p.getUniqueId().toString()))) return;
       String team=tx(c->one(c,"SELECT t.name FROM teams t JOIN members m ON m.team_id=t.id WHERE m.uuid=?",p.getUniqueId().toString()));
       long cp=balance(p.getUniqueId());
       Scoreboard board=sidebars.computeIfAbsent(p.getUniqueId(),id->createSidebar(p));
@@ -200,6 +229,24 @@ public final class CraftCore extends JavaPlugin implements Listener {
     return ShopBuyDispatch.Caller.OTHER;
   }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
+    if(command.getName().equals("cc")) {
+      if(!sender.hasPermission("craftcore.admin")) return true;
+      if(args.length>0) {
+        String[] rest=Arrays.copyOfRange(args,1,args.length);
+        if(args[0].equalsIgnoreCase("deaths")) { if(args.length==2 && args[1].equalsIgnoreCase("backfill")) deathEvents.backfill(sender); else sender.sendMessage("/cc deaths backfill"); return true; }
+        if(args[0].equalsIgnoreCase("portal")) return portals.onCommand(sender,command,label,rest);
+        if(args[0].equalsIgnoreCase("launch")) { if(launchPads.onCommand(sender,command,label,rest)) return true; }
+      }
+      sender.sendMessage(Component.text("Admin: ").append(Component.text("[Portale]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc portal list"))).append(Component.text(" [LaunchPads]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc launch list")))); return true;
+    }
+    if(command.getName().equals("sidebar")) {
+      if(!(sender instanceof Player p)){sender.sendMessage("Bitte nutze /sidebar im Spiel.");return true;}
+      if(args.length!=1 || !(args[0].equalsIgnoreCase("an") || args[0].equalsIgnoreCase("aus"))) {p.sendMessage(Component.text("Sidebar: ").append(Component.text("[an]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/sidebar an"))).append(Component.text(" [aus]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/sidebar aus"))));return true;}
+      try {boolean enabled=args[0].equalsIgnoreCase("an");tx(c->{SidebarPreference.set(c,p.getUniqueId().toString(),enabled);return null;});
+        if(enabled) sidebar(p); else {Scoreboard board=sidebars.remove(p.getUniqueId()); if(board!=null && p.getScoreboard()==board) p.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());}
+        p.sendMessage("Sidebar "+(enabled?"eingeschaltet":"ausgeschaltet")+". Aendern mit /sidebar "+(enabled?"aus":"an")+".");
+      } catch(Exception ex){getLogger().warning("Sidebar-Einstellung: "+ex);p.sendMessage("Einstellung konnte nicht gespeichert werden. Bitte erneut versuchen.");} return true;
+    }
     if (command.getName().equals("ah") && args.length>0 && args[0].equalsIgnoreCase("bid")) {
       RealAuctions.Request request=RealAuctions.parse(args);
       if(!SpawnRoute.isSurvival(server) || request==null || (sender instanceof Player p && (!p.getUniqueId().toString().equals(request.bidder()) || !request.source().equals("ingame")))) {sender.sendMessage("ERR INVALID");return true;}
@@ -282,7 +329,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "vip": userMenu.open(p,command.getName()); break;
         case "abholen": Deliveries.collect(this,p); break;
         case "feedback": p.sendMessage(Feedback.line(Feedback.url(getConfig()))); break;
-        case "balance": p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
+        case "balance": if(args.length!=0) p.sendMessage("Fuer deinen Kontostand nutze /geld ohne weitere Eingaben."); else p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
         case "pay": {
           if(args.length!=2){UserMenu.help(p,"pay"); break;}
           String targetId=tx(c->one(c,"SELECT uuid FROM known_players WHERE name=?",args[0])); if(targetId==null){p.sendMessage("Spieler ist im Netzwerk nicht bekannt."); break;}
@@ -294,6 +341,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "ah": Auction.instance.command(p,args); break;
         case "trade": trade.command(p,args); break;
         case "npc": npcs.command(p,args); break;
+        case "verkaufen": Market.instance.openSell(p); break;
         case "bank": case "market": Market.instance.command(p,command.getName(),args); break;
         case "claim": case "unclaim": case "spawn": case "home": case "sethome": Features.instance.command(p,command.getName(),args); break;
       }

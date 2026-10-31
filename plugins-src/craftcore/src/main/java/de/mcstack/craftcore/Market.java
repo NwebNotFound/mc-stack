@@ -8,14 +8,17 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.inventory.*;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.Damageable;
 
 final class Market implements Listener {
   static Market instance;
   private final CraftCore core;
   private final Map<Material, Quote> items = new LinkedHashMap<>();
   private Map<Material,Double> recipeCosts = Map.of();
+  private Map<Material,Long> minimumPurchases = Map.of();
   record Quote(double base, double min, double max, double pressure) {}
   record Price(long cents, double current, String trend) {}
   static final class Menu implements InventoryHolder {
@@ -23,42 +26,51 @@ final class Market implements Listener {
     Menu(String category,String query,int page){this.category=category;this.query=query;this.page=page;}
     public Inventory getInventory() { return null; }
   }
+  static final class SellMenu implements InventoryHolder {
+    final UUID owner; Inventory inventory;
+    SellMenu(UUID owner){this.owner=owner;}
+    public Inventory getInventory(){return inventory;}
+  }
+  private final Map<UUID,SellMenu> sellMenus=new HashMap<>();
   Market(CraftCore core) { this.core=core; instance=this; }
   private Set<Material> priced = EnumSet.noneOf(Material.class);
-  boolean tradable(Material m){ return !core.getConfig().getBoolean("market.lock-fallback",true) || priced.contains(m); }
-  /** Gemeinsame Pruefung fuer GUI-Verkauf und RCON-Test: null = Verkauf an die Bank erlaubt. */
-  static String sellBlocked(Connection c, org.bukkit.configuration.Configuration cfg, Material m) throws SQLException {
-    if(cfg.getStringList("market.unsellable").contains(m.name())) return "UNSELLABLE";
-    if(locked(c,m,false)) return "LOCKED";
-    return null;
-  }
-  String sellCheck(String raw) throws Exception {
+  boolean tradable(Material m){ return PriceCatalog.eligible(m) && (!core.getConfig().getBoolean("market.lock-fallback",true) || priced.contains(m)); }
+  /** Every catalog item can be sold; purchase restrictions are independent. */
+  static String sellBlocked(Connection c, org.bukkit.configuration.Configuration cfg, Material m) { return null; }
+  String sellCheck(String raw) {
     Material m=raw==null?null:Material.matchMaterial(raw);
-    if(m==null || !items.containsKey(m)) return "ERR UNKNOWN";
-    if(!tradable(m)) return "ERR LOCKED";
-    String r=core.tx(c->sellBlocked(c,core.getConfig(),m));
-    return r==null?"OK SELLABLE "+m.name():"ERR "+r+" "+m.name();
+    return m==null || !items.containsKey(m) ? "ERR UNKNOWN" : "OK SELLABLE "+m.name();
   }
   static boolean buyEnabled(boolean unbuyable,boolean tradable,boolean lockedBuy){ return !unbuyable && tradable && !lockedBuy; }
-  static boolean sellEnabled(boolean tradable,String sellBlocked){ return tradable && sellBlocked==null; }
+  static boolean sellEnabled(boolean tradable,String sellBlocked){ return true; }
   static boolean locked(Connection c, Material m, boolean buy) throws SQLException {
     try(PreparedStatement s=c.prepareStatement("SELECT "+(buy?"lock_buy":"lock_sell")+" FROM market_locks WHERE item=?")){s.setString(1,m.name());try(ResultSet r=s.executeQuery()){return r.next()&&r.getInt(1)==1;}}
   }
   void start() throws Exception {
     PriceCatalog.build(core).forEach((m,raw)->{if(Bukkit.getItemFactory().getItemMeta(m)==null){core.getLogger().warning("Marktartikel ohne ItemMeta ausgeschlossen: "+m);return;} Quote q=quote(core.getConfig(),m,raw); items.put(m,q);});
     Map<Material,Long> minimumPurchases=new EnumMap<>(Material.class);
-    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,cents(core.getConfig(),m,q.base()*recipeCapFactor(core.getConfig()),true));});
+    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,DynamicPrice.apply(Math.max(1,cents(core.getConfig(),m,q.base(),true)),DynamicPrice.FLOOR,true));});
     List<PriceCatalog.CatalogRecipe> recipes=new ArrayList<>();
     Bukkit.recipeIterator().forEachRemaining(recipe->{var converted=PriceCatalog.recipe(recipe);if(converted!=null)recipes.add(converted);});
+    // Ensure even the cheapest purchasable recipe chain costs at least one cent
+    // per output before applying the universal one-cent sale floor.
     recipeCosts=RecipeCost.derive(minimumPurchases,recipes);
+    double cheapest=recipeCosts.values().stream().mapToDouble(Double::doubleValue).filter(v->v>0).min().orElse(1);
+    double purchaseScale=Math.max(1,1/cheapest);
+    if(purchaseScale>1) {
+      minimumPurchases.replaceAll((m,v)->(long)Math.ceil(v*purchaseScale));
+      recipeCosts=RecipeCost.derive(minimumPurchases,recipes);
+    }
+    this.minimumPurchases=minimumPurchases;
     core.tx(c->{MarketEffective.refresh(c,core.getConfig(),MarketEffective.bases(core),recipes);return null;});
     { var f=new java.io.File(core.getDataFolder(),"prices-base.yml"); var pricesCfg=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(f); priced=PriceCatalog.known(pricesCfg,recipes); java.time.Instant eff=PriceMeta.effectiveFromOrPlaceholder(pricesCfg,core.getLogger()); PriceMeta.storeSafely(core,eff); core.getLogger().info("Preis-Stichtag effective_from="+(eff.equals(PriceMeta.PLACEHOLDER)?"nicht gesetzt (Platzhalter)":eff.toString())+", buyback_caps="+BuybackCaps.enabled(core.getConfig())); core.getLogger().info("Markt: "+priced.size()+" Items mit eigenem Preis, "+items.keySet().stream().filter(x->!priced.contains(x)).count()+" auf Fallback (gesperrt="+core.getConfig().getBoolean("market.lock-fallback",true)+")"); }
     for(Material dm:List.of(Material.IRON_INGOT,Material.RAW_IRON,Material.IRON_BLOCK,Material.GOLD_INGOT)) if(items.containsKey(dm)) core.getLogger().info("Rezeptkosten "+dm+": "+recipeCosts.get(dm)+" ct via "+RecipeCost.path(dm));
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_price_factors (material VARCHAR(64) PRIMARY KEY, sell_factor DOUBLE NOT NULL, buy_factor DOUBLE NOT NULL, updated BIGINT NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS discord_links (uuid CHAR(36) PRIMARY KEY, discord_id VARCHAR(20) NULL, INDEX discord_lookup (discord_id))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_link_revenue (owner VARCHAR(40) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(owner,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS market_prices (material VARCHAR(64) PRIMARY KEY, price DOUBLE NOT NULL, updated BIGINT NOT NULL, trend VARCHAR(8) NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_daily (player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(player,item,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_revenue_daily (player CHAR(36) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(player,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_journal (id CHAR(36) PRIMARY KEY, player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, status VARCHAR(24) NOT NULL, INDEX bank_pending (status,player))"); return null;});
-    core.tx(c->{DynamicPrice.migrate(c);BankBuy.migrate(c);return null;});
+    core.tx(c->{DynamicPrice.migrate(c);BankBuy.migrate(c);BuybackCaps.ensureSchema(c);return null;});
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); for(Material m:items.keySet()) price(c,m,false,false); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
+    Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -81,30 +93,30 @@ final class Market implements Listener {
   }
   Price price(Connection c, Material m, boolean trade, boolean buy) throws SQLException {
     Quote q=items.get(m); long now=System.currentTimeMillis();
-    DynamicPrice.Settings dyn=DynamicPrice.settings(core.getConfig());
-    if(dyn.enabled()) {
-      // Dynamic model: same factor for buy and buyback (spread kept), recovers by wall-clock time.
-      double f=DynamicPrice.current(c,m.name(),now,dyn);
-      long sell=BuybackCaps.capCents(core.getConfig(),m,DynamicPrice.apply(bankCents(m,q.base(),false),f,false));
-      long purchase=Math.max(DynamicPrice.apply(bankCents(m,q.base(),true),f,true),BankPrice.minimumBuy(sell));
-      core.exec(c,"INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)",m.name(),purchase/100.0,sell/100.0,q.base(),now/1000);
-      if(trade) DynamicPrice.trade(c,m.name(),buy?-1:1,now,dyn);
-      return new Price(buy?purchase:sell,q.base()*f,trade?(buy?"auf":"ab"):"-");
+    double f=DynamicPrice.current(c,m.name(),now);
+    long baseBuy=bankCents(m,q.base(),true);
+    // Across the entire permitted band, a sale can never pay more than a later purchase.
+    long sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
+      DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
+      DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
+    sell=safeSell(sell,recipeCosts.get(m));
+    long purchase=Math.max(minimumPurchases.getOrDefault(m,1L),Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell)));
+    if(trade) {
+      f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
+      sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
+        DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
+        DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
+      sell=safeSell(sell,recipeCosts.get(m));
+      purchase=Math.max(minimumPurchases.getOrDefault(m,1L),Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell)));
     }
-    core.exec(c,"INSERT IGNORE INTO bank_price_factors VALUES (?,1,1,?)",m.name(),now);
-    double sf,bf; long updated;
-    try(PreparedStatement st=c.prepareStatement("SELECT sell_factor,buy_factor,updated FROM bank_price_factors WHERE material=? FOR UPDATE")) {
-      st.setString(1,m.name()); try(ResultSet rs=st.executeQuery()) {rs.next();sf=rs.getDouble(1);bf=rs.getDouble(2);updated=rs.getLong(3);}
-    }
-    sf=Math.min(1,Math.max(0.25,BankPrice.recover(sf,now-updated))); bf=Math.max(1,Math.min(2,BankPrice.recover(bf,now-updated)));
-    long sell=BuybackCaps.capCents(core.getConfig(),m,(long)Math.floor(bankCents(m,q.base(),false)*sf));
-    long purchase=Math.max((long)Math.ceil(bankCents(m,q.base(),true)*bf),BankPrice.minimumBuy(sell));
-    core.exec(c,"INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)",m.name(),purchase/100.0,sell/100.0,q.base(),now/1000);
-    if(trade) { if(buy) bf=BankPrice.moveBuy(bf); else sf=BankPrice.moveSell(sf); }
-    core.exec(c,"UPDATE bank_price_factors SET sell_factor=?,buy_factor=?,updated=? WHERE material=?",sf,bf,now,m.name());
-    return new Price(buy?purchase:sell,q.base()*(buy?bf:sf),trade?(buy?"auf":"ab"):"-");
+    WebsiteStats.catalog(c,m.name(),purchase,sell,q.base(),now);
+    return new Price(buy?purchase:sell,q.base()*f,trade?(buy?"auf":"ab"):"-");
   }
 
+  static long safeSell(long cents, Double recipeCost) {
+    long capped=recipeCost==null ? cents : Math.min(cents,Math.max(0,(long)Math.floor(recipeCost+1e-9)));
+    return Math.max(1,capped);
+  }
   boolean hasPrice(Material m) { return items.containsKey(m); }
   private long bankCents(Material m,double current,boolean buy) {
     long value=cents(core.getConfig(),m,current,buy);
@@ -128,7 +140,7 @@ final class Market implements Listener {
       Price buy=quotes.get(m)[0], sell=quotes.get(m)[1]; ItemStack icon=new ItemStack(m); ItemMeta meta=icon.getItemMeta();
       if(meta==null){menu.slots.remove(slot);core.getLogger().warning("Marktartikel ohne ItemMeta uebersprungen: "+m);continue;} meta.setLore(List.of(isUnbuyable(m)?"Kauf: nur Spielerhandel":"Kauf: "+Money.format(buy.cents()),"Verkauf: "+Money.format(sell.cents()),"Trend: "+buy.trend(),isUnbuyable(m)?"Nicht bei der Bank kaufbar":"Linksklick: 1 kaufen", "Rechtsklick: 1 verkaufen")); icon.setItemMeta(meta); inv.setItem(slot,icon);
     }
-    inv.setItem(45,button(Material.ARROW,"Vorherige Seite")); inv.setItem(46,button(Material.GRASS_BLOCK,"Bloecke")); inv.setItem(47,button(Material.IRON_INGOT,"Materialien")); inv.setItem(48,button(Material.IRON_SWORD,"Ausruestung")); inv.setItem(49,button(Material.APPLE,"Nahrung")); inv.setItem(50,button(Material.REDSTONE,"Technik")); inv.setItem(51,button(Material.CHEST,"Alle Kategorien")); inv.setItem(52,button(Material.COMPASS,"Tageslimit uebrig: "+Money.format(remaining)+" | Suche: /market <Suchbegriff>")); inv.setItem(53,button(Material.ARROW,"Naechste Seite")); if(core.npcPreviews.contains(p.getOpenInventory().getTopInventory())) core.npcPreviews.add(inv); p.openInventory(inv);
+    inv.setItem(45,button(Material.ARROW,"Vorherige Seite")); inv.setItem(46,button(Material.GRASS_BLOCK,"Bloecke")); inv.setItem(47,button(Material.IRON_INGOT,"Materialien")); inv.setItem(48,button(Material.IRON_SWORD,"Ausruestung")); inv.setItem(49,button(Material.APPLE,"Nahrung")); inv.setItem(50,button(Material.REDSTONE,"Technik")); inv.setItem(51,button(Material.CHEST,"Alle Kategorien")); inv.setItem(52,button(Material.GOLD_INGOT,"Verkaufen | Tageslimit uebrig: "+Money.format(remaining))); inv.setItem(53,button(Material.ARROW,"Naechste Seite")); if(core.npcPreviews.contains(p.getOpenInventory().getTopInventory())) core.npcPreviews.add(inv); p.openInventory(inv);
   }
   @EventHandler public void drag(InventoryDragEvent e) { if(e.getView().getTopInventory().getHolder() instanceof Menu) e.setCancelled(true); }
   @EventHandler public void click(InventoryClickEvent e) {
@@ -137,26 +149,107 @@ final class Market implements Listener {
     int slot=e.getRawSlot(); Material m=menu.slots.get(slot);
     if(m!=null && core.npcPreviews.contains(e.getView().getTopInventory())) { p.sendMessage("NPC-Vorschau: Handel ist hier wegen unsicherer Item-Auslieferung gesperrt."); return; }
     try { if(m!=null) { if(e.isRightClick())sell(p,m); else buy(p,m); open(p,menu.category,menu.query,menu.page); }
-      else switch(slot) { case 45 -> open(p,menu.category,menu.query,menu.page-1); case 53 -> open(p,menu.category,menu.query,menu.page+1); case 46 -> open(p,"bloecke",menu.query,0); case 47 -> open(p,"materialien",menu.query,0); case 48 -> open(p,"ausruestung",menu.query,0); case 49 -> open(p,"nahrung",menu.query,0); case 50 -> open(p,"technik",menu.query,0); case 51 -> open(p,"alle",menu.query,0); case 52 -> p.sendMessage("Suche mit /market <Suchbegriff>; /market zeigt wieder alle Artikel."); default -> {} }
+      else switch(slot) { case 45 -> open(p,menu.category,menu.query,menu.page-1); case 53 -> open(p,menu.category,menu.query,menu.page+1); case 46 -> open(p,"bloecke",menu.query,0); case 47 -> open(p,"materialien",menu.query,0); case 48 -> open(p,"ausruestung",menu.query,0); case 49 -> open(p,"nahrung",menu.query,0); case 50 -> open(p,"technik",menu.query,0); case 51 -> open(p,"alle",menu.query,0); case 52 -> { if(core.npcPreviews.contains(e.getView().getTopInventory())) p.sendMessage("NPC-Vorschau: Handel gesperrt."); else openSell(p); } default -> {} }
     } catch(Exception ex) { core.getLogger().warning("Bank: "+ex); p.sendMessage("Bankaktion fehlgeschlagen. Bitte spaeter erneut versuchen."); }
   }
+  static long durabilityPrice(long cents, int damage, int maxDurability) {
+    if(maxDurability<=0) return cents;
+    int remaining=Math.max(0,Math.min(maxDurability,maxDurability-Math.max(0,damage)));
+    return cents / maxDurability * remaining + cents % maxDurability * remaining / maxDurability;
+  }
   private void sell(Player p, Material m) throws Exception {
-    if(!tradable(m) || core.tx(c->sellBlocked(c,core.getConfig(),m))!=null) {p.sendMessage("Dieser Artikel ist nicht an die Bank verkaufbar.");return;}
     PlayerInventory inv=p.getInventory(); int slot=-1;
-    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && !stack.hasItemMeta()) { slot=i; break; } }
+    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && (!stack.hasItemMeta() || (m.getMaxDurability()>0 && stack.getItemMeta() instanceof Damageable))) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
     ItemStack before=inv.getItem(slot).clone(); ItemStack after=before.clone(); after.setAmount(before.getAmount()-1); inv.setItem(slot,after.getAmount()==0?null:after);
-    String id=UUID.randomUUID().toString(); UUID player=p.getUniqueId();
+    int damage=before.getItemMeta() instanceof Damageable d ? d.getDamage() : 0;
     try {
-      boolean accepted=core.tx(c->{String day=dayKey();
-        String owner=DiscordRevenue.lock(c,player.toString(),day);
-        if(sellBlocked(c,core.getConfig(),m)!=null) return false;
-        long cp=price(c,m,false,false).cents(); if(cp<1 || !BuybackCaps.reserve(c,core.getConfig(),owner,m,day) || !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit()))return false;
-        core.exec(c,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",id,player.toString(),m.name(),1,cp,"PENDING"); BankJournal.finishSale(c,id,material->price(c,m,true,false)); WebsiteStats.event(c,m.name(),1,cp,"bank"); return true;});
-      if(!accepted){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht oder Verkaufspreis unter 0,01 CP.");return;}
+      if(!sellUnit(p.getUniqueId(),m,damage)){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht.");return;}
     } catch(Exception ex) { inv.setItem(slot,before); throw ex; }
     p.sendMessage("Verkauf abgeschlossen.");
   }
+  private boolean sellUnit(UUID player, Material m, int damage) throws Exception {
+    String id=UUID.randomUUID().toString();
+    return core.tx(c->{String day=dayKey(); String owner=DiscordRevenue.lock(c,player.toString(),day);
+      long cp=Math.max(1,durabilityPrice(price(c,m,false,false).cents(),damage,m.getMaxDurability()));
+      if(affordable(DiscordRevenue.remainingOwner(c,owner,day,revenueLimit()),cp,1)==0) return false;
+      if(!BuybackCaps.reserve(c,core.getConfig(),owner,m,day)) return false;
+      if(!DiscordRevenue.reserve(c,owner,day,cp,revenueLimit())) throw new SQLException("Tageslimit konnte nicht reserviert werden");
+      core.exec(c,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",id,player.toString(),m.name(),1,cp,"PENDING");
+      BankJournal.finishSale(c,id,material->price(c,m,true,false)); WebsiteStats.event(c,m.name(),1,cp,"bank"); return true;});
+  }
+  static boolean eligible(ItemStack item) {
+    if(item==null || item.getType().isAir()) return false;
+    Material m=item.getType();
+    return !item.hasItemMeta() || (m.getMaxDurability()>0 && item.getItemMeta() instanceof Damageable);
+  }
+  static long total(long unit,int amount) { return Math.multiplyExact(unit,amount); }
+  static int affordable(long remaining,long unit,int amount) { return unit<=0?0:(int)Math.min(amount,Math.max(0,remaining)/unit); }
+  static <T> void drain(int size, java.util.function.IntFunction<T> get, java.util.function.IntConsumer clear, java.util.function.Consumer<T> deliver) {
+    for(int slot=0;slot<size;slot++){T item=get.apply(slot);clear.accept(slot);if(item!=null)deliver.accept(item);}
+  }
+  static final String SELL_MENU_OFF = "Das Verkaufsmenue ist gerade deaktiviert.";
+ static boolean sellMenuEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("sell-menu.enabled", false); }
+ void openSell(Player p) throws Exception {
+  if(!sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
+    SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Verkaufen");
+    refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
+  }
+  private void refreshSell(SellMenu menu) throws Exception {
+    List<String> lore=new ArrayList<>(); long[] sum={0};
+    core.tx(c->{for(int slot=0;slot<45;slot++){ItemStack item=menu.inventory.getItem(slot); if(item==null || item.getType().isAir())continue;
+      Material m=item.getType(); if(!eligible(item)||!hasPrice(m)){lore.add(m.name()+" x"+item.getAmount()+": nicht verkaufbar");continue;}
+      int damage=item.getItemMeta() instanceof Damageable d?d.getDamage():0;
+      long unit=Math.max(1,durabilityPrice(price(c,m,false,false).cents(),damage,m.getMaxDurability()));
+      sum[0]=Math.addExact(sum[0],total(unit,item.getAmount())); lore.add(m.name()+" x"+item.getAmount()+": "+Money.format(unit)+" / Stueck");
+    } return null;});
+    lore.add("Summe (aktueller Preis): "+Money.format(sum[0]));
+    lore.add("Tageslimit uebrig: "+Money.format(core.tx(c->DiscordRevenue.remaining(c,menu.owner.toString(),dayKey(),revenueLimit()))));
+    lore.add("Preise koennen sich beim Verkauf aendern.");
+    ItemStack button=button(Material.LIME_DYE,"Verkauf bestaetigen"); ItemMeta meta=button.getItemMeta();meta.setLore(lore);button.setItemMeta(meta);menu.inventory.setItem(49,button);
+  }
+  private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }
+  @EventHandler public void sellDrag(InventoryDragEvent e) {
+    if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu))return;
+    if(e.getRawSlots().stream().anyMatch(slot->slot>=45 && slot<54))e.setCancelled(true); else refreshLater(menu);
+  }
+  @EventHandler public void sellClick(InventoryClickEvent e) {
+    if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu) || !(e.getWhoClicked() instanceof Player p))return;
+    int raw=e.getRawSlot();
+    if(e.isShiftClick()) { e.setCancelled(true); if(raw>=54 && e.getClickedInventory()!=null) {
+      ItemStack item=e.getCurrentItem(); if(item!=null && !item.getType().isAir()) {
+        int remaining=item.getAmount();
+        for(int pass=0;pass<2 && remaining>0;pass++)for(int i=0;i<45 && remaining>0;i++) {ItemStack at=menu.inventory.getItem(i);
+          if(pass==0 && at!=null && at.isSimilar(item)){int n=Math.min(remaining,Math.max(0,at.getMaxStackSize()-at.getAmount()));at.setAmount(at.getAmount()+n);remaining-=n;}
+          if(pass==1 && (at==null || at.getType().isAir())){int n=Math.min(remaining,item.getMaxStackSize());ItemStack copy=item.clone();copy.setAmount(n);menu.inventory.setItem(i,copy);remaining-=n;}}
+        if(remaining==0)e.setCurrentItem(null);else item.setAmount(remaining);refreshLater(menu);
+      }} else if(raw>=0 && raw<45) {ItemStack item=e.getCurrentItem();if(item!=null){e.setCurrentItem(null);for(ItemStack left:p.getInventory().addItem(item).values())p.getWorld().dropItemNaturally(p.getLocation(),left);refreshLater(menu);}} return; }
+    if(raw>=45 && raw<54){e.setCancelled(true);if(raw==49 && (e.isLeftClick()||e.isRightClick())) confirmSell(p,menu);return;}
+    if(e.getClick()==ClickType.DOUBLE_CLICK || e.getClick()==ClickType.NUMBER_KEY || e.getClick()==ClickType.SWAP_OFFHAND || e.getAction()==InventoryAction.COLLECT_TO_CURSOR) {e.setCancelled(true);return;}
+    refreshLater(menu);
+  }
+  private void confirmSell(Player p,SellMenu menu) {
+    int sold=0; boolean limited=false,failed=false;
+    for(int slot=0;slot<45;slot++) { ItemStack stack=menu.inventory.getItem(slot); if(!eligible(stack)||!hasPrice(stack.getType()))continue;
+      menu.inventory.setItem(slot,null); int remaining=stack.getAmount();
+      int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
+      while(remaining>0) {try {if(!sellUnit(p.getUniqueId(),stack.getType(),damage)){limited=true;break;} remaining--;sold++;}catch(Exception ex){core.getLogger().warning("Verkauf: "+ex);failed=true;break;}}
+      if(remaining>0){stack.setAmount(remaining); menu.inventory.setItem(slot,stack);} if(failed)break;
+    }
+    if(limited || failed) deliverSellItems(p,menu);
+    p.sendMessage("Verkauft: "+sold+" Gegenstaende."+(limited?" Tageslimit erreicht; Rest zurueckgegeben.":"")+(failed?" Verkauf fehlgeschlagen; Rest zurueckgegeben.":""));
+    try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}
+  }
+  private void returnSell(Player p,SellMenu menu) {
+    if(!sellMenus.remove(menu.owner,menu))return;
+    deliverSellItems(p,menu);
+  }
+  private void deliverSellItems(Player p,SellMenu menu) {
+    drain(45,menu.inventory::getItem,slot->menu.inventory.setItem(slot,null),item->{if(!item.getType().isAir()) for(ItemStack left:p.getInventory().addItem(item).values())p.getWorld().dropItemNaturally(p.getLocation(),left);});
+  }
+  @EventHandler public void sellClose(InventoryCloseEvent e){if(e.getInventory().getHolder() instanceof SellMenu menu && e.getPlayer() instanceof Player p)returnSell(p,menu);}
+  @EventHandler public void sellQuit(PlayerQuitEvent e){SellMenu menu=sellMenus.get(e.getPlayer().getUniqueId());if(menu!=null)returnSell(e.getPlayer(),menu);}
+  void shutdown(){for(SellMenu menu:new ArrayList<>(sellMenus.values())){Player p=Bukkit.getPlayer(menu.owner);if(p!=null){returnSell(p,menu);p.closeInventory();}}}
   private void finishSale(String id) {
     try { core.tx(c->{
       BankJournal.finishSale(c,id,(material)->{ Material m=Material.matchMaterial(material); if(m==null || !items.containsKey(m)) throw new SQLException("Marktartikel fehlt fuer Journal "+id); price(c,m,true,false); }); return null;

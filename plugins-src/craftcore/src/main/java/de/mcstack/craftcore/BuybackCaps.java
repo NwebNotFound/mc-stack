@@ -31,7 +31,6 @@ final class BuybackCaps {
     int limit = perDay(cfg, m);
     if (limit == Integer.MAX_VALUE) return true;
     if (limit < 1) return false;
-    ensureSchema(c);
     try (PreparedStatement s = c.prepareStatement("INSERT IGNORE INTO bank_sell_cap_daily(owner,item,day_key,amount) VALUES(?,?,?,0)")) {
       s.setString(1, owner); s.setString(2, m.name()); s.setString(3, day); s.executeUpdate();
     }

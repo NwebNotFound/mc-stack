@@ -4,6 +4,19 @@ main: de.mcstack.craftcore.CraftCore
 api-version: '26.3'
 depend: [Vault]
 commands:
+  cc:
+    description: CraftCore Administration
+    permission: craftcore.admin
+  ccportal:
+    description: Portale verwalten
+    permission: craftcore.portal.admin
+  sidebar:
+    description: Sidebar ein- oder ausschalten
+    aliases: [sb]
+  cclaunch:
+    description: LaunchPads verwalten
+    usage: /cclaunch <list|reload|set <id> [targetX targetY targetZ]|remove <id>|target <id>>
+    permission: craftcore.launch.admin
   cclink:
     description: Discord-Verknuepfung setzen (Konsole)
   stats:
@@ -23,7 +36,7 @@ commands:
     description: Link zu Feedback und Bugs
   balance:
     description: CP-Kontostand
-    aliases: [bal]
+    aliases: [bal, geld]
   pay:
     description: CP an Spieler senden
     usage: /pay <Spieler> <Betrag>
@@ -49,10 +62,14 @@ commands:
   bank:
     aliases: [money]
     description: Bank und Warenhandel
+  verkaufen:
+    description: Gegenstaende an die Bank verkaufen
+    aliases: [sell]
   market:
     description: Marktpreise und Trend
 
   shop:
+    aliases: [markt]
     description: Spielershops
     usage: /shop help
 
@@ -76,6 +93,13 @@ commands:
     description: MineRush Loot-Editor
     permission: craftcore.minerush.edit
 permissions:
+  craftcore.admin:
+    default: op
+  craftcore.portal.admin:
+    default: op
+  craftcore.launch.admin:
+    description: LaunchPads verwalten
+    default: op
   craftcore.minerush.edit:
     description: MineRush bearbeiten
     default: op

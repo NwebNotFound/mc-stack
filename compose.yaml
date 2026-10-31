@@ -73,7 +73,7 @@ services:
       CRAFTCORE_SERVER: Lobby
       MOTD: MC Stack Lobby
       MODE: adventure
-      DIFFICULTY: peaceful
+      DIFFICULTY: easy
       VIEW_DISTANCE: "6"
       SIMULATION_DISTANCE: "4"
       SPAWN_PROTECTION: "0"

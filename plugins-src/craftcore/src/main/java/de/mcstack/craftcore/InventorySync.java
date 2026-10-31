@@ -20,7 +20,7 @@ import org.bukkit.inventory.meta.ItemMeta;
  * An empty survival snapshot still hides lobby rows.
  */
 final class InventorySync implements Listener {
-  static final long PERIOD_TICKS = 6000L;
+  static final long PERIOD_TICKS = 1200L;
   static final int SUMMARY_LIMIT = 80;
   static final String VIEW = "CREATE OR REPLACE VIEW v_player_inventory AS SELECT i.uuid, i.slot, i.material, i.amount, i.meta_summary, i.updated_at FROM player_inventory i WHERE i.server=CASE WHEN EXISTS (SELECT 1 FROM player_inventory_sync s WHERE s.uuid=i.uuid AND s.server='survival') THEN 'survival' ELSE 'lobby' END";
   record Slot(int slot, String material, int amount, String metaSummary) {}

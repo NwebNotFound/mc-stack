@@ -36,6 +36,8 @@ final class PlayerStats implements Listener {
   static List<Detail> details(Player p) {
     List<Detail> result=new ArrayList<>();
     for(Material m:Material.values()) if(m.isBlock() && !m.isLegacy()) { int n=p.getStatistic(Statistic.MINE_BLOCK,m); if(n>0) result.add(new Detail("blocks_mined",m.name(),n)); }
+    for(Material m:Material.values()) if(!m.isLegacy() && m.isItem()) for(Statistic stat:List.of(Statistic.CRAFT_ITEM,Statistic.USE_ITEM,Statistic.BREAK_ITEM,Statistic.PICKUP,Statistic.DROP)) { try { int n=p.getStatistic(stat,m); if(n>0) result.add(new Detail(stat.name().toLowerCase(Locale.ROOT),m.name(),n)); } catch(IllegalArgumentException ignored) {} }
+    for(Statistic stat:Statistic.values()) if(stat.getType()==Statistic.Type.UNTYPED) { try { int n=p.getStatistic(stat); if(n>0) result.add(new Detail("custom",stat.name(),n)); } catch(IllegalArgumentException ignored) {} }
     for(String key:DISTANCE_STATS) {
       try { int n=p.getStatistic(Statistic.valueOf(key)); if(n>0) result.add(new Detail("distance_cm",key,n)); }
       catch(IllegalArgumentException ignored) { /* Statistic is absent in this server version. */ }
@@ -66,7 +68,7 @@ final class PlayerStats implements Listener {
   void start() throws Exception {
     core.tx(c->{migrate(c); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
-    Bukkit.getScheduler().runTaskTimer(core, ()->Bukkit.getOnlinePlayers().forEach(this::capture), 6000L, 6000L);
+    Bukkit.getScheduler().runTaskTimer(core, ()->Bukkit.getOnlinePlayers().forEach(this::capture), 1200L, 1200L);
     Bukkit.getScheduler().runTaskLater(core, this::backfill, 200L);
   }
   private void capture(Player p) {
@@ -87,6 +89,8 @@ final class PlayerStats implements Listener {
     if(!survival) return new Object[]{playtime,null,List.of()};
     List<Detail> r=new ArrayList<>(); long blocks=0;
     for(var e:sec.apply("minecraft:mined").entrySet()) { long x=e.getValue().getAsLong(); if(x<=0)continue; blocks+=x; r.add(new Detail("blocks_mined",key(e.getKey()),x)); }
+    for(String section:List.of("crafted","used","broken","picked_up","dropped")) for(var e:sec.apply("minecraft:"+section).entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail(Map.of("crafted","craft_item","used","use_item","broken","break_item","picked_up","pickup","dropped","drop").get(section),key(e.getKey()),x)); }
+    for(var e:custom.entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("custom",key(e.getKey()),x)); }
     for(String k:DISTANCE_STATS) { long x=cv.applyAsLong(k.toLowerCase(Locale.ROOT)); if(x>0) r.add(new Detail("distance_cm",k,x)); }
     for(var e:sec.apply("minecraft:killed").entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("kills_entity",key(e.getKey()),x)); }
     for(var e:sec.apply("minecraft:killed_by").entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("deaths_entity",key(e.getKey()),x)); }
