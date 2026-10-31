@@ -53,7 +53,9 @@ final class HoloAdmin implements CommandExecutor, TabCompleter {
    Board b=boards().stream().filter(x->x.path().equals(req.path())).findFirst().orElse(null);
    if(b==null || !Objects.equals(req.entityId(),plugin.getConfig().getString(b.path()+".entity")) || !req.location().equals(b.location())) { p.sendMessage("Tafel wurde inzwischen geaendert. Bitte erneut entfernen."); return true; }
    Entity e=entity(b); if(e!=null && !(e instanceof TextDisplay)) { p.sendMessage("Unerwarteter Entity-Typ; Tafel nicht entfernt."); return true; }
-   plugin.getConfig().set(b.path(),null); plugin.saveConfig(); if(e!=null) e.remove(); p.sendMessage("Tafel entfernt: "+b.id()); return true;
+   Map<String,Object> before=new LinkedHashMap<>(plugin.getConfig().getConfigurationSection(b.path()).getValues(true)); plugin.getConfig().set(b.path(),null);
+   if(!plugin.saveConfigChecked()) { for(var entry:before.entrySet()) if(!(entry.getValue() instanceof org.bukkit.configuration.ConfigurationSection)) plugin.getConfig().set(b.path()+"."+entry.getKey(),entry.getValue()); p.sendMessage("Tafel konnte nicht gespeichert werden; nicht entfernt."); return true; }
+   if(e!=null) e.remove(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) plugin.cleanOrphans(chunk); p.sendMessage("Tafel entfernt: "+b.id()); return true;
   }
   if(a[1].equalsIgnoreCase("remove") && a.length<=3) {
    Board b=a.length==3?find(a[2]):nearest(p); if(b==null) { p.sendMessage("Keine passende Tafel gefunden. Nutze /cc holo list."); return true; }

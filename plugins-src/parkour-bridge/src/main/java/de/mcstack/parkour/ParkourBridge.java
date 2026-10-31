@@ -1,6 +1,8 @@
 package de.mcstack.parkour;
 
 import java.sql.*;
+import java.nio.file.*;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.Level;
@@ -32,8 +34,30 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(password==null || password.isBlank()) { getLogger().severe("Datenbankpasswort fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
   try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=db(); Statement s=c.createStatement()) { migrate(c,s); } }
   catch(Exception e) { getLogger().log(Level.SEVERE,"Parkour-Datenbank nicht verfuegbar",e); getServer().getPluginManager().disablePlugin(this); return; }
-  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); refresh();
+  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh();
  }
+
+ boolean saveConfigChecked() {
+  Path target=getDataFolder().toPath().resolve("config.yml"), temp=null;
+  try {
+   Files.createDirectories(target.getParent()); temp=Files.createTempFile(target.getParent(),"config-", ".tmp");
+   Files.writeString(temp,getConfig().saveToString());
+   Files.move(temp,target,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+   return true;
+  } catch(IOException ex) { getLogger().log(Level.SEVERE,"Konfiguration konnte nicht gespeichert werden",ex); return false; }
+  finally { if(temp!=null) try { Files.deleteIfExists(temp); } catch(IOException ignored) {} }
+ }
+ Set<UUID> referencedDisplays() {
+  Set<UUID> ids=new HashSet<>(); List<String> paths=new ArrayList<>(List.of("board"));
+  for(String root:List.of("boards","retired-boards")) { var sec=getConfig().getConfigurationSection(root); if(sec!=null) for(String key:sec.getKeys(false)) paths.add(root+"."+key); }
+  for(String path:paths) { String id=getConfig().getString(path+".entity"); if(id!=null) try { ids.add(UUID.fromString(id)); } catch(IllegalArgumentException ignored) {} }
+  return ids;
+ }
+ void cleanOrphans(Chunk chunk) {
+  Set<UUID> referenced=referencedDisplays();
+  for(Entity e:chunk.getEntities()) if((e instanceof Display || e instanceof ArmorStand) && e.getScoreboardTags().contains("ParkourBridge") && !referenced.contains(e.getUniqueId())) e.remove();
+ }
+ @EventHandler public void chunkLoad(ChunkLoadEvent event) { cleanOrphans(event.getChunk()); }
  private void migrate(Connection c,Statement s) throws SQLException {
   s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE); s.execute(ParkourSql.ADD_COURSE_NAME);
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
@@ -92,7 +116,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  } @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
   if(e.getAction()!=Action.PHYSICAL || e.getClickedBlock()==null) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null || s.getCompletedCheckpoints()!=s.getMaxCheckpoints()) return;
-  try { Location end=query().getEndLocation(s.getParkourName()); if(end!=null && end.getBlock().equals(e.getClickedBlock())) { String course=s.getParkourName(); if(ParkourSql.course(course)!=null) candidates.put(p.getUniqueId(),new Candidate(s,course,s.getElapsedTimeMillis())); } }
+  try { Location end=query().getEndLocation(s.getParkourName()); if(end!=null && end.getBlock().equals(e.getClickedBlock())) { String course=s.getParkourName(); if(ParkourSql.course(course)!=null && ParkourSql.course(course).length()<=64) candidates.put(p.getUniqueId(),new Candidate(s,course,s.getElapsedTimeMillis())); } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Ziel konnte nicht gelesen werden",ex); }
  }
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=false) public void after(PlayerInteractEvent e) {
@@ -134,8 +158,8 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   Location loc=getConfig().getLocation(key+".location"); if(loc==null || loc.getWorld()==null) return;
   loc.getChunk().load(); TextDisplay display=null; String id=getConfig().getString(key+".entity");
   if(id!=null) try { Entity entity=Bukkit.getEntity(UUID.fromString(id)); if(entity instanceof TextDisplay t) display=t; } catch(IllegalArgumentException ignored) {}
-  if(display==null) { display=loc.getWorld().spawn(loc,TextDisplay.class,t->{ t.setBillboard(Display.Billboard.CENTER); t.setPersistent(true); t.setSeeThrough(false); }); getConfig().set(key+".entity",display.getUniqueId().toString()); saveConfig(); }
-  display.text(Component.text(text));
+  if(display==null) { display=loc.getWorld().spawn(loc,TextDisplay.class,t->{ t.setBillboard(Display.Billboard.CENTER); t.setPersistent(true); t.addScoreboardTag("ParkourBridge"); t.setSeeThrough(false); }); getConfig().set(key+".entity",display.getUniqueId().toString()); saveConfig(); }
+  display.addScoreboardTag("ParkourBridge"); display.text(Component.text(text));
  }
  private String actualCourse(String requested) throws SQLException {
   try(PreparedStatement s=ParkoursDatabase.getConnection().prepareStatement("SELECT pk_name FROM parkours WHERE lower(pk_name)=lower(?)")) { s.setString(1,requested); try(ResultSet r=s.executeQuery()) { return r.next()?r.getString(1):null; } }
