@@ -12,6 +12,8 @@ teleport-seconds: 10
 grave-despawn-minutes: 1440
 
 market:
+  sell:
+    enabled: false
   base-factor: 0.5
   sell-factor: 0.75
   # Bank-Ankauf hoechstens 50 % des Kaufpreises (alle Items).

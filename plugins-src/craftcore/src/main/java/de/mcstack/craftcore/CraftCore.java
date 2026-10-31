@@ -71,6 +71,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute(SellTransaction.DDL);
         s.execute(SellTransaction.PENDING_DDL);
         s.execute(SellTransaction.PENDING_MIGRATION);
+        s.execute(SellTransaction.STATUS_MIGRATION);
         InviteStore.prepareSchema(c);
         SidebarPreference.prepare(c);
       }

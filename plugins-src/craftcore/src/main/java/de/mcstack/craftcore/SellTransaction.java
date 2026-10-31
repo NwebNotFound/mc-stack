@@ -5,8 +5,30 @@ import java.time.Duration;
 
 final class SellTransaction {
   static final String DDL = "CREATE TABLE IF NOT EXISTS sell_txn (idem_key VARCHAR(64) PRIMARY KEY, status VARCHAR(16) NOT NULL, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB";
-  static final String PENDING_DDL = "CREATE TABLE IF NOT EXISTS sell_pending (idem_key VARCHAR(64) PRIMARY KEY, player_uuid CHAR(36) NOT NULL, item_nbt LONGTEXT NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING', created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB";
+  static final String PENDING_DDL = "CREATE TABLE IF NOT EXISTS sell_pending (idem_key VARCHAR(64) PRIMARY KEY, player_uuid CHAR(36) NOT NULL, item_nbt LONGTEXT NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING', status VARCHAR(16) NOT NULL DEFAULT 'PENDING', created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB";
   static final String PENDING_MIGRATION = "ALTER TABLE sell_pending ADD COLUMN IF NOT EXISTS resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING'";
+  static final String STATUS_MIGRATION = "ALTER TABLE sell_pending ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PENDING'";
+  static void refundOwed(Connection c, String key, String player, String nbt, int amount) throws SQLException {
+    try (PreparedStatement q=c.prepareStatement("INSERT INTO sell_pending(idem_key,player_uuid,item_nbt,amount,cp,resolution,status) VALUES(?,?,?,?,0,'NOT_COMMITTED','REFUND_OWED') ON DUPLICATE KEY UPDATE status='REFUND_OWED', resolution='NOT_COMMITTED'")) {
+      q.setString(1,key); q.setString(2,player); q.setString(3,nbt); q.setInt(4,amount); q.executeUpdate();
+    }
+  }
+  static int queueRefunds(Connection c, String player) throws SQLException {
+    int count=0;
+    try (PreparedStatement q=c.prepareStatement("SELECT idem_key,item_nbt,amount FROM sell_pending WHERE player_uuid=? AND status='REFUND_OWED' FOR UPDATE")) {
+      q.setString(1,player);
+      try (ResultSet r=q.executeQuery()) { while(r.next()) {
+        try (PreparedStatement insert=c.prepareStatement("INSERT INTO pending_deliveries(id,player_uuid,item_nbt,amount,source,status) VALUES(?,?,?,?,?, 'offen')")) {
+          insert.setString(1,r.getString(1)); insert.setString(2,player); insert.setString(3,r.getString(2)); insert.setInt(4,r.getInt(3)); insert.setString(5,"sell_refund"); insert.executeUpdate();
+        }
+        try (PreparedStatement update=c.prepareStatement("UPDATE sell_pending SET status='DELIVERED' WHERE idem_key=? AND status='REFUND_OWED'")) { update.setString(1,r.getString(1)); update.executeUpdate(); }
+        count++;
+      }}
+    }
+    try (PreparedStatement q=c.prepareStatement("SELECT COUNT(*) FROM pending_deliveries WHERE player_uuid=? AND source='sell_refund' AND status='offen'")) {
+      q.setString(1,player); try(ResultSet r=q.executeQuery()) { r.next(); return r.getInt(1); }
+    }
+  }
   enum CommitStatus { COMMITTED, NOT_COMMITTED, UNKNOWN }
   interface Connections { Connection open() throws SQLException; }
 

@@ -190,9 +190,10 @@ final class Market implements Listener {
     for(int slot=0;slot<size;slot++){T item=get.apply(slot);clear.accept(slot);if(item!=null)deliver.accept(item);}
   }
   static final String SELL_MENU_OFF = "Das Verkaufsmenue ist gerade deaktiviert.";
+ static boolean marketSellEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("market.sell.enabled", false); }
  static boolean sellMenuEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("sell-menu.enabled", false); }
  void openSell(Player p) throws Exception {
-  if(!sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
+  if(!marketSellEnabled(core.getConfig()) || !sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
     SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Verkaufen");
     refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
   }
@@ -221,6 +222,7 @@ final class Market implements Listener {
     refreshLater(menu);
   }
   private void confirmSell(Player p,SellMenu menu) {
+    if(!marketSellEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
     UUID player=p.getUniqueId();
     for(int slot=0;slot<45;slot++) {
       String lock=player+":"+slot;
@@ -286,8 +288,15 @@ final class Market implements Listener {
   private void finishSell(Player player,UUID uuid,String key,ItemStack stack,SellResult result) {
     SellStackFlow.resolve(result.status(),
       ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstaende fuer "+Money.format(result.cp())+".");},
-      ()->{for(ItemStack left:player.getInventory().addItem(stack).values())player.getWorld().dropItemNaturally(player.getLocation(),left); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurueckgegeben.":"Verkauf fehlgeschlagen; Stack zurueckgegeben.");},
+      ()->{if(player.isOnline() && Bukkit.getPlayer(uuid)==player) { for(ItemStack left:player.getInventory().addItem(stack).values())player.getWorld().dropItemNaturally(player.getLocation(),left); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurueckgegeben.":"Verkauf fehlgeschlagen; Stack zurueckgegeben."); }
+        else { String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes()); Bukkit.getScheduler().runTaskAsynchronously(core,()->{ try { core.tx(c->{SellTransaction.refundOwed(c,key,uuid.toString(),nbt,stack.getAmount());return null;}); queueRefunds(uuid); } catch(Exception ex) {core.getLogger().severe("Rueckerstattung nicht gespeichert fuer "+key+": "+ex); } }); } },
       ()->player.sendMessage("Verkauf ungeklaert. Bitte Admin informieren: "+key));
+  }
+  @EventHandler public void refundJoin(PlayerJoinEvent e) { UUID uuid=e.getPlayer().getUniqueId(); Bukkit.getScheduler().runTaskAsynchronously(core,()->queueRefunds(uuid)); }
+  private void queueRefunds(UUID uuid) {
+    try { int count=core.tx(c->SellTransaction.queueRefunds(c,uuid.toString()));
+      if(count>0) Bukkit.getScheduler().runTask(core,()->{Player online=Bukkit.getPlayer(uuid); if(online!=null && online.isOnline()) Deliveries.collect(core,online);});
+    } catch(Exception ex) {core.getLogger().warning("Rueckerstattung fuer "+uuid+": "+ex);}
   }
   private static final class SellLimit extends Exception {}
   private void returnSell(Player p,SellMenu menu) {

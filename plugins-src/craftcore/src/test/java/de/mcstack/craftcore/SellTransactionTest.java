@@ -19,6 +19,7 @@ class SellTransactionTest {
       s.execute(maria ? SellTransaction.DDL : SellTransaction.DDL.replace(" ENGINE=InnoDB", ""));
       s.execute(maria ? SellTransaction.PENDING_DDL : SellTransaction.PENDING_DDL.replace(" ENGINE=InnoDB", ""));
       s.execute(SellTransaction.PENDING_MIGRATION);
+      s.execute(SellTransaction.STATUS_MIGRATION);
       s.execute("CREATE TABLE IF NOT EXISTS sell_txn_test_data (id VARCHAR(64) PRIMARY KEY)");
     }
   }
@@ -90,6 +91,26 @@ class SellTransactionTest {
       q.setString(1,"key"); q.setString(2,UUID.randomUUID().toString()); q.setString(3,"serialized-item"); q.setInt(4,4); q.setLong(5,120); q.executeUpdate();
       try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT item_nbt,amount,cp,created_at FROM sell_pending WHERE idem_key='key'")) {assertTrue(r.next());assertEquals("serialized-item",r.getString(1));assertEquals(4,r.getInt(2));assertEquals(120,r.getLong(3));assertNotNull(r.getTimestamp(4));}
     }
+  }
+  @Test void offlineRefundIsQueuedOnceForTheRightPlayer() throws Exception {
+    var db=h2(); schema(db,false);
+    try(Connection c=db.open(); Statement s=c.createStatement()) {
+      s.execute("CREATE TABLE pending_deliveries (id VARCHAR(64) PRIMARY KEY, player_uuid VARCHAR(36), item_nbt LONGTEXT, amount INT, source VARCHAR(32), status VARCHAR(16))");
+      SellTransaction.refundOwed(c,"refund","player","serialized",4);
+      assertEquals(0,SellTransaction.queueRefunds(c,"other"));
+      c.setAutoCommit(false);
+      assertEquals(1,SellTransaction.queueRefunds(c,"player")); c.commit();
+      assertEquals(1,SellTransaction.queueRefunds(c,"player")); c.commit();
+      try(ResultSet r=s.executeQuery("SELECT p.status,d.item_nbt,d.amount,d.status FROM sell_pending p JOIN pending_deliveries d ON d.id=p.idem_key")) {
+        assertTrue(r.next()); assertEquals("DELIVERED",r.getString(1)); assertEquals("serialized",r.getString(2)); assertEquals(4,r.getInt(3)); assertEquals("offen",r.getString(4)); assertFalse(r.next());
+      }
+    }
+  }
+  @Test void sellFeatureDefaultsOffAndCanBeEnabled() {
+    var cfg=new org.bukkit.configuration.MemoryConfiguration();
+    assertFalse(Market.marketSellEnabled(cfg));
+    cfg.set("market.sell.enabled",true); assertTrue(Market.marketSellEnabled(cfg));
+    cfg.set("market.sell.enabled",false); assertFalse(Market.marketSellEnabled(cfg));
   }
   @Test void mariaDb() throws Exception {
     String password = System.getenv("CRAFTCORE_DB_PASSWORD");
