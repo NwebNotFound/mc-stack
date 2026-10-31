@@ -13,7 +13,7 @@ import org.bukkit.util.Vector;
 final class HoloAdmin implements CommandExecutor, TabCompleter {
  private final ParkourBridge plugin;
  private final Map<UUID, Pending> pending=new HashMap<>();
- private record Pending(String path, String token, long expires) {}
+ private record Pending(String path, String entityId, Location location, String token, long expires) {}
  private record Board(String path, String id, Location location) {}
  HoloAdmin(ParkourBridge plugin) { this.plugin=plugin; }
  void start() { PluginCommand cmd=Objects.requireNonNull(plugin.getCommand("cc")); cmd.setExecutor(this); cmd.setTabCompleter(this); }
@@ -51,13 +51,13 @@ final class HoloAdmin implements CommandExecutor, TabCompleter {
    Pending req=pending.remove(p.getUniqueId());
    if(req==null || !req.token().equals(a[2]) || req.expires()<System.currentTimeMillis()) { p.sendMessage("Bestaetigung abgelaufen. Bitte erneut entfernen."); return true; }
    Board b=boards().stream().filter(x->x.path().equals(req.path())).findFirst().orElse(null);
-   if(b==null) { p.sendMessage("Tafel nicht mehr vorhanden."); return true; }
+   if(b==null || !Objects.equals(req.entityId(),plugin.getConfig().getString(b.path()+".entity")) || !req.location().equals(b.location())) { p.sendMessage("Tafel wurde inzwischen geaendert. Bitte erneut entfernen."); return true; }
    Entity e=entity(b); if(e!=null && !(e instanceof TextDisplay)) { p.sendMessage("Unerwarteter Entity-Typ; Tafel nicht entfernt."); return true; }
    plugin.getConfig().set(b.path(),null); plugin.saveConfig(); if(e!=null) e.remove(); p.sendMessage("Tafel entfernt: "+b.id()); return true;
   }
   if(a[1].equalsIgnoreCase("remove") && a.length<=3) {
    Board b=a.length==3?find(a[2]):nearest(p); if(b==null) { p.sendMessage("Keine passende Tafel gefunden. Nutze /cc holo list."); return true; }
-   String token=UUID.randomUUID().toString(); pending.put(p.getUniqueId(),new Pending(b.path(),token,System.currentTimeMillis()+30000));
+   String token=UUID.randomUUID().toString(); pending.put(p.getUniqueId(),new Pending(b.path(),plugin.getConfig().getString(b.path()+".entity"),b.location().clone(),token,System.currentTimeMillis()+30000));
    p.sendMessage(Component.text("Tafel "+b.id()+" entfernen? [Hier bestaetigen]").clickEvent(ClickEvent.runCommand("/cc holo confirm "+token))); return true;
   }
   if(a[1].equalsIgnoreCase("move") && a.length==3) {
