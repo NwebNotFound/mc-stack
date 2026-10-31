@@ -1,5 +1,48 @@
 [
   {
+    "version": "2026-10-30-3",
+    "date": "30.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Neue Preise im Server-Shop seit 30.10. um 14:05 Uhr."
+      },
+      {
+        "type": "verbessert",
+        "text": "Die Bank kauft deine Items jetzt fuer 50 % des Kaufpreises zurueck."
+      },
+      {
+        "type": "verbessert",
+        "text": "Das Tageslimit von 1.500 CP fuer Verkaeufe an die Bank bleibt gleich."
+      }
+    ]
+  },  {
+    "version": "2026-10-30-2",
+    "date": "30.10.2026",
+    "changes": [
+      {
+        "type": "verbessert",
+        "text": "Die Marktpreise sind stabiler."
+      },
+      {
+        "type": "verbessert",
+        "text": "Items ohne festen Preis sind bei der Bank vorerst gesperrt."
+      },
+      {
+        "type": "fix",
+        "text": "Die Pruefung, ob ein Item an die Bank verkauft werden kann, funktioniert wieder richtig."
+      },
+      {
+        "type": "verbessert",
+        "text": "Die Statistiken von Spielern, die gerade offline sind, werden jetzt mitgezaehlt."
+      },
+      {
+        "type": "neu",
+        "text": "Auf der Website siehst du jetzt dein ganzes Inventar, auch Ruestung und Nebenhand."
+      }
+    ]
+  },
+  {
     "version": "2026-10-30",
     "date": "30.10.2026",
     "changes": [
