@@ -4,7 +4,7 @@ import java.io.*;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
@@ -53,12 +53,14 @@ public final class LobbyVip implements CommandExecutor {
         }
         switch(action) {
             case "rename" -> { store.rename(owner,world.id(),args[2]); message(owner,"VIP-Welt umbenannt."); }
-            case "join" -> { if (VipRules.canJoin(world.status(),world.slot())) connect(owner,world.slot()); else message(owner,"Starte die VIP-Welt zuerst."); }
+            case "join" -> { if (VipRules.canJoin(world.status(),world.slot())) connect(owner,world.slot()); else if ("starting".equals(world.status()) && world.slot()!=null) waitForWorld(owner,world.id(),world.slot()); else message(owner,"Starte die VIP-Welt zuerst."); }
             case "stop" -> { if (!VipRules.canStop(world.status(),world.slot())) { message(owner,"Die VIP-Welt laeuft nicht."); return; } if (host.stop(world.slot()).outcome()!=VipHostClient.Outcome.STOPPED) { message(owner,"VIP-Welt konnte nicht gestoppt werden."); return; } store.stopped(world.id()); message(owner,"VIP-Welt gestoppt."); }
             case "start" -> startWorld(owner,world);
         }
     }
     private void startWorld(UUID owner, VipStore.World world) throws SQLException {
+        if ("running".equals(world.status()) && world.slot()!=null) { connect(owner,world.slot()); return; }
+        if ("starting".equals(world.status()) && world.slot()!=null) { waitForWorld(owner,world.id(),world.slot()); return; }
         if (!VipRules.canStart(world.status()) || world.slot()!=null) { message(owner,"Die VIP-Welt laeuft bereits oder startet gerade."); return; }
         var result=host.start(world.id());
         if (result.outcome()==VipHostClient.Outcome.NO_FREE_SLOT) { // TODO Warteschlange
@@ -68,13 +70,18 @@ public final class LobbyVip implements CommandExecutor {
         if (result.outcome()==VipHostClient.Outcome.WORLD_NOT_FOUND) { store.status(world.id(),"error",null); message(owner,"Weltordner fehlt auf dem Host"); return; }
         if (result.outcome()==VipHostClient.Outcome.ONLINE) { store.running(world.id(),result.slot()); connect(owner,result.slot()); return; }
         if (result.outcome()!=VipHostClient.Outcome.STARTING) { store.status(world.id(),"error",null); message(owner,"VIP-Welt konnte nicht gestartet werden."); return; }
-        String slot=result.slot(); store.status(world.id(),"starting",slot); message(owner,"VIP-Welt startet ...");
-        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(120);
-        while (System.nanoTime()<deadline) {
-            try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            if (host.status(slot).outcome()==VipHostClient.Outcome.ONLINE) { store.running(world.id(),slot); connect(owner,slot); return; }
-        }
-        store.status(world.id(),"error",slot); message(owner,"VIP-Welt ist nicht rechtzeitig gestartet.");
+        String slot=result.slot(); store.status(world.id(),"starting",slot); waitForWorld(owner,world.id(),slot);
+    }
+    private void waitForWorld(UUID owner, String worldId, String slot) throws SQLException {
+        message(owner,"Deine Welt startet noch...");
+        File config=new File(System.getenv().getOrDefault("VIP_CONFIG","config/vipworlds.yml"));
+        int timeout=YamlConfiguration.loadConfiguration(config).getInt("start-timeout-seconds",180);
+        try {
+            if (VipReadiness.await(worldId,slot,timeout,host::slots,System::nanoTime,Thread::sleep)) {
+                store.running(worldId,slot); connect(owner,slot); return;
+            }
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        message(owner,"Start dauert zu lange, versuche /vw join gleich nochmal");
     }
     private void message(UUID id,String text) { Bukkit.getScheduler().runTask(plugin,()->{ Player p=Bukkit.getPlayer(id); if(p!=null) p.sendMessage(text); }); }
     private void connect(UUID id,String slot) { Bukkit.getScheduler().runTask(plugin,()->{ Player p=Bukkit.getPlayer(id); if(p==null) return; try { ByteArrayOutputStream bytes=new ByteArrayOutputStream(); try(DataOutputStream out=new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF(slot); } p.sendPluginMessage(plugin,"BungeeCord",bytes.toByteArray()); } catch(IOException e) { p.sendMessage("Verbindung zur VIP-Welt fehlgeschlagen."); } }); }

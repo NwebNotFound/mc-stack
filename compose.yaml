@@ -75,6 +75,7 @@ services:
       PVP_HOST_TOKEN: "${PVP_HOST_TOKEN:-}"
       VIP_HOST_URL: http://host.docker.internal:25599
       VIP_HOST_TOKEN: "${VIP_HOST_TOKEN:-}"
+      VIP_CONFIG: /config-vip/vipworlds.yml
       MOTD: MC Stack Lobby
       MODE: adventure
       DIFFICULTY: easy
@@ -88,6 +89,7 @@ services:
     volumes:
       - ./data/lobby:/data
       - ./config/lobby-paper:/config:ro
+      - ./config/vipworlds.yml:/config-vip/vipworlds.yml:ro
       - ./config/lobby-plugins:/lobby-plugins:ro
       - bot-plugin:/bot-plugin:ro
       - bot-pending:/link-pending:ro

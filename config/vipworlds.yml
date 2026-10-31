@@ -19,6 +19,7 @@ ram:
   per-world-mb: 1536
   heap-mb: 1152 # ~380 MB Non-Heap-Puffer im 1536m-Limit (siehe pvp #53)
 
+start-timeout-seconds: 180
 idle-minutes: 10
 join-grace-seconds: 120
 names:

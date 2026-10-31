@@ -78,14 +78,25 @@ def budget_ok(cfg, running):
 
 
 def inspect_slot(slot):
-    result = subprocess.run(["docker", "inspect", "-f", '{{.State.Status}}|{{range .Config.Env}}{{println .}}{{end}}', "mc-stack-" + slot + "-1"], capture_output=True, text=True)
+    container = "mc-stack-" + slot + "-1"
+    result = subprocess.run(["docker", "inspect", "-f", '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{range .Config.Env}}{{println .}}{{end}}', container], capture_output=True, text=True)
     if result.returncode:
         if "no such" in (result.stderr or "").lower():
             return {"slot": slot, "status": "offline", "worldId": None}
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
-    state, _, env = result.stdout.partition("|")
+    state, _, remainder = result.stdout.partition("|")
+    health, _, env = remainder.partition("|")
     world_id = next((line[len("CRAFTCORE_VIP_WORLD_ID="):] for line in env.splitlines() if line.startswith("CRAFTCORE_VIP_WORLD_ID=")), None)
-    return {"slot": slot, "status": status(state.strip()), "worldId": world_id or None}
+    slot_status = status(state.strip())
+    if state.strip() == "running":
+        if health.strip():
+            ready = health.strip() == "healthy"
+        else:
+            logs = subprocess.run(["docker", "logs", "--tail", "200", container], capture_output=True, text=True, check=True)
+            output = (logs.stdout or "") + (logs.stderr or "")
+            ready = any("Done (" in line and "! For help" in line for line in output.splitlines())
+        slot_status = "online" if ready else "starting"
+    return {"slot": slot, "status": slot_status, "worldId": world_id or None}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -161,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(200, {"slots": slots, "maxRunning": cfg["max-running"], "budgetOk": budget_ok(cfg, len(active))}); return
         for slot in active:
             if slot["worldId"] and slot["worldId"].lower() == world_id.lower():
-                self.json_response(200, {"status": "running", "slot": slot["slot"]}); return
+                ready = slot["status"] == "online"
+                self.json_response(200 if ready else 202, {"status": "running" if ready else "starting", "slot": slot["slot"]}); return
         free = next((slot["slot"] for slot in slots if slot["status"] not in ("online", "starting")), None)
         if len(active) >= cfg["max-running"] or free is None:
             self.json_response(409, {"status": "error", "code": "no_free_slot"}); return
