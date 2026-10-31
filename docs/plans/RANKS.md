@@ -46,7 +46,7 @@ Status: Plan, kein Code. Reihenfolge danach: NPCs → PvP → VIP-Welten → Mar
 - **Offen:** Sync mit Discord-Rollen über Creepy (Dex). Vorschlag: Discord-Rolle → LuckPerms-Gruppe nur in eine Richtung, Creepy schreibt über RCON `lp user … parent set`.
 
 ## Daten für die Website (Cloud)
-- View `craftcore.v_player_rank` (Name, UUID, Gruppe, Anzeige, Farbe, Weight), gebaut aus `luckperms.luckperms_players` + `luckperms_user_permissions` (`group.*`, höchste Weight).
+- View `craftcore.v_player_rank` mit `SQL SECURITY DEFINER` und `DEFINER='craft_admin'@'%'` (wie `v_economy_daily`), sonst sieht `creepy_ro` nichts. Inhalt: (Name, UUID, Gruppe, Anzeige, Farbe, Weight), gebaut aus `luckperms.luckperms_players` + `luckperms_user_permissions` (`group.*`, höchste Weight).
 - Nur `SELECT` auf die View für `creepy_ro`, keine Rechte auf die LuckPerms-Tabellen selbst. Grant läuft über `craft_admin`.
 - Optional im Ingest: `rank` pro Spieler im Online-Payload.
 
@@ -62,11 +62,13 @@ Status: Plan, kein Code. Reihenfolge danach: NPCs → PvP → VIP-Welten → Mar
 - Unit: Prefix-Auswahl nach Weight, Farb-Parsing, Team-Namen < 16 Zeichen.
 - Ingame (2 Accounts): Rang ändern → Chat/Tab/Nametag sofort aktualisiert auf beiden Servern; Survival zeigt Teamfarbe; AFK-Tag bleibt erhalten.
 - Rechte: Spieler/VIP kann nicht in PvP- oder Party-Map bauen, Builder schon.
-- DB: `creepy_ro` liest die View, aber keine LuckPerms-Tabelle.
+- DB: als `creepy_ro` liefert `SELECT * FROM v_player_rank` Zeilen; direkter Zugriff auf `luckperms.*`-Tabellen wird verweigert.
 
 ## Offene Fragen
-- Farben für Admin/Builder/VIP/Spieler so okay (`&c`, `&a`, `&6`, `&7`)?
-- Wird MVP vergeben oder später gekauft? (Kauf = Nils' OK, keine Kosten-Tools.)
-- Soll OP für Nils ganz weg, sobald `admin` läuft?
-- Discord-Sync: welche Seite ist führend?
-- Team-Farbe frei wählbar oder aus fester Liste (keine Rangfarben wie `&d`)?
+Alle Vorschläge von Luna, **wartet auf Nils' Antwort**.
+1. Farben für Admin/Builder/VIP/Spieler (`&c`, `&a`, `&6`, `&7`)? Vorschlag: so lassen.
+2. MVP vergeben oder verkaufen? Vorschlag: nur vergeben, nicht verkaufen.
+3. OP für Nils entfernen, sobald `admin` läuft? Vorschlag: OP als Notfallzugang behalten.
+4. Discord-Sync: welche Seite führt? Vorschlag: Discord ist führend.
+5. Team-Farben frei? Vorschlag: feste Liste ohne Rangfarben (kein `&c`, `&a`, `&d`, `&6`).
+6. Vererbung admin→builder→mvp→vip gibt Builder/Admin auch die MVP-Perks (3 Slots, Queue-Vorrang). Vorschlag: `builder` erbt von `default`, `admin` von `builder`; Perks nur per Meta in `vip`/`mvp`. Builder/Admin bekommen keine MVP-Perks.
