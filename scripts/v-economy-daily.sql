@@ -10,4 +10,4 @@ FROM craftcore.leaderboard_snapshots
 WHERE board = 'money'
   AND day_key BETWEEN CURRENT_DATE - INTERVAL 89 DAY AND CURRENT_DATE
 GROUP BY day_key;
-GRANT SELECT ON craftcore.v_economy_daily TO 'creepy_ro'@'172.18.%';
+GRANT SELECT ON craftcore.v_economy_daily TO 'creepy_ro'@'%';

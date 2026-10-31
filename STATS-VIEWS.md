@@ -1,4 +1,4 @@
-﻿# Statistik- und Markt-Views
+# Statistik- und Markt-Views
 
 Stand 29.10.2026, Teil A. Alle fünf Views erhalten SELECT für `creepy_ro`.
 
@@ -31,4 +31,4 @@ Der Befehl `ah bid <auction_id> <uuid> <betrag_cent> <request_id> [source]` lief
 
 `minted_cp`, `burned_cp` und `net_cp` sind NULL (unbekannt): Es gibt kein vollstaendiges, mit Zeitstempeln versehenes Mint-/Burn-Journal. Kontenaenderungen koennen Transfers oder Escrow sein, Bank-Journalzeilen haben keinen Zeitpunkt; aus ihnen lassen sich diese Werte nicht verlaesslich rekonstruieren. Die View erfindet deshalb auch fuer kuenftige Tage keine Werte; dafuer ist zuerst eine vollstaendige transaktionale Erfassung aller Mint- und Burn-Vorgaenge erforderlich. Diese Datei wurde nicht auf die Live-Datenbank angewendet.
 
-Der manuelle Grant fuer `v_economy_daily` gilt fuer `creepy_ro`@`172.18.%`: Creepy (`mc-stack-bot-1`) verbindet sich ueber `craftcore-db` im Compose-Netz `mc-stack_minecraft` (Subnetz `172.18.0.0/16`). Bei einer Aenderung des Subnetzes muss der Host angepasst und das passende MariaDB-Konto eingerichtet werden. Bestehende weiter gefasste Grants werden durch dieses Skript nicht entfernt.
+Der manuelle Grant fuer `v_economy_daily` gilt wie die uebrigen View-Grants fuer das bestehende Konto `creepy_ro`@`%` (ein Grant auf `172.18.%` wuerde ein zweites, separates Konto ansprechen). Creepy (`mc-stack-bot-1`) verbindet sich ueber `craftcore-db` im Compose-Netz `mc-stack_minecraft` (Subnetz `172.18.0.0/16`). Bei einer Aenderung des Subnetzes muss der Host angepasst und das passende MariaDB-Konto eingerichtet werden. Bestehende weiter gefasste Grants werden durch dieses Skript nicht entfernt.
