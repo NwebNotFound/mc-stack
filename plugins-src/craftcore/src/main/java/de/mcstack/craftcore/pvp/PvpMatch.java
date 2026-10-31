@@ -74,6 +74,8 @@ public final class PvpMatch {
         return winsA == winsB ? null : winsA > winsB ? a : b;
     }
 
+    public String result() { return matchWinner() == null ? "draw" : "win"; }
+
     public UUID matchLoser() {
         UUID winner = matchWinner();
         return winner == null ? null : winner.equals(a) ? b : a;

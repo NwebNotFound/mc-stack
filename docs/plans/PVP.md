@@ -115,3 +115,9 @@ CREATE TABLE pvp_matches (
 - Ende: `pvp_matches` (1 Zeile) + `pvp_rounds`, zurueck in die Lobby, Instanzwelt entladen und geloescht.
 - Auto-Stopp: 120 s ohne Spieler, ohne offene Zuweisung und ohne Builder -> `Bukkit.shutdown()` (Container `restart: no` bleibt aus).
 - DB: `scripts/pvp-matchflow.sql` als craft_admin (`pvp_kits`, `pvp_assignments`, Views `v_pvp_stats`/`v_pvp_matches`, Grants craft_pvp + `SELECT` fuer creepy_ro).
+
+### Schritt 3 - Review-Punkte (Luna, #44)
+- Join-Gate: ohne Zuweisung duerfen nur Spieler mit craftcore.build.pvp, group.builder oder group.admin (LuckPerms) auf pvp. Velocity Modern Forwarding ist ueber paper-global (proxies.velocity, Secret aus secrets/forwarding.secret) aktiv.
+- Unentschieden: pvp_matches.result = 'win' | 'draw' (bei draw winner/loser NULL). v_pvp_stats: wins, losses, draws, matches = wins+losses+draws, winrate_pct = wins/(wins+losses), NULL unter 5 Matches. Test: scripts/tests/pvp-matchflow-test.sql (nur Wegwerf-Container).
+- Queue: laeuft ein Match, startet die Lobby kein zweites; Wartende bekommen 'Ein PvP-Match laeuft gerade - du bist als Naechstes dran (Platz N).' (beim Beitritt und alle 30 s).
+

@@ -24,6 +24,7 @@ class PvpMatchTest {
         m.death(b, 250);
         assertTrue(m.finished());
         assertEquals(a, m.matchWinner());
+        assertEquals("win", m.result());
         assertEquals(b, m.matchLoser());
         assertNull(m.death(b, 300));
         assertThrows(UnsupportedOperationException.class, () -> m.rounds().clear());
@@ -65,6 +66,7 @@ class PvpMatchTest {
         }
         assertTrue(m.finished());
         assertNull(m.matchWinner());
+        assertEquals("draw", m.result());
         assertNull(m.matchLoser());
         PvpMatch tied = match();
         tied.death(b, 110);
@@ -72,6 +74,7 @@ class PvpMatchTest {
         tied.tick(100 + PvpMatch.ROUND_LIMIT_MS);
         assertTrue(tied.finished());
         assertNull(tied.matchWinner());
+        assertEquals("draw", tied.result());
     }
 
     @Test void disconnectDecidesMatchEvenAgainstPriorWin() {

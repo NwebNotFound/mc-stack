@@ -52,7 +52,7 @@ public final class PvpMatches implements Listener {
     private void main(Runnable task) { Bukkit.getScheduler().runTask(plugin,task); }
     @EventHandler public void join(PlayerJoinEvent e) {
         Player p=e.getPlayer(); reset(p); p.setGameMode(GameMode.ADVENTURE); p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
-        boolean builder=p.hasPermission("craftcore.build.pvp");
+        boolean builder=PvpAccess.mayBypass(p::hasPermission);
         UUID id=p.getUniqueId();
         async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;

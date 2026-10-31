@@ -42,8 +42,8 @@ public final class PvpStore {
         try (Connection c=source.open()) {
             c.setAutoCommit(false);
             try {
-                try (PreparedStatement s=c.prepareStatement("INSERT IGNORE INTO pvp_matches (match_id,arena,kit,winner_uuid,loser_uuid,started_at,ended_at,duration_ms) VALUES (?,?,?,?,?,?,?,?)")) {
-                    s.setString(1,m.matchId()); s.setString(2,arena); s.setString(3,m.kitRound1()); s.setString(4,string(m.matchWinner())); s.setString(5,string(m.matchLoser())); s.setLong(6,m.startedAt()); s.setLong(7,endedAt); s.setLong(8,endedAt-m.startedAt()); s.executeUpdate();
+                try (PreparedStatement s=c.prepareStatement("INSERT IGNORE INTO pvp_matches (match_id,arena,kit,winner_uuid,loser_uuid,started_at,ended_at,duration_ms,result) VALUES (?,?,?,?,?,?,?,?,?)")) {
+                    s.setString(1,m.matchId()); s.setString(2,arena); s.setString(3,m.kitRound1()); s.setString(4,string(m.matchWinner())); s.setString(5,string(m.matchLoser())); s.setLong(6,m.startedAt()); s.setLong(7,endedAt); s.setLong(8,endedAt-m.startedAt()); s.setString(9,m.result()); s.executeUpdate();
                 }
                 try (PreparedStatement s=c.prepareStatement("INSERT IGNORE INTO pvp_rounds (match_id,round_no,kit,winner_uuid,duration_ms) VALUES (?,?,?,?,?)")) {
                     for(var round:m.rounds()) { s.setString(1,m.matchId()); s.setInt(2,round.roundNo()); s.setString(3,round.kit()); s.setString(4,string(round.winner())); s.setLong(5,round.durationMs()); s.addBatch(); } s.executeBatch();
