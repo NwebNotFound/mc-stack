@@ -59,6 +59,7 @@ public final class PvpMatches implements Listener {
         UUID id=p.getUniqueId();
         async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;
+            player.setGameMode(PvpAccess.joinMode(builder,found.isPresent()));
             PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
             if(decision==PvpAccess.JoinDecision.BUILDER) return;
             if(decision==PvpAccess.JoinDecision.KICK) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }

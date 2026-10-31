@@ -115,6 +115,7 @@ services:
       ENABLE_WHITELIST: "FALSE"
       ENFORCE_WHITELIST: "FALSE"
       PVP: "true"
+      SPAWN_PROTECTION: "0"
       CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_PVP_DB_PASSWORD:-}"
       MOTD: MC Stack PvP
       LEVEL_TYPE: minecraft:flat

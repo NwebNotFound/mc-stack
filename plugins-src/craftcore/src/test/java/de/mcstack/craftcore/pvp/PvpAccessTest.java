@@ -1,10 +1,16 @@
 package de.mcstack.craftcore.pvp;
 
 import java.util.Set;
+import org.bukkit.GameMode;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PvpAccessTest {
+    @Test void joinModeKeepsAssignedPlayersInAdventure() {
+        assertEquals(GameMode.CREATIVE, PvpAccess.joinMode(true, false));
+        assertEquals(GameMode.ADVENTURE, PvpAccess.joinMode(true, true));
+        assertEquals(GameMode.ADVENTURE, PvpAccess.joinMode(false, false));
+    }
     @Test void assignmentTakesPriorityAndBypassOnlyAppliesWithoutOne() {
         assertEquals(PvpAccess.JoinDecision.MATCH, PvpAccess.decide(true, false));
         assertEquals(PvpAccess.JoinDecision.MATCH, PvpAccess.decide(true, true));

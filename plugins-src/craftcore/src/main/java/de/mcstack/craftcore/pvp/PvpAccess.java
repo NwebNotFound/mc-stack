@@ -1,6 +1,7 @@
 package de.mcstack.craftcore.pvp;
 
 import java.util.function.Predicate;
+import org.bukkit.GameMode;
 
 public final class PvpAccess {
     private PvpAccess() {}
@@ -11,5 +12,9 @@ public final class PvpAccess {
 
     public static boolean mayBypass(Predicate<String> hasPermission) {
         return hasPermission.test("craftcore.build.pvp") || hasPermission.test("group.builder") || hasPermission.test("group.admin");
+    }
+
+    public static GameMode joinMode(boolean builder, boolean assigned) {
+        return builder && !assigned ? GameMode.CREATIVE : GameMode.ADVENTURE;
     }
 }
