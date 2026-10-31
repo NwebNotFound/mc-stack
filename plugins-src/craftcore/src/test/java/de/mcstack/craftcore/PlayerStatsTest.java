@@ -43,6 +43,13 @@ class PlayerStatsTest {
    try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT COUNT(*),SUM(stat_value) FROM player_stats_details")){assertTrue(r.next());assertEquals(2,r.getInt(1));assertEquals(11,r.getLong(2));}
   }
  }
+ @Test void vanillaBackfillIncludesCraftedUsedAndCustom() {
+  Object[] parsed=PlayerStats.parseStats(UUID.randomUUID(),"{\"stats\":{\"minecraft:crafted\":{\"minecraft:stone\":2},\"minecraft:used\":{\"minecraft:stone\":3},\"minecraft:custom\":{\"minecraft:jump\":4}}}",true);
+  @SuppressWarnings("unchecked") List<PlayerStats.Detail> details=(List<PlayerStats.Detail>)parsed[2];
+  assertTrue(details.contains(new PlayerStats.Detail("craft_item","STONE",2)));
+  assertTrue(details.contains(new PlayerStats.Detail("use_item","STONE",3)));
+  assertTrue(details.contains(new PlayerStats.Detail("custom","JUMP",4)));
+ }
  @Test void mariaDbDetailsAreTransactional() throws Exception {
   String password=System.getenv("CRAFTCORE_DB_PASSWORD");
   assumeTrue(password!=null && "true".equals(System.getenv("CRAFTCORE_MARIADB_TEST")));

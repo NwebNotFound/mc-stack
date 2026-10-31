@@ -125,3 +125,10 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Branch `craft/night-fixes`: Kaufauftrag-Storno nach Teilverkauf in Tests ausgeschlossen; Guthaben und Restauftrag geprueft.
 - Bankverkauf fuer Katalog-Items einschliesslich DIRT, gesperrter und Fallback-Items freigegeben; Kaufbeschraenkungen bleiben bestehen. Mindestpreis 0,01 CP, Rezeptkosten begrenzen Erloese; minimale Kaufpreise sichern guenstige Rezeptketten.
 - Docker `gradle clean build --no-daemon`: 204 Tests, 0 Fehler, 12 uebersprungen; ArbitrageTest gruen. Kein Ingame-/MariaDB-Test, kein Restart, kein Merge und kein Staging nach `data`.
+
+## Death-Events fuer Dex/Cloud
+- Ursache: Vanilla `minecraft:killed_by` enthaelt nur Entity-Kills; Umwelt-Tode fehlten in `deaths_entity`.
+- `player_deaths(event_id,uuid,ts,cause_type,killer,entity_type,block,server)`, View `deaths_by(uuid,key,value)`; historische Basis in `player_death_backfill`/`player_death_backfill_done`.
+- `/cc deaths backfill` auf Survival liest Offline-Stats einmalig; unbekannte Differenz `unknown`, Online-Spieler nach Quit erneut ausfuehren.
+- Statistik- und Inventar-Snapshots alle 60 s und bei Quit mit `updated_at`; Details `craft_item`, `use_item` und `custom` werden geschrieben.
+- Docker-Gradle-Build und Tests; kein Neustart, Merge oder Staging nach `data`.

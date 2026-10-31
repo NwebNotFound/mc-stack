@@ -16,8 +16,8 @@ class InventorySyncTest {
     assertEquals(List.of("Fire aspect II", "Sharpness V"), InventorySync.enchantLines(Map.of("sharpness", 5, "fire_aspect", 2)));
     assertEquals(80, InventorySync.metaSummary("x".repeat(90), List.of()).length());
   }
-  @Test void periodIsFiveMinutesOnLobbyAndSurvival() {
-    assertEquals(6000L, InventorySync.PERIOD_TICKS);
+  @Test void periodIsOneMinuteOnLobbyAndSurvival() {
+    assertEquals(1200L, InventorySync.PERIOD_TICKS);
     assertTrue(InventorySync.tracks("Lobby"));
     assertTrue(InventorySync.tracks("survival"));
     assertFalse(InventorySync.tracks("vip"));

@@ -36,6 +36,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private Motivation motivation;
   private PlayerStats playerStats;
   private InventorySync inventorySync;
+  private DeathEvents deathEvents;
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
@@ -70,6 +71,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         SidebarPreference.prepare(c);
       }
       if (InventorySync.tracks(server)) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); inventorySync=new InventorySync(this,server); inventorySync.start(); }
+      deathEvents=new DeathEvents(this,server); deathEvents.start();
       teamInvites=new TeamInvites(this,server); teamInvites.start();
       saveDefaultConfig(); ResourceSync.sync(this);
       for (OfflinePlayer known : Bukkit.getOfflinePlayers()) if (known.hasPlayedBefore() && known.getName()!=null) tx(c->{exec(c,"INSERT IGNORE INTO known_players(uuid,name) VALUES (?,?)",known.getUniqueId().toString(),known.getName()); return null;});
@@ -91,7 +93,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       SaleNotices.start(this);
       WebsiteStats.start(this);
       tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
-      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment")) {
+      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","deaths_by")) {
         try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
         catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       }
@@ -110,7 +112,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];
@@ -147,7 +149,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(command.getName().equals("sidebar")) return args.length==1 ? UserMenu.complete(args[0],"an","aus") : List.of();
     if(command.getName().equals("cc")) {
       if(!sender.hasPermission("craftcore.admin")) return List.of();
-      if(args.length==1) return UserMenu.complete(args[0],"portal","launch");
+      if(args.length==1) return UserMenu.complete(args[0],"portal","launch","deaths");
+      if(args.length==2 && args[0].equalsIgnoreCase("deaths")) return UserMenu.complete(args[1],"backfill");
       String[] rest=Arrays.copyOfRange(args,1,args.length);
       if(args[0].equalsIgnoreCase("portal")) return portals.onTabComplete(sender,command,alias,rest);
       if(args[0].equalsIgnoreCase("launch")) return launchPads.onTabComplete(sender,command,alias,rest);
@@ -230,6 +233,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       if(!sender.hasPermission("craftcore.admin")) return true;
       if(args.length>0) {
         String[] rest=Arrays.copyOfRange(args,1,args.length);
+        if(args[0].equalsIgnoreCase("deaths")) { if(args.length==2 && args[1].equalsIgnoreCase("backfill")) deathEvents.backfill(sender); else sender.sendMessage("/cc deaths backfill"); return true; }
         if(args[0].equalsIgnoreCase("portal")) return portals.onCommand(sender,command,label,rest);
         if(args[0].equalsIgnoreCase("launch")) { if(launchPads.onCommand(sender,command,label,rest)) return true; }
       }
