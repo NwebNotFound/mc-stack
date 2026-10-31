@@ -7,6 +7,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.inventory.*;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
@@ -46,12 +47,16 @@ final class Shop implements Listener {
     if(page+1<pages)inv.setItem(53,button(Material.ARROW,"Naechste Seite"));p.openInventory(inv);
   }
   static final class Edit implements InventoryHolder {
-    Listing row; final int page; long pendingPrice; Edit(Listing row,int page){this.row=row;this.page=page;this.pendingPrice=row.price();}
+    Listing row; final int page; long pendingPrice; final WithdrawConfirm withdraw=new WithdrawConfirm(); Edit(Listing row,int page){this.row=row;this.page=page;this.pendingPrice=row.price();}
     public Inventory getInventory(){return null;}
   }
   static long editDelta(int slot){return switch(slot){case 9 -> -1000;case 10 -> -100;case 11 -> -10;case 13 -> 10;case 14 -> 100;case 15 -> 1000;default -> 0;};}
   ItemStack editButton(Material type,String name,String lore){ItemStack item=button(type,name);ItemMeta meta=item.getItemMeta();meta.setLore(List.of(lore));item.setItemMeta(meta);return item;}
-  void edit(Player p,Listing row,int page){Edit edit=new Edit(row,page);Inventory inv=Bukkit.createInventory(edit,27,"Angebot bearbeiten");renderEdit(inv,edit);p.openInventory(inv);}
+  void edit(Player p,Listing row,int page){Edit edit=new Edit(row,page);Inventory inv=Bukkit.createInventory(edit,27,"Angebot bearbeiten");renderEdit(inv,edit);p.openInventory(inv);
+    // The listing icon is a display copy of the DB-owned item; there are no owned input slots.
+    core.menuReturns.registerHeld(p.getUniqueId(),edit,new int[0],inv::getItem,slot->inv.setItem(slot,null),
+      item->new ArrayList<>(p.getInventory().addItem(item).values()),item->{try{core.tx(c->{Deliveries.insert(c,UUID.randomUUID().toString(),p.getUniqueId().toString(),item,"menu_return");return null;});}catch(Exception ex){core.getLogger().severe("Menue-Rueckgabe nicht gespeichert: "+ex);p.getWorld().dropItemNaturally(p.getLocation(),item);}},
+      ()->edit.withdraw.reset(),p::closeInventory);}
   void renderEdit(Inventory inv,Edit edit){
     for(int i=0;i<27;i++)inv.setItem(i,editButton(Material.GRAY_STAINED_GLASS_PANE," "," "));
     ItemStack offered=ItemStack.deserializeBytes(Base64.getDecoder().decode(edit.row.item()));ItemMeta meta=offered.getItemMeta();List<String> lore=meta.hasLore()?new ArrayList<>(meta.getLore()):new ArrayList<>();lore.add("Menge: "+offered.getAmount());lore.add("Gesamtpreis: "+Money.format(edit.pendingPrice));meta.setLore(lore);offered.setItemMeta(meta);inv.setItem(4,offered);
@@ -59,8 +64,10 @@ final class Shop implements Listener {
     inv.setItem(12,editButton(Material.PAPER,"Gesamtpreis: "+Money.format(edit.pendingPrice),"Vorgemerkter Preis fuer das gesamte Angebot."));
     inv.setItem(16,editButton(Material.CHEST,"Menge +: aus Haupthand nachfuellen","Passende Items werden sofort zum Angebot hinzugefuegt."));
     inv.setItem(19,editButton(Material.LIME_WOOL,"Speichern","Vorgemerkten Preis speichern."));inv.setItem(21,editButton(Material.RED_WOOL,"Abbrechen","Vorgemerkten Preis verwerfen."));
-    inv.setItem(23,editButton(Material.HOPPER,"Angebot zurueckziehen","Angebot entfernen und Items ins Abholfach legen."));inv.setItem(25,editButton(Material.ARROW,"Zurueck","Zur Angebotsliste ohne Preis zu speichern."));
+    inv.setItem(23,editButton(Material.HOPPER,edit.withdraw.armed()?"Wirklich zurueckziehen? Nochmal klicken":"Angebot zurueckziehen","Items gehen ins Abholfach; innerhalb von 10 Sekunden erneut klicken."));inv.setItem(25,editButton(Material.ARROW,"Zurueck","Zur Angebotsliste ohne Preis zu speichern."));
   }
+  @EventHandler public void editClose(InventoryCloseEvent e){if(e.getInventory().getHolder() instanceof Edit edit)core.menuReturns.finish(e.getPlayer().getUniqueId(),edit);}
+  @EventHandler public void editQuit(PlayerQuitEvent e){core.menuReturns.finish(e.getPlayer().getUniqueId());}
   static final class Confirmation implements InventoryHolder {
     final Listing row; Confirmation(Listing row){this.row=row;}
     public Inventory getInventory(){return null;}
@@ -125,10 +132,14 @@ final class Shop implements Listener {
   @EventHandler public void click(InventoryClickEvent e){
     if(e.getView().getTopInventory().getHolder() instanceof PurchaseMenu pm && pm.table.equals("shop_journal")){e.setCancelled(true);if(e.getWhoClicked() instanceof Player p && e.getClickedInventory()==e.getView().getTopInventory() && e.isLeftClick() && !e.isShiftClick())try{pm.click(core,p,e.getRawSlot());}catch(Exception ex){core.getLogger().warning("Shopkauf: "+ex);p.sendMessage("Kauf fehlgeschlagen.");}return;}
     if(e.getView().getTopInventory().getHolder() instanceof Edit edit){
-      e.setCancelled(true);if(!(e.getWhoClicked() instanceof Player p)||e.getClickedInventory()!=e.getView().getTopInventory()||!e.isLeftClick()||e.isShiftClick())return;
+      e.setCancelled(true);
+      if(e.getRawSlot()!=23 || e.getClickedInventory()!=e.getView().getTopInventory() || !e.isLeftClick() || e.isShiftClick()) {
+        if(edit.withdraw.reset())renderEdit(e.getView().getTopInventory(),edit);
+      }
+      if(!(e.getWhoClicked() instanceof Player p)||e.getClickedInventory()!=e.getView().getTopInventory()||!e.isLeftClick()||e.isShiftClick())return;
       try{int slot=e.getRawSlot();Listing row=edit.row;String seller=p.getUniqueId().toString();
         if(slot==21||slot==25){open(p,seller,edit.page,true);return;}
-        if(slot==23){remove(p,row.id());open(p,seller,edit.page,true);return;}
+        if(slot==23){if(!edit.withdraw.click(System.nanoTime())){renderEdit(e.getView().getTopInventory(),edit);return;}remove(p,row.id());open(p,seller,edit.page,true);return;}
         long delta=editDelta(slot);if(delta!=0){long price=Math.addExact(edit.pendingPrice,delta);if(price<1){p.sendMessage("Preis muss positiv sein.");return;}edit.pendingPrice=price;renderEdit(e.getView().getTopInventory(),edit);return;}
         if(slot==19){boolean ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET price=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setLong(1,edit.pendingPrice);q.setString(2,row.id());q.setString(3,seller);q.setLong(4,row.price());q.setString(5,row.item());return q.executeUpdate()==1;}});p.sendMessage(ok?"Preis gespeichert.":"Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}
         if(slot==16){ItemStack existing=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.item()));ItemStack hand=p.getInventory().getItemInMainHand();

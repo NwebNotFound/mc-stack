@@ -16,7 +16,7 @@ final class SellPricing {
           || (tippedArrowPrice != null && tippedArrowPrice < 0)) throw new IllegalArgumentException("Ungueltige Verkaufspreise");
     }
   }
-  record Breakdown(long base, long durabilityReduction, long enchantBonus, long enchantBonusCapped, long total) {}
+  record Breakdown(long base, long durabilityReduction, long enchantBonus, long enchantBonusCapped, long scaledBonus, boolean baseLimited, long total) {}
   static Breakdown calculate(long base, List<Enchant> enchants, int damage, int maxDurability, Config config) {
     if (base < 0) throw new IllegalArgumentException("Ungueltiger Basispreis");
     long bonus = 0;
@@ -27,18 +27,26 @@ final class SellPricing {
       long rate = config.overrides().getOrDefault(key, config.overrides().getOrDefault(bare, config.bonusPerLevel()));
       bonus = Math.addExact(bonus, Math.multiplyExact(rate, Math.max(0, enchant.level())));
     }
-    long adjustedBase = base;
+    BigDecimal numerator = BigDecimal.ONE, denominator = BigDecimal.ONE;
     if (maxDurability > 0) {
       int remaining = Math.max(0, maxDurability - Math.min(maxDurability, Math.max(0, damage)));
-      BigDecimal scaled = BigDecimal.valueOf(base).multiply(BigDecimal.valueOf(remaining))
-          .divide(BigDecimal.valueOf(maxDurability), 0, RoundingMode.FLOOR);
-      BigDecimal minimum = BigDecimal.valueOf(base).multiply(BigDecimal.valueOf(config.minFactor()))
-          .setScale(0, RoundingMode.FLOOR);
-      adjustedBase = scaled.max(minimum).longValueExact();
+      numerator = BigDecimal.valueOf(remaining); denominator = BigDecimal.valueOf(maxDurability);
+      if (numerator.compareTo(BigDecimal.valueOf(config.minFactor()).multiply(denominator)) < 0) {
+        numerator = BigDecimal.valueOf(config.minFactor()); denominator = BigDecimal.ONE;
+      }
     }
     long cappedBonus = Math.min(bonus, config.enchantCap());
-    return new Breakdown(base, base - adjustedBase, bonus, cappedBonus, Math.addExact(adjustedBase, cappedBonus));
+    BigDecimal baseNumerator = BigDecimal.valueOf(base).multiply(numerator);
+    BigDecimal bonusNumerator = BigDecimal.valueOf(cappedBonus).multiply(numerator);
+    BigDecimal bonusLimit = BigDecimal.valueOf(base).multiply(denominator);
+    boolean limited = bonusNumerator.compareTo(bonusLimit) > 0;
+    bonusNumerator = bonusNumerator.min(bonusLimit);
+    long adjustedBase = baseNumerator.divide(denominator, 0, RoundingMode.FLOOR).longValueExact();
+    long scaledBonus = bonusNumerator.divide(denominator, 0, RoundingMode.FLOOR).longValueExact();
+    long total = baseNumerator.add(bonusNumerator).divide(denominator, 0, RoundingMode.FLOOR).longValueExact();
+    return new Breakdown(base, base - adjustedBase, bonus, cappedBonus, scaledBonus, limited, total);
   }
+
   static long base(long catalogPrice, boolean tippedArrow, Config config) {
     return tippedArrow && config.tippedArrowPrice() != null ? config.tippedArrowPrice() : catalogPrice;
   }

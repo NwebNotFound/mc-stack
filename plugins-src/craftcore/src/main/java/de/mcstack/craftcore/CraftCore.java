@@ -42,6 +42,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private PlayerStats playerStats;
   private InventorySync inventorySync;
   private DeathEvents deathEvents;
+  final MenuReturn.Registry<UUID> menuReturns=new MenuReturn.Registry<>();
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
   private CitizensNpcs citizensNpcs;
@@ -153,7 +154,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(vipWorldGate!=null)vipWorldGate.stop(); if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(vipWorldGate!=null)vipWorldGate.stop(); menuReturns.shutdown(); if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];

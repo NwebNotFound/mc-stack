@@ -30,7 +30,7 @@ final class Market implements Listener {
     public Inventory getInventory() { return null; }
   }
   static final class SellMenu implements InventoryHolder {
-    final UUID owner; Inventory inventory; int returned;
+    final UUID owner; Inventory inventory; final ItemStack[] snapshots=new ItemStack[36]; final boolean[] sellable=new boolean[36]; long total; int count;
     SellMenu(UUID owner){this.owner=owner;}
     public Inventory getInventory(){return inventory;}
   }
@@ -201,7 +201,7 @@ final class Market implements Listener {
     String id=UUID.randomUUID().toString();
     return core.tx(c->{String day=dayKey(); String owner=DiscordRevenue.lock(c,player.toString(),day);
       long cp=sellBreakdown(m,price(c,m,false,false).cents(),enchants,damage,config).total();
-      if(affordable(DiscordRevenue.remainingOwner(c,owner,day,revenueLimit()),cp,1)==0) return false;
+      if(cp<=0 || affordable(DiscordRevenue.remainingOwner(c,owner,day,revenueLimit()),cp,1)==0) return false;
       if(!BuybackCaps.reserve(c,core.getConfig(),owner,m,day)) return false;
       if(cp>0 && !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit())) throw new SQLException("Tageslimit konnte nicht reserviert werden");
       core.exec(c,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",id,player.toString(),m.name(),1,cp,"PENDING");
@@ -223,7 +223,7 @@ final class Market implements Listener {
     return Bukkit.getItemFactory().equals(meta,empty);
   }
   static long total(long unit,int amount) { return Math.multiplyExact(unit,amount); }
-  static int affordable(long remaining,long unit,int amount) { return unit<0?0:unit==0?amount:(int)Math.min(amount,Math.max(0,remaining)/unit); }
+  static int affordable(long remaining,long unit,int amount) { return unit<=0?0:(int)Math.min(amount,Math.max(0,remaining)/unit); }
   static <T> void drain(int size, java.util.function.IntFunction<T> get, java.util.function.IntConsumer clear, java.util.function.Consumer<T> deliver) {
     for(int slot=0;slot<size;slot++){T item=get.apply(slot);clear.accept(slot);if(item!=null)deliver.accept(item);}
   }
@@ -231,97 +231,94 @@ final class Market implements Listener {
  static boolean marketSellEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("market.sell.enabled", false); }
  static boolean sellMenuEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("sell-menu.enabled", false); }
  void openSell(Player p) throws Exception {
-  if(!marketSellEnabled(core.getConfig()) || !sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
-    SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Verkaufen");
-    refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
+    if(!marketSellEnabled(core.getConfig()) || !sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
+    SellMenu menu=new SellMenu(p.getUniqueId()); menu.inventory=Bukkit.createInventory(menu,54,"Bank: Verkaufen");
+    sellMenus.put(menu.owner,menu); refreshSell(menu); p.openInventory(menu.inventory);
+  }
+  static final class SellConfirmation implements InventoryHolder {
+    final SellMenu menu; SellConfirmation(SellMenu menu){this.menu=menu;}
+    public Inventory getInventory(){return null;}
   }
   private void refreshSell(SellMenu menu) {
-    ItemStack unavailable=button(Material.PAPER,"Gesamt: nicht verfuegbar");ItemMeta unavailableMeta=unavailable.getItemMeta();unavailableMeta.setLore(List.of("Preisvorschau momentan nicht verfuegbar."));unavailable.setItemMeta(unavailableMeta);menu.inventory.setItem(48,unavailable);
-    ItemStack button=button(Material.LIME_CONCRETE,"Alles verkaufen");
-    List<String> lore=new ArrayList<>();
-    lore.add("Alle geeigneten Stacks verkaufen.");
-    try {
-      List<ItemStack> stacks=new ArrayList<>();
-      for(int slot=0;slot<45;slot++) {
-        ItemStack stack=menu.inventory.getItem(slot);
-        if(eligible(stack)&&hasPrice(stack.getType())) stacks.add(stack);
-      }
-      Map<Material,Price> prices=core.tx(c->previewPrices(stacks.stream().map(ItemStack::getType).toList(), m->price(c,m,false,false)));
-      long sum=0; SellPricing.Config pricing=pricingConfig(core.getConfig());
-      for(ItemStack stack:stacks) {
-        int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
-        SellPricing.Breakdown breakdown=sellBreakdown(stack.getType(),prices.get(stack.getType()).cents(),sellEnchants(stack),damage,pricing);
-        long unit=breakdown.total();
-        sum=Math.addExact(sum,total(unit,stack.getAmount()));
-        lore.add(sellPreview(stack.getType().name(),unit,stack.getAmount()));
-        lore.add("Basis: "+Money.format(breakdown.base()));
-        lore.add("Abzug Haltbarkeit: "+Money.format(breakdown.durabilityReduction()));
-        lore.add("Verzauberungsbonus: "+Money.format(breakdown.enchantBonus())
-          +(breakdown.enchantBonus()>breakdown.enchantBonusCapped()?" (gedeckelt auf "+Money.format(breakdown.enchantBonusCapped())+")":""));
-        lore.add("Gesamt: "+Money.format(unit)+" / Stueck");
-      }
-      ItemStack totalItem=button(Material.PAPER,"Gesamt: "+Money.format(sum)); ItemMeta totalMeta=totalItem.getItemMeta();totalMeta.setLore(List.of("Voraussichtlicher Erloes; Preis kann sich aendern."));totalItem.setItemMeta(totalMeta);menu.inventory.setItem(48,totalItem);
-    } catch(Exception ex) { core.getLogger().warning("Verkaufspreis-Vorschau: "+ex.getClass().getSimpleName()); }
-    lore.add("Preis beim Verkauf kann abweichen.");
-    ItemMeta meta=button.getItemMeta(); meta.setLore(lore); button.setItemMeta(meta); menu.inventory.setItem(49,button);
+    Player p=Bukkit.getPlayer(menu.owner); if(p==null)return;
+    menu.total=0; menu.count=0;
+    for(int i=36;i<54;i++)menu.inventory.setItem(i,button(Material.GRAY_STAINED_GLASS_PANE," "));
+    menu.inventory.setItem(53,button(Material.BARRIER,"Schliessen"));
+    for(int i=0;i<36;i++) {
+      ItemStack real=p.getInventory().getItem(i); menu.snapshots[i]=real==null?null:real.clone(); menu.sellable[i]=false;
+      if(real==null||real.getType().isAir()){menu.inventory.setItem(i,null);continue;}
+      ItemStack icon=real.clone(); ItemMeta meta=icon.getItemMeta(); List<String> lore=meta.hasLore()?new ArrayList<>(meta.getLore()):new ArrayList<>();
+      try {
+        String reason=null; SellPricing.Breakdown breakdown=null;
+        if(!marketSellEnabled(core.getConfig())||!sellMenuEnabled(core.getConfig())) reason="Bankverkauf deaktiviert";
+        else if(!eligible(real)||!hasPrice(real.getType())||core.getConfig().getStringList("market.unsellable").contains(real.getType().name())) reason="Nicht handelbar";
+        else {
+          int damage=real.getItemMeta() instanceof Damageable d?d.getDamage():0;
+          SellConfig config=sellConfig(real.getType());
+          breakdown=core.tx(c->sellBreakdown(real.getType(),price(c,real.getType(),false,false,config).cents(),sellEnchants(real),damage,config.pricing()));
+          if(breakdown.total()==0)reason="Wert 0 CP (komplett beschaedigt)";
+          else if(!previewAllowed(p,real.getType(),breakdown.total(),config))reason="Limit erreicht";
+        }
+        if(reason!=null) lore.add(org.bukkit.ChatColor.GRAY+reason);
+        else {
+          long unit=breakdown.total(); menu.sellable[i]=true; menu.total=Math.addExact(menu.total,total(unit,real.getAmount())); menu.count+=real.getAmount();
+          lore.add("Preis/Stueck: "+Money.format(unit)); lore.add("Preis/Stack ("+real.getAmount()+"): "+Money.format(total(unit,real.getAmount())));
+          lore.add("Basis: "+Money.format(breakdown.base())); lore.add("Abzug Haltbarkeit: "+Money.format(breakdown.durabilityReduction()));
+          lore.add("Roher Bonus: "+Money.format(breakdown.enchantBonus())); lore.add("Bonus-Deckel: "+Money.format(configCap())+"; nach Deckel: "+Money.format(breakdown.enchantBonusCapped()));
+          lore.add("Bonus nach Haltbarkeit: "+Money.format(breakdown.scaledBonus()));
+          if(breakdown.baseLimited())lore.add("Bonus: max 100% der Basis");
+          lore.add("Gesamt/Stueck: "+Money.format(unit)); lore.add("Klick: 1 verkaufen"); lore.add("Shift-Klick: ganzen Stack verkaufen");
+        }
+      } catch(Exception ex){lore.add(org.bukkit.ChatColor.GRAY+"Preis momentan nicht verfuegbar");core.getLogger().warning("Verkaufspreis-Vorschau: "+ex);}
+      meta.setLore(lore);icon.setItemMeta(meta);menu.inventory.setItem(i,icon);
+    }
+    ItemStack all=button(Material.LIME_WOOL,"Alles Verkaufbare verkaufen"); ItemMeta m=all.getItemMeta();m.setLore(List.of("Gesamt: "+Money.format(menu.total),"Items: "+menu.count,"Preis und Limits werden beim Verkauf geprueft."));all.setItemMeta(m);menu.inventory.setItem(49,all);
+  }
+  private long configCap(){return pricingConfig(core.getConfig()).enchantCap();}
+  private boolean previewAllowed(Player p,Material material,long unit,SellConfig cfg)throws Exception {
+    return core.tx(c->{String day=DailyRevenue.dayKey(java.time.Instant.now(),cfg.zone(),cfg.resetHour()); String owner=DiscordRevenue.owner(c,p.getUniqueId().toString(),false);
+      if(DiscordRevenue.remainingOwner(c,owner,day,cfg.revenueLimit())<unit || cfg.perDay()<1)return false;
+      if(cfg.perDay()==Integer.MAX_VALUE)return true;
+      try(PreparedStatement q=c.prepareStatement("SELECT amount FROM bank_sell_cap_daily WHERE owner=? AND item=? AND day_key=?")){q.setString(1,owner);q.setString(2,material.name());q.setString(3,day);try(ResultSet r=q.executeQuery()){return !r.next()||r.getInt(1)<cfg.perDay();}}
+    });
   }
   interface PreviewQuote { Price get(Material material) throws SQLException; }
   static Map<Material,Price> previewPrices(List<Material> materials, PreviewQuote quote) throws SQLException {
-    Map<Material,Price> prices=new EnumMap<>(Material.class);
-    for(Material material:materials) if(!prices.containsKey(material)) prices.put(material,quote.get(material));
-    return prices;
+    Map<Material,Price> prices=new EnumMap<>(Material.class); for(Material material:materials)if(!prices.containsKey(material))prices.put(material,quote.get(material));return prices;
   }
   static String sellPreview(String item,long unit,int amount) { return item+": "+Money.format(unit)+" / Stueck, "+Money.format(total(unit,amount))+" / Stack"; }
-  private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{Player p=Bukkit.getPlayer(menu.owner);if(p!=null)rejectUnsellable(p,menu);refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }
-  @EventHandler public void sellDrag(InventoryDragEvent e) {
-    if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu))return;
-    if(e.getRawSlots().stream().anyMatch(slot->slot>=45 && slot<54))e.setCancelled(true); else refreshLater(menu);
-  }
+  @EventHandler public void sellDrag(InventoryDragEvent e) { if(e.getView().getTopInventory().getHolder() instanceof SellMenu || e.getView().getTopInventory().getHolder() instanceof SellConfirmation)e.setCancelled(true); }
   @EventHandler public void sellClick(InventoryClickEvent e) {
-    if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu) || !(e.getWhoClicked() instanceof Player p))return;
-    int raw=e.getRawSlot();
-    if(e.isShiftClick()) { e.setCancelled(true); if(raw>=54 && e.getClickedInventory()!=null) {
-      ItemStack item=e.getCurrentItem(); if(item!=null && !item.getType().isAir()) {
-        int remaining=item.getAmount();
-        for(int pass=0;pass<2 && remaining>0;pass++)for(int i=0;i<45 && remaining>0;i++) {ItemStack at=menu.inventory.getItem(i);
-          if(pass==0 && at!=null && at.isSimilar(item)){int n=Math.min(remaining,Math.max(0,at.getMaxStackSize()-at.getAmount()));at.setAmount(at.getAmount()+n);remaining-=n;}
-          if(pass==1 && (at==null || at.getType().isAir())){int n=Math.min(remaining,item.getMaxStackSize());ItemStack copy=item.clone();copy.setAmount(n);menu.inventory.setItem(i,copy);remaining-=n;}}
-        if(remaining==0)e.setCurrentItem(null);else item.setAmount(remaining);refreshLater(menu);
-      }} else if(raw>=0 && raw<45) {ItemStack item=e.getCurrentItem();if(item!=null){e.setCurrentItem(null);giveBack(p,List.of(item));refreshLater(menu);}} return; }
-    if(raw>=45 && raw<54){e.setCancelled(true);if(raw==49 && (e.isLeftClick()||e.isRightClick())) confirmSell(p,menu);return;}
-    if(e.getClick()==ClickType.DOUBLE_CLICK || e.getClick()==ClickType.NUMBER_KEY || e.getClick()==ClickType.SWAP_OFFHAND || e.getAction()==InventoryAction.COLLECT_TO_CURSOR) {e.setCancelled(true);return;}
-    refreshLater(menu);
-  }
-  private void confirmSell(Player p,SellMenu menu) {
-    if(!marketSellEnabled(core.getConfig()) || !sellMenuEnabled(core.getConfig())) { p.sendMessage(SELL_MENU_OFF); return; }
-    rejectUnsellable(p,menu);
-    UUID player=p.getUniqueId();
-    SellSummary summary=new SellSummary(p,menu.returned);menu.returned=0;
-    for(int slot=0;slot<45;slot++) {
-      String lock=player+":"+slot;
-      if(sellFlow.busy(lock)) continue;
-      ItemStack stack=menu.inventory.getItem(slot);
-      if(!eligible(stack)||!hasPrice(stack.getType())) continue;
-      stack=stack.clone();
-      String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes());
-      String key=UUID.randomUUID().toString();
-      int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
-      SellConfig config=sellConfig(stack.getType());
-      List<SellPricing.Enchant> enchants=sellEnchants(stack);
-      ItemStack sold=stack;
-      int selectedSlot=slot;
-      summary.pending++;
-      if(!sellFlow.start(lock,()->menu.inventory.setItem(selectedSlot,null),
-          ()->sellStack(player,key,nbt,sold,damage,enchants,config),
-          result->{finishSell(p,player,key,sold,result);summary.complete(sold,result);} )) summary.pending--;
+    InventoryHolder holder=e.getView().getTopInventory().getHolder();
+    if(!(holder instanceof SellMenu) && !(holder instanceof SellConfirmation))return;
+    e.setCancelled(true); if(!(e.getWhoClicked() instanceof Player p))return;
+    int slot=e.getRawSlot();
+    if(holder instanceof SellConfirmation confirm){
+      if(!e.isLeftClick() || e.isShiftClick())return;
+      if(slot==11){p.openInventory(confirm.menu.inventory);for(int i=0;i<36;i++)if(confirm.menu.sellable[i])sellSlot(p,confirm.menu,i,true);}
+      else if(slot==15)p.openInventory(confirm.menu.inventory); return;
     }
-    summary.started=true;summary.showIfDone();refreshSell(menu);
+    SellMenu menu=(SellMenu)holder;
+    if(slot>=0 && slot<36 && (e.isLeftClick()||e.isRightClick()))sellSlot(p,menu,slot,e.isShiftClick());
+    else if(slot==49)showSellConfirmation(p,menu); else if(slot==53)p.closeInventory();
   }
-  private static final class SellSummary {
-    final Player player; final Map<Material,long[]> sold=new LinkedHashMap<>(); int pending,returned; long total; boolean started,unknown;
-    SellSummary(Player player,int returned){this.player=player;this.returned=returned;}
-    void complete(ItemStack stack,SellResult result){if(result.status()==SellTransaction.CommitStatus.COMMITTED){long[] line=sold.computeIfAbsent(stack.getType(),m->new long[2]);line[0]+=stack.getAmount();line[1]+=result.cp();total+=result.cp();}else if(result.status()==SellTransaction.CommitStatus.NOT_COMMITTED)returned+=stack.getAmount();else unknown=true;pending--;showIfDone();}
-    void showIfDone(){if(!started||pending!=0)return;for(var entry:sold.entrySet())player.sendMessage(entry.getKey().name()+": "+entry.getValue()[0]+" Stueck, "+Money.format(entry.getValue()[1]));player.sendMessage("Gesamt: "+Money.format(total)+"; zurueckgegeben: "+returned+" Items."+(unknown?" Ein Verkauf ist ungeklaert.":""));}
+  private void showSellConfirmation(Player p,SellMenu menu){
+    refreshSell(menu); Inventory inv=Bukkit.createInventory(new SellConfirmation(menu),27,"Verkauf bestaetigen");
+    for(int i=0;i<27;i++)inv.setItem(i,button(Material.GRAY_STAINED_GLASS_PANE," "));
+    ItemStack info=button(Material.PAPER,"Gesamt: "+Money.format(menu.total));ItemMeta meta=info.getItemMeta();meta.setLore(List.of("Items: "+menu.count));info.setItemMeta(meta);inv.setItem(13,info);
+    inv.setItem(11,button(Material.LIME_WOOL,"Bestaetigen"));inv.setItem(15,button(Material.RED_WOOL,"Abbrechen"));p.openInventory(inv);
+  }
+  private void sellSlot(Player p,SellMenu menu,int slot,boolean whole){
+    if(!marketSellEnabled(core.getConfig())||!sellMenuEnabled(core.getConfig())||!menu.sellable[slot])return;
+    ItemStack expected=menu.snapshots[slot], real=p.getInventory().getItem(slot);
+    if(expected==null||real==null||!real.isSimilar(expected)||real.getAmount()!=expected.getAmount()){refreshSell(menu);return;}
+    if(!eligible(real)||!hasPrice(real.getType())||core.getConfig().getStringList("market.unsellable").contains(real.getType().name())){refreshSell(menu);return;}
+    int amount=whole?real.getAmount():1; ItemStack sold=real.clone();sold.setAmount(amount);
+    String lock=p.getUniqueId()+":"+slot, key=UUID.randomUUID().toString(), nbt=Base64.getEncoder().encodeToString(sold.serializeAsBytes());
+    int damage=sold.getItemMeta() instanceof Damageable d?d.getDamage():0; SellConfig config=sellConfig(sold.getType()); List<SellPricing.Enchant> enchants=sellEnchants(sold);
+    sellFlow.start(lock,()->{ItemStack rest=real.clone();rest.setAmount(real.getAmount()-amount);p.getInventory().setItem(slot,rest.getAmount()==0?null:rest);},
+      ()->sellStack(p.getUniqueId(),key,nbt,sold,damage,enchants,config), result->{finishSell(p,p.getUniqueId(),key,sold,result);if(sellMenus.get(menu.owner)==menu)refreshSell(menu);});
+    refreshSell(menu);
   }
   private record SellResult(SellTransaction.CommitStatus status, boolean limited, long cp, long balance) {}
   private SellResult sellStack(UUID uuid,String key,String nbt,ItemStack stack,int damage,List<SellPricing.Enchant> enchants,SellConfig config) {
@@ -342,6 +339,7 @@ final class Market implements Listener {
           SellTransaction.run(c,key,tx->{
             String day=DailyRevenue.dayKey(java.time.Instant.now(),config.zone(),config.resetHour()), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
             long unit=sellBreakdown(material,price(tx,material,false,false,config).cents(),enchants,damage,config.pricing()).total();
+            if(unit<=0) throw new SellLimit();
             cp[0]=total(unit,amount);
             if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,config.revenueLimit()),unit,amount)<amount) throw new SellLimit();
             for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,config.perDay(),owner,material,day)) throw new SellLimit();
@@ -370,7 +368,7 @@ final class Market implements Listener {
   }
   private void finishSell(Player player,UUID uuid,String key,ItemStack stack,SellResult result) {
     SellStackFlow.resolve(result.status(),
-      ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstaende fuer "+Money.format(result.cp())+".");},
+      ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstaende fuer "+Money.format(result.cp())+". Neuer Kontostand: "+Money.format(result.balance())); player.playSound(player.getLocation(),Sound.ENTITY_EXPERIENCE_ORB_PICKUP,1f,1f);},
       ()->{if(player.isOnline() && Bukkit.getPlayer(uuid)==player) { giveBack(player,List.of(stack)); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurueckgegeben.":"Verkauf fehlgeschlagen; Stack zurueckgegeben."); }
         else { String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes()); Bukkit.getScheduler().runTaskAsynchronously(core,()->{ try { core.tx(c->{SellTransaction.refundOwed(c,key,uuid.toString(),nbt,stack.getAmount());return null;}); queueRefunds(uuid); } catch(Exception ex) {core.getLogger().severe("Rueckerstattung nicht gespeichert fuer "+key+": "+ex); } }); } },
       ()->player.sendMessage("Verkauf ungeklaert. Bitte Admin informieren: "+key));
@@ -382,27 +380,19 @@ final class Market implements Listener {
     } catch(Exception ex) {core.getLogger().warning("Rueckerstattung fuer "+uuid+": "+ex);}
   }
   private static final class SellLimit extends Exception {}
-  private void returnSell(Player p,SellMenu menu) {
-    if(!sellMenus.remove(menu.owner,menu))return;
-    deliverSellItems(p,menu);
-  }
   private void giveBack(Player p,List<ItemStack> items) {
     MenuReturn.giveBack(items,item->new ArrayList<>(p.getInventory().addItem(item).values()),item->{
       try { core.tx(c->{Deliveries.insert(c,UUID.randomUUID().toString(),p.getUniqueId().toString(),item,"menu_return");return null;}); }
-      catch(Exception ex) { core.getLogger().severe("Menue-Rueckgabe nicht gespeichert: "+ex);p.getWorld().dropItemNaturally(p.getLocation(),item);p.sendMessage("Abholfach nicht erreichbar; Gegenstand wurde abgelegt."); }
+      catch(Exception ex) { core.getLogger().severe("Menue-Rueckgabe nicht gespeichert: "+ex);p.getWorld().dropItemNaturally(p.getLocation(),item); }
     });
   }
-  private void rejectUnsellable(Player p,SellMenu menu) {
-    List<ItemStack> rejected=new ArrayList<>();
-    for(int i=0;i<45;i++){ItemStack item=menu.inventory.getItem(i);if(item!=null&&!item.getType().isAir()&&(!eligible(item)||!hasPrice(item.getType())||core.getConfig().getStringList("market.unsellable").contains(item.getType().name()))){menu.inventory.setItem(i,null);rejected.add(item);}}
-    if(!rejected.isEmpty()){menu.returned+=rejected.stream().mapToInt(ItemStack::getAmount).sum();giveBack(p,rejected);p.sendMessage("Nicht verkaufbare Items wurden zurueckgegeben.");}
+  @EventHandler public void sellClose(InventoryCloseEvent e){
+    if(!core.isEnabled())return;
+    if(e.getInventory().getHolder() instanceof SellMenu menu)Bukkit.getScheduler().runTask(core,()->{Player p=Bukkit.getPlayer(menu.owner);if(p==null || !(p.getOpenInventory().getTopInventory().getHolder() instanceof SellConfirmation))sellMenus.remove(menu.owner,menu);});
+    else if(e.getInventory().getHolder() instanceof SellConfirmation confirmation)Bukkit.getScheduler().runTask(core,()->{Player p=Bukkit.getPlayer(confirmation.menu.owner);if(p==null || p.getOpenInventory().getTopInventory().getHolder()!=confirmation.menu)sellMenus.remove(confirmation.menu.owner,confirmation.menu);});
   }
-  private void deliverSellItems(Player p,SellMenu menu) {
-    List<ItemStack> items=new ArrayList<>();drain(45,menu.inventory::getItem,slot->menu.inventory.setItem(slot,null),item->{if(!item.getType().isAir())items.add(item);});giveBack(p,items);
-  }
-  @EventHandler public void sellClose(InventoryCloseEvent e){if(e.getInventory().getHolder() instanceof SellMenu menu && e.getPlayer() instanceof Player p)returnSell(p,menu);}
-  @EventHandler public void sellQuit(PlayerQuitEvent e){SellMenu menu=sellMenus.get(e.getPlayer().getUniqueId());if(menu!=null)returnSell(e.getPlayer(),menu);}
-  void shutdown(){for(SellMenu menu:new ArrayList<>(sellMenus.values())){Player p=Bukkit.getPlayer(menu.owner);if(p!=null){returnSell(p,menu);p.closeInventory();}}}
+  @EventHandler public void sellQuit(PlayerQuitEvent e){sellMenus.remove(e.getPlayer().getUniqueId());}
+  void shutdown(){for(SellMenu menu:new ArrayList<>(sellMenus.values())){Player p=Bukkit.getPlayer(menu.owner);if(p!=null)p.closeInventory();}sellMenus.clear();}
   private void finishSale(String id) {
     try { core.tx(c->{
       BankJournal.finishSale(c,id,(material)->{ Material m=Material.matchMaterial(material); if(m==null || !items.containsKey(m)) throw new SQLException("Marktartikel fehlt fuer Journal "+id); price(c,m,true,false); }); return null;
