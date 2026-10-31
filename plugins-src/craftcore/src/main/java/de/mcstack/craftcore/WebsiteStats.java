@@ -42,6 +42,11 @@ final class WebsiteStats {
     core.tx(c->{migrate(c);return null;});
     Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{try {core.tx(c->{maintain(c,Instant.now());return null;});} catch(Exception e){core.getLogger().warning("Website-Statistik: "+e.getMessage());}},20L,72000L);
   }
+  static void catalog(Connection c,String item,long buy,long sell,double base,long now) throws SQLException {
+    try(PreparedStatement q=c.prepareStatement("INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)")) {
+      q.setString(1,item); q.setDouble(2,buy/100.0); q.setDouble(3,sell/100.0); q.setDouble(4,base); q.setLong(5,now/1000); q.executeUpdate();
+    }
+  }
   static void event(Connection c, String item, int qty, long cents, String source) throws SQLException {
     try (PreparedStatement q=c.prepareStatement("INSERT INTO market_events(item,qty,unit_price,total_cp,source,ts) VALUES(?,?,?,?,?,?)")) {
       q.setString(1,item); q.setInt(2,qty); q.setDouble(3,cents / 100.0 / qty); q.setDouble(4,cents / 100.0); q.setString(5,source); q.setLong(6,System.currentTimeMillis()/1000); q.executeUpdate();

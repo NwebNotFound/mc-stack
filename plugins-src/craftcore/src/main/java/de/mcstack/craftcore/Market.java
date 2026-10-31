@@ -60,6 +60,7 @@ final class Market implements Listener {
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); for(Material m:items.keySet()) price(c,m,false,false); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
+    Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -82,28 +83,22 @@ final class Market implements Listener {
   }
   Price price(Connection c, Material m, boolean trade, boolean buy) throws SQLException {
     Quote q=items.get(m); long now=System.currentTimeMillis();
-    DynamicPrice.Settings dyn=DynamicPrice.settings(core.getConfig());
-    if(dyn.enabled()) {
-      // Dynamic model: same factor for buy and buyback (spread kept), recovers by wall-clock time.
-      double f=DynamicPrice.current(c,m.name(),now,dyn);
-      long sell=BuybackCaps.capCents(core.getConfig(),m,DynamicPrice.apply(bankCents(m,q.base(),false),f,false));
-      long purchase=Math.max(DynamicPrice.apply(bankCents(m,q.base(),true),f,true),BankPrice.minimumBuy(sell));
-      core.exec(c,"INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)",m.name(),purchase/100.0,sell/100.0,q.base(),now/1000);
-      if(trade) DynamicPrice.trade(c,m.name(),buy?-1:1,now,dyn);
-      return new Price(buy?purchase:sell,q.base()*f,trade?(buy?"auf":"ab"):"-");
+    double f=DynamicPrice.current(c,m.name(),now);
+    long baseBuy=bankCents(m,q.base(),true);
+    // Across the entire permitted band, a sale can never pay more than a later purchase.
+    long sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
+      DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
+      DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
+    long purchase=Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell));
+    if(trade) {
+      f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
+      sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
+        DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
+        DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
+      purchase=Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell));
     }
-    core.exec(c,"INSERT IGNORE INTO bank_price_factors VALUES (?,1,1,?)",m.name(),now);
-    double sf,bf; long updated;
-    try(PreparedStatement st=c.prepareStatement("SELECT sell_factor,buy_factor,updated FROM bank_price_factors WHERE material=? FOR UPDATE")) {
-      st.setString(1,m.name()); try(ResultSet rs=st.executeQuery()) {rs.next();sf=rs.getDouble(1);bf=rs.getDouble(2);updated=rs.getLong(3);}
-    }
-    sf=Math.min(1,Math.max(0.25,BankPrice.recover(sf,now-updated))); bf=Math.max(1,Math.min(2,BankPrice.recover(bf,now-updated)));
-    long sell=BuybackCaps.capCents(core.getConfig(),m,(long)Math.floor(bankCents(m,q.base(),false)*sf));
-    long purchase=Math.max((long)Math.ceil(bankCents(m,q.base(),true)*bf),BankPrice.minimumBuy(sell));
-    core.exec(c,"INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)",m.name(),purchase/100.0,sell/100.0,q.base(),now/1000);
-    if(trade) { if(buy) bf=BankPrice.moveBuy(bf); else sf=BankPrice.moveSell(sf); }
-    core.exec(c,"UPDATE bank_price_factors SET sell_factor=?,buy_factor=?,updated=? WHERE material=?",sf,bf,now,m.name());
-    return new Price(buy?purchase:sell,q.base()*(buy?bf:sf),trade?(buy?"auf":"ab"):"-");
+    WebsiteStats.catalog(c,m.name(),purchase,sell,q.base(),now);
+    return new Price(buy?purchase:sell,q.base()*f,trade?(buy?"auf":"ab"):"-");
   }
 
   boolean hasPrice(Material m) { return items.containsKey(m); }
