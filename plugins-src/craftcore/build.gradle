@@ -16,6 +16,8 @@ tasks.register('verifyVaultApi') {
 }
 tasks.withType(JavaCompile).configureEach { dependsOn tasks.named('verifyVaultApi') }
 dependencies {
+    compileOnly 'net.luckperms:api:5.4'
+    testImplementation 'net.luckperms:api:5.4'
     if (!serverLibs.files.isEmpty()) {
         compileOnly serverLibs
         testImplementation serverLibs

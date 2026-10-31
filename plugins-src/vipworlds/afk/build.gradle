@@ -1,8 +1,15 @@
 plugins { id 'java' }
 java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
-repositories { mavenCentral() }
+repositories { mavenCentral(); maven { url = 'https://repo.papermc.io/repository/maven-public/' } }
+def serverLibs = fileTree(dir: '../../../data/survival/libraries', include: '**/*.jar')
 dependencies {
-    compileOnly fileTree(dir: '../../../data/survival/libraries', include: '**/*.jar')
+    if (!serverLibs.files.isEmpty()) {
+        compileOnly serverLibs
+        testImplementation serverLibs
+    } else {
+        compileOnly 'io.papermc.paper:paper-api:26.3.build.231-stable'
+        testImplementation 'io.papermc.paper:paper-api:26.3.build.231-stable'
+    }
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

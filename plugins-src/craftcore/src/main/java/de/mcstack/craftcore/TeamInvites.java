@@ -46,6 +46,6 @@ final class TeamInvites implements Listener {
   }
   void command(Player p,String op,String[] args) throws Exception {
     if(args.length!=2){p.sendMessage("[Craft] Benutzung: /team "+op+" <"+(op.equals("invite")?"Spieler":op.equals("join")?"Team":"Einladung")+">");return;}
-    String result=core.tx(c->TeamInviteStore.apply(c,p.getUniqueId().toString(),op,args[1])); p.sendMessage("[Craft] "+result);
+    String result=core.tx(c->TeamInviteStore.apply(c,p.getUniqueId().toString(),op,args[1])); p.sendMessage("[Craft] "+result); if(op.equals("join") || op.equals("accept")) core.refreshRanks();
   }
 }

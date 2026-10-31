@@ -34,6 +34,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private UserMenu userMenu;
   private TeamInvites teamInvites;
   private Motivation motivation;
+  private RankDisplays rankDisplays;
+  static final String TEAM_COLOR_MIGRATION = "ALTER TABLE teams ADD COLUMN IF NOT EXISTS color VARCHAR(4) NOT NULL DEFAULT '&f'";
+  void refreshRanks() { if(rankDisplays!=null) rankDisplays.refreshAll(); }
   private PlayerStats playerStats;
   private InventorySync inventorySync;
   private DeathEvents deathEvents;
@@ -67,6 +70,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute("CREATE TABLE IF NOT EXISTS known_players (uuid CHAR(36) PRIMARY KEY, name VARCHAR(16) NOT NULL, UNIQUE KEY known_name (name))");
         s.execute("CREATE TABLE IF NOT EXISTS accounts (uuid CHAR(36) PRIMARY KEY, balance BIGINT NOT NULL DEFAULT 0)");
         s.execute("CREATE TABLE IF NOT EXISTS teams (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(16) NOT NULL UNIQUE)");
+        s.execute(TEAM_COLOR_MIGRATION);
         s.execute("CREATE TABLE IF NOT EXISTS members (uuid CHAR(36) PRIMARY KEY, team_id BIGINT NOT NULL, role VARCHAR(8) NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE)");
         s.execute(SellTransaction.DDL);
         s.execute(SellTransaction.PENDING_DDL);
@@ -89,6 +93,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new TeamTeleport(this,server).start();
       new Challenges(this,server).start();
       motivation=new Motivation(this); motivation.start();
+      rankDisplays=new RankDisplays(this,server); rankDisplays.start();
       InviteRewards.start(this,SpawnRoute.isSurvival(server));
       tx(c->{exec(c,"CREATE TABLE IF NOT EXISTS rcon_purchases (idem_key VARBINARY(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, buyer CHAR(36) NOT NULL, listing_id CHAR(36) NOT NULL, qty INT NOT NULL, max_price BIGINT NOT NULL, response VARCHAR(80) NOT NULL, created_at BIGINT NOT NULL)");exec(c,"CREATE OR REPLACE SQL SECURITY DEFINER VIEW v_rcon_purchase_result AS SELECT CAST(idem_key AS CHAR(64)) AS idem_key, response FROM rcon_purchases");TestRun.prepare(c);return null;});
       tx(c->{BankBuy.migrate(c);return null;});
@@ -162,7 +167,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
       return List.of();
     }
     if(command.getName().equals("balance")) return List.of();
-    if(command.getName().equals("team") && args.length==1) return UserMenu.complete(args[0], "create", "invite", "join", "leave", "kick", "info", "promote", "demote");
+    if(command.getName().equals("team") && args.length==1) return UserMenu.complete(args[0], "create", "invite", "join", "leave", "kick", "info", "promote", "demote", "color");
+    if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("color")) return RankDisplay.TEAM_COLORS.keySet().stream().filter(n->n.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
     if(command.getName().equals("team") && args.length==2 && args[0].equalsIgnoreCase("invite")) return teamInvites.complete(args[1]);
     if(command.getName().equals("claim") && args.length==1) return UserMenu.complete(args[0], "create", "list");
     if(command.getName().equals("ah") && args.length==1) return UserMenu.complete(args[0], "my", "sell", "search", "zurueckziehen", "cancel");
@@ -207,6 +213,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     }
     board.getTeam("line6").prefix(Component.text("mc.nwebnotfound.dev",NamedTextColor.GRAY));
     p.setScoreboard(board);
+    if(rankDisplays!=null) rankDisplays.boardCreated(board);
     return board;
   }
   void sellBalance(UUID id,long cp) { Scoreboard board=sidebars.get(id); if(board!=null) setLine(board,2,"CP: ",Money.format(cp),NamedTextColor.GREEN); }
@@ -235,6 +242,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     return ShopBuyDispatch.Caller.OTHER;
   }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
+    if(command.getName().equals("rank")) return rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
       if(!sender.hasPermission("craftcore.admin")) return true;
       if(args.length>0) {
@@ -378,10 +386,15 @@ public final class CraftCore extends JavaPlugin implements Listener {
           if(op.equals("kick")){ if(role.equals("ADMIN") && !orole.equals("MEMBER"))return "Admins kÃƒÂ¶nnen nur Mitglieder entfernen."; exec(c,"DELETE FROM members WHERE uuid=?",oid); return "Mitglied entfernt."; }
           if(!role.equals("OWNER"))return "Nur der Owner darf Rollen ÃƒÂ¤ndern.";
           exec(c,"UPDATE members SET role=? WHERE uuid=?",op.equals("promote")?"ADMIN":"MEMBER",oid); return "Rolle geÃƒÂ¤ndert.";
+        case "color":
+          if(tid==null || !"OWNER".equals(role)) return "Nur der Owner darf die Teamfarbe aendern.";
+          if(a.length!=2 || RankDisplay.teamColor(a[1]).isEmpty()) return "Ungueltige Farbe. Verfuegbar: "+String.join(", ",RankDisplay.TEAM_COLORS.keySet());
+          exec(c,"UPDATE teams SET color=? WHERE id=?",RankDisplay.teamColor(a[1]).orElseThrow(),tid); return "Teamfarbe geaendert.";
         case "info":
           if(tid==null)return "Du bist in keinem Team."; String name=one(c,"SELECT name FROM teams WHERE id=?",tid); String count=one(c,"SELECT COUNT(*) FROM members WHERE team_id=?",tid); return "Team: "+name+" | Rolle: "+role+" | Mitglieder: "+count;
         default: {String suggestion=UserMenu.nearest(op,List.of("create","invite","join","leave","kick","info","promote","demote")); return "[Craft] Unbekannter Team-Befehl."+(suggestion==null?"":" Meintest du /team "+suggestion+"?");}
       }
     }); p.sendMessage(result);
+    if(Set.of("create","leave","kick","color").contains(op)) refreshRanks();
   }
 }

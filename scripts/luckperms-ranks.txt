@@ -1,0 +1,60 @@
+# LuckPerms ranks setup (idempotent). Run line by line via console or RCON
+# (each line is a console command without leading slash). Safe to re-run:
+# create* only errors harmlessly if the group/track exists, "parent set",
+# "setweight", "meta set" and "permission set" overwrite, prefixes are cleared first.
+# BEFORE: lp export ranks-backup-<date>
+lp creategroup default
+lp creategroup vip
+lp creategroup mvp
+lp creategroup builder
+lp creategroup admin
+lp group default setweight 0
+lp group vip setweight 40
+lp group mvp setweight 60
+lp group builder setweight 80
+lp group admin setweight 100
+lp group default setdisplayname Spieler
+lp group vip setdisplayname VIP
+lp group mvp setdisplayname MVP
+lp group builder setdisplayname Builder
+lp group admin setdisplayname Admin
+lp group vip parent set default
+lp group mvp parent set default
+lp group builder parent set default
+lp group admin parent set builder
+lp group default meta clear prefix
+lp group vip meta clear prefix
+lp group mvp meta clear prefix
+lp group builder meta clear prefix
+lp group admin meta clear prefix
+lp group default meta setprefix 0 "&7Spieler "
+lp group vip meta setprefix 40 "&6VIP "
+lp group mvp meta setprefix 60 "&dMVP "
+lp group builder meta setprefix 80 "&aBuilder "
+lp group admin meta setprefix 100 "&cAdmin "
+lp group vip meta set vipworld-slots 1
+lp group mvp meta set vipworld-slots 3
+lp group vip meta set queue-priority 1
+lp group mvp meta set queue-priority 2
+lp group vip permission set craftcore.vipworld.create true
+lp group vip permission set craftcore.vipworld.start true
+lp group vip permission set craftcore.vipworld.stop true
+lp group vip permission set craftcore.vipworld.addon true
+lp group mvp permission set craftcore.vipworld.create true
+lp group mvp permission set craftcore.vipworld.start true
+lp group mvp permission set craftcore.vipworld.stop true
+lp group mvp permission set craftcore.vipworld.addon true
+lp group builder permission set craftcore.build.pvp true
+lp group builder permission set craftcore.build.party true
+lp group admin permission set luckperms.* true
+lp group admin permission set craftcore.admin.* true
+lp group admin permission set craftcore.rank.set true
+lp createtrack ranks
+lp track ranks clear
+lp track ranks append default
+lp track ranks append vip
+lp track ranks append mvp
+lp track ranks append builder
+lp track ranks append admin
+# Nils: admin rank; OP stays as emergency access (do NOT deop).
+lp user NwebNotFound parent set admin
