@@ -2,12 +2,22 @@
 
 ## Für Spieler
 
+- Es gibt jetzt Ränge: Spieler, VIP, MVP, Builder und Admin. In der Lobby siehst du den Rang farbig im Chat, in der Tabliste und über dem Kopf.
+- In Survival zeigt dein Name die Farbe deines Teams. Team-Owner stellen sie mit `/team color <farbe>` ein (z. B. blau, gelb, lila).
+- Die AFK-Markierung steht jetzt hinter deinem Namen und überschreibt den Rang nicht mehr.
 - Du verkaufst jetzt Stack für Stack statt alles auf einmal.
 - Wenn du während eines Verkaufs offline gehst, bekommst du deine Items beim nächsten Einloggen zurück.
 - Im Verkaufsmenü siehst du vorher, wie viel du für deine Items bekommst.
 - Verkaufen ist vorerst ausgeschaltet. Wir sagen Bescheid, sobald es wieder geht.
 
 ## Admin
+
+### PR #34
+
+- LuckPerms-Gruppen admin/builder/mvp/vip/default mit Weights, Prefixen, Track `ranks`; Perks nur per Meta (`vipworld-slots`, `queue-priority`), Setup in `scripts/luckperms-ranks.txt`.
+- CraftCore: Rang-Anzeige über die LuckPerms-API, Spalte `teams.color`, `/team color`, `/rank set` (admin nur über die Konsole).
+- VipWorldsAFK: AFK nur noch als Suffix.
+- View `v_player_rank` (DEFINER craft_admin) mit SELECT für `creepy_ro`.
 
 ### PR #30
 
