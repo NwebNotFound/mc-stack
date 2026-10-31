@@ -9,6 +9,13 @@ public final class PvpStore {
     private final ConnectionSource source;
     public PvpStore(ConnectionSource source) { this.source = Objects.requireNonNull(source); }
 
+    public void createAssignment(String matchId, UUID a, UUID b, String kitA, String kitB) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("INSERT INTO pvp_assignments (match_id,player_a,player_b,kit_a,kit_b,status,created_at,updated_at) VALUES (?,?,?,?,?,'pending',?,?)")) {
+            long now=System.currentTimeMillis();
+            s.setString(1,matchId); s.setString(2,a.toString()); s.setString(3,b.toString());
+            s.setString(4,kitA); s.setString(5,kitB); s.setLong(6,now); s.setLong(7,now); s.executeUpdate();
+        }
+    }
     public Optional<Assignment> pendingFor(UUID player) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("SELECT match_id,player_a,player_b,kit_a,kit_b,status FROM pvp_assignments WHERE (player_a=? OR player_b=?) AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1")) {
             s.setString(1,player.toString()); s.setString(2,player.toString());

@@ -8,6 +8,9 @@ commands:
   pvp:
     description: PvP-Warteschlange und Build-Verwaltung
     usage: /pvp queue|leave|build|arena|kit
+  pvpdebug:
+    description: PvP-Zuweisungen testen (Konsole)
+    usage: /pvpdebug join <uuid> | cancel <matchId>
   rank:
     description: Rang setzen
     usage: /rank set <spieler> <rang>

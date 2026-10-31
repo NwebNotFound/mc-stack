@@ -28,7 +28,9 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
         build=Bukkit.createWorld(new WorldCreator("pvp_build").generator(new ChunkGenerator() {}));
         if(build==null) throw new IllegalStateException("pvp_build konnte nicht geladen werden");
         PluginCommand cmd=Objects.requireNonNull(plugin.getCommand("pvp")); cmd.setExecutor(this); cmd.setTabCompleter(this);
-        matches=new PvpMatches(plugin,new PvpStore(connectionSource),arenas,kitsFile); matches.start();
+        PvpStore store=new PvpStore(connectionSource);
+        Objects.requireNonNull(plugin.getCommand("pvpdebug")).setExecutor(new PvpDebug(plugin,store));
+        matches=new PvpMatches(plugin,store,arenas,kitsFile); matches.start();
     }
     private static PvpLogic.Point point(Location l) { return new PvpLogic.Point(l.getBlockX(),l.getBlockY(),l.getBlockZ()); }
     private boolean inBuild(Player p) { if(!p.getWorld().equals(build)) {p.sendMessage("Nur in pvp_build verfuegbar.");return false;} return true; }

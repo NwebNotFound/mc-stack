@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS craftcore.pvp_assignments (
   KEY (status), KEY (player_a), KEY (player_b)
 );
 
+-- favorite_kit = das vom Spieler selbst am haeufigsten GEWAEHLTE Kit (kit_a/kit_b der Zuweisung, nicht das Runden-Kit); Gleichstand: zuletzt gewaehltes.
 -- Ergebnis des Bo3-Matches: 'win' oder 'draw' (winner/loser NULL). Draw zaehlt weder als Sieg noch als Niederlage.
 ALTER TABLE craftcore.pvp_matches ADD COLUMN IF NOT EXISTS result VARCHAR(8) NOT NULL DEFAULT 'win' AFTER loser_uuid;
 UPDATE craftcore.pvp_matches SET result='draw' WHERE winner_uuid IS NULL AND result<>'draw';
@@ -34,10 +35,10 @@ LEFT JOIN craftcore.known_players l ON l.uuid = m.loser_uuid;
 
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_pvp_stats AS
 WITH part AS (
-  SELECT a.player_a AS uuid, m.match_id, m.kit, m.ended_at, m.winner_uuid, m.loser_uuid, m.result
+  SELECT a.player_a AS uuid, m.match_id, a.kit_a AS own_kit, m.ended_at, m.winner_uuid, m.loser_uuid, m.result
     FROM craftcore.pvp_matches m JOIN craftcore.pvp_assignments a ON a.match_id = m.match_id
   UNION ALL
-  SELECT a.player_b, m.match_id, m.kit, m.ended_at, m.winner_uuid, m.loser_uuid, m.result
+  SELECT a.player_b, m.match_id, a.kit_b, m.ended_at, m.winner_uuid, m.loser_uuid, m.result
     FROM craftcore.pvp_matches m JOIN craftcore.pvp_assignments a ON a.match_id = m.match_id
 ),
 agg AS (
@@ -45,12 +46,12 @@ agg AS (
   FROM part GROUP BY uuid
 ),
 kits AS (
-  SELECT uuid, kit, ROW_NUMBER() OVER (PARTITION BY uuid ORDER BY COUNT(*) DESC, MAX(ended_at) DESC) AS rn
-  FROM part GROUP BY uuid, kit
+  SELECT uuid, own_kit, ROW_NUMBER() OVER (PARTITION BY uuid ORDER BY COUNT(*) DESC, MAX(ended_at) DESC, own_kit) AS rn
+  FROM part GROUP BY uuid, own_kit
 )
 SELECT g.uuid, k.name, g.wins, g.losses, g.draws, g.matches,
        CASE WHEN g.matches < 5 OR g.wins + g.losses = 0 THEN NULL ELSE ROUND(100 * g.wins / (g.wins + g.losses), 1) END AS winrate_pct,
-       f.kit AS favorite_kit
+       f.own_kit AS favorite_kit
 FROM agg g
 LEFT JOIN craftcore.known_players k ON k.uuid = g.uuid
 LEFT JOIN kits f ON f.uuid = g.uuid AND f.rn = 1;
