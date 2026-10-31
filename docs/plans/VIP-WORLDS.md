@@ -137,8 +137,9 @@ vip_world_settings(world_id, key, value)
 6. Lobby: `/vw` + GUI, Queue mit Priorität.
 7. Addons: Allowlist + Mount.
 8. Backups, Soft-Delete, Restore, Admin-Befehle.
-9. Test mit Konsolen-Debug, danach echter Test durch Nils (wie PvP).
-10. STATUS.md.
+9. Panel-API (Abschnitt 13) über Tunnel + Access, danach Clouds Panel.
+10. Test mit Konsolen-Debug, danach echter Test durch Nils (wie PvP).
+11. STATUS.md.
 
 ## 11. Risiken
 
@@ -153,18 +154,91 @@ vip_world_settings(world_id, key, value)
 
 ## 12. Offene Fragen an Nils
 
-1. Sollen die Docker-VM/WSL mehr RAM bekommen (`.wslconfig`, z. B. `memory=24GB`)? Aktuell sieht Docker nur 15,57 GiB.
-2. Bleibt es bei max. 3 gleichzeitig laufenden Welten à ~1,5 GB, oder anderes Limit?
-3. Wie lange bis Auto-Stop ohne Spieler (Vorschlag 10 min)?
-4. Welche Addons kommen auf die erste Allowlist (Plugins und Datapacks)?
-5. Welttypen beim Erstellen: normal, flach, void, eigener Seed – alle erlaubt?
-6. Dürfen Owner andere einladen bzw. Welten öffentlich machen? Wie viele Mitglieder max.?
-7. Welche Rechte hat der Owner in seiner Welt (Creative, Gamemode-Wechsel, WorldEdit)?
-8. Größenlimit pro Welt (Vorschlag 2 GB) und Welt-Border (Vorschlag 5000)?
-9. Backup-Rhythmus und Aufbewahrung (Vorschlag: nach Stop, 7 Tage + 4 Wochen)?
-10. Löschen: Soft-Delete 30 Tage ok? Wer darf endgültig löschen?
-11. Was passiert bei Rangverlust (VIP läuft aus): Welten nur gesperrt oder irgendwann gelöscht?
-12. Queue: maximale Laufzeit pro Welt, wenn andere warten? Vorrang nur MVP > VIP oder auch Builder/Admin?
-13. Werden VIP/MVP verkauft? Dann EULA-Regeln prüfen.
-14. Sollen Spieler Welten herunterladen können (Export)?
-15. Soll pvp vorher mehr RAM bekommen (aktuell am `mem_limit`)?
+Zu jeder Frage steht der Vorschlag. Nils muss nur antworten, wo er anders entscheiden will.
+**Echte Entscheidungen (bitte beantworten): Nr. 1 und Nr. 11.**
+
+1. **[Entscheidung]** Mehr RAM für Docker per `.wslconfig`? Aktuell sieht Docker nur 15,57 GiB. → Vorschlag: `memory=24GB`.
+2. Maximal gleichzeitig laufende Welten und RAM pro Welt? → Vorschlag: 3 Welten à 1,5 GB (`mem_limit`), konfigurierbar.
+3. Zeit bis Auto-Stop ohne Spieler? → Vorschlag: 10 Minuten.
+4. Erste Addon-Allowlist? → Vorschlag: WorldEdit, WorldGuard, Chunky (nur Admin) und ein paar Vanilla-Tweaks-Datapacks. Alles kostenlos, mit Hash.
+5. Welche Welttypen? → Vorschlag: normal, flach, void, eigener Seed. Alle erlaubt.
+6. Einladen und öffentlich machen? → Vorschlag: ja, max. 10 Mitglieder pro Welt, Standard privat.
+7. Rechte des Owners in seiner Welt? → Vorschlag: Gamemode-Wechsel inkl. Creative, Gamerules aus der Allowlist, WorldEdit nur als Addon. Kein OP.
+8. Größenlimit und Welt-Border? → Vorschlag: 2 GB und Border 5000 Blöcke.
+9. Backups? → Vorschlag: nach jedem Stop, Aufbewahrung 7 Tage + 4 Wochen.
+10. Löschen? → Vorschlag: Soft-Delete 30 Tage, endgültig löschen nur Admin per `/vwadmin purge`.
+11. **[Entscheidung]** Was passiert, wenn VIP/MVP ausläuft? → Vorschlag: Welten bleiben erhalten, aber gesperrt (nicht startbar). Nach 180 Tagen ohne Rang Hinweis an den Admin, gelöscht wird nie automatisch.
+12. Fairness in der Queue? → Vorschlag: Wartet jemand, darf eine Welt höchstens 3 Stunden am Stück laufen (mit 10 Minuten Warnung). Builder und Admins haben die gleiche Priorität wie MVP.
+13. Werden VIP/MVP verkauft? → Vorschlag: vorerst nicht. Falls doch: nur kosmetische Vorteile und eigene Welten, EULA vorher prüfen.
+14. Welt-Download für Spieler? → Vorschlag: vorerst nein, erst später als Admin-Export.
+15. Mehr RAM für pvp? → Vorschlag: ja, `mem_limit` auf 1.25g bei gleichem Heap (eigene PR).
+
+## 13. API für Clouds Website-Panel
+
+Das Panel (Cloudflare Worker) nutzt dieselben Funktionen wie `/vw`. Die Regeln (Slots, Rechte, RAM, Queue) prüft immer der Host-Service selbst, nie der Worker.
+
+### Auth und Netzwerk
+
+- Der Worker erreicht den Host-Service **nur über den bestehenden Cloudflare Tunnel** (`cloudflared`) mit einem eigenen Hostnamen, z. B. `vip-api.<domain>`, geschützt durch **Cloudflare Access mit Service-Token** (`CF-Access-Client-Id` / `CF-Access-Client-Secret`).
+- Der Host-Service bindet weiterhin **nur auf 127.0.0.1**. Es gibt keine Port-Freigabe und keinen Zugang aus dem Internet ohne Access. Zusätzlich prüft er ein eigenes Token `X-VIP-Api-Token` (`VIP_API_TOKEN` aus `.env`, getrennt vom Lobby-Token).
+- **Identität:** Der Worker schickt die Discord-ID des eingeloggten Nutzers (`X-Discord-Id`, aus dem Discord-OAuth des Panels). Der Host-Service löst sie über die bestehende Discord↔UUID-Verknüpfung in der DB auf. Ohne Verknüpfung gibt es 403 `not_linked`.
+- Rang, Slots und Rechte liest der Host-Service bei jeder Anfrage selbst (LuckPerms-Meta + `vip_worlds`). Werte vom Worker werden ignoriert.
+- Rate-Limit pro Discord-ID (z. B. 30 Anfragen/min, Start/Stop 5/min). Alle Schreibaktionen landen mit Discord-ID und UUID im Log.
+
+### Endpunkte (Präfix `/api/v1/vip`)
+
+| Methode | Pfad | Zweck |
+|---|---|---|
+| GET | `/me` | eigene Welten, Slots, Rang |
+| POST | `/worlds` | Welt erstellen |
+| PATCH | `/worlds/{id}` | umbenennen (`{"name": ...}`) |
+| POST | `/worlds/{id}/start` | starten (oder in die Queue) |
+| POST | `/worlds/{id}/stop` | stoppen (nur Owner) |
+| GET | `/worlds/{id}/status` | Status und Queue-Position |
+
+Löschen und Addons kommen bewusst erst in einer späteren Version (Löschen braucht die Bestätigung im Spiel bzw. einen eigenen Bestätigungs-Flow).
+
+### Status-Werte
+
+`stopped`, `queued` (mit `queue.position`), `starting`, `running`, `stopping`, `error` (mit `error.code`, z. B. `start_failed`, `ram_budget`, `addon_invalid`).
+
+### Beispiele
+
+`GET /api/v1/vip/me`
+```json
+{
+  "uuid": "1b2c3d4e-0000-4000-8000-000000000001",
+  "rank": "mvp",
+  "slots": { "total": 3, "used": 2 },
+  "worlds": [
+    { "id": "7f1e…", "name": "Insel", "status": "running", "slot": "vipworld-2", "players": 2 },
+    { "id": "a93c…", "name": "Flachland", "status": "stopped" }
+  ]
+}
+```
+
+`POST /api/v1/vip/worlds`
+```json
+{ "name": "Bergdorf", "type": "normal", "seed": null }
+```
+→ `201`
+```json
+{ "id": "c4d2…", "name": "Bergdorf", "status": "stopped" }
+```
+Fehler, z. B. `409`:
+```json
+{ "error": { "code": "no_free_slot", "message": "Alle 3 Slots belegt." } }
+```
+
+`POST /api/v1/vip/worlds/c4d2…/start` → `202`
+```json
+{ "id": "c4d2…", "status": "queued", "queue": { "position": 2, "ahead": 1, "priority": 20 } }
+```
+
+`GET /api/v1/vip/worlds/c4d2…/status`
+```json
+{ "id": "c4d2…", "status": "running", "slot": "vipworld-1", "players": 0,
+  "started_at": "2026-11-01T18:02:11Z", "auto_stop_in_s": 540 }
+```
+
+Fehlercodes: `401` (Access/Token fehlt), `403` (`not_linked`, `not_owner`, `no_rank`), `404`, `409` (`no_free_slot`, `name_taken`, `already_running`), `429`, `503` (`ram_budget`, Host-Service nicht bereit).
