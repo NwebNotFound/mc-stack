@@ -94,3 +94,10 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Bestehende Banktransaktion und Spielerinventar werden getrennt gespeichert; sichere Wiederherstellung und Dupe-Freiheit sind damit nicht nachgewiesen. Beim abgelehnten Umsatzlimit kann zudem ein Artikelkontingent verbraucht werden.
 - Tests/Build: nicht ausgefuehrt; GUI-Logik, Rueckgabe und Tageslimit bleiben offen.
 - Befehle: nur lesende Quellcode-/Git-Pruefung und `git switch -c craft/sell-gui`; kein Restart, Merge oder Staging nach `data/`.
+
+## Command-UX 31.10.2026 ? Teilstand
+- Branch `craft/command-ux`, Code-Commit `d5188fc`; kein Merge, Restart oder Staging.
+- Commands & Menues: `/markt|/shop` (Uebersicht, `meine`, `entfernen <uuid>`), `/geld|/bal`, `/sidebar|/sb an|aus`, `/parkour`, Admin `/cc portal|launch`, `/ccportal`, `/cclaunch`; Vanilla `/scoreboard` bleibt frei. Sidebar-Einstellung in MariaDB pro Spieler.
+- Tests: CraftCore gesamt 200, davon 2 bekannte Kaufauftrag-Fehler und 12 uebersprungen; gezielt Descriptor/Sidebar/Portals 6 erfolgreich. ParkourBridge `test` erfolgreich. Kein Ingame-Test; vollstaendige Argument-Completion und Parkour-Kursnamen mit Leerzeichen nicht nachgewiesen, `/cc`-Abstimmung mit separatem Parkour-Branch offen.
+- CraftCore: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack\data\survival\plugins\Vault-1.7.3.jar:/workspace/config/lobby-plugins/Vault-1.7.3.jar:ro" -w /workspace/plugins-src/craftcore gradle:9-jdk gradle test --no-daemon` (gezielt zusaetzlich `--tests de.mcstack.craftcore.CommandDescriptorTest --tests de.mcstack.craftcore.SidebarPreferenceTest --tests de.mcstack.craftcore.PortalsTest`).
+- Parkour: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack\data\lobby:/workspace/data/lobby:ro" -w /workspace/plugins-src/parkour-bridge gradle:9-jdk gradle test --no-daemon`.
