@@ -93,7 +93,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       SaleNotices.start(this);
       WebsiteStats.start(this);
       tx(c->{PlayerBalance.migrate(c); InventorySync.migrate(c); return null;});
-      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","deaths_by")) {
+      for (String view:List.of("v_player_balance","v_player_inventory","v_order_fulfillment","player_deaths","deaths_by")) {
         try { try (Connection grant=connection()) { if(!ReadGrants.apply(grant, view)) getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich"); } }
         catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       }

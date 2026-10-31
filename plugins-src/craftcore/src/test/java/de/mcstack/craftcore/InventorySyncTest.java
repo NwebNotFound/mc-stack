@@ -49,13 +49,15 @@ class InventorySyncTest {
     }
   }
   @Test void failingViewGrantDoesNotBreakStartup() throws Exception {
-    for (String view : List.of("v_player_inventory", "v_player_balance", "v_order_fulfillment")) {
+    for (String view : List.of("v_player_inventory", "v_player_balance", "v_order_fulfillment", "player_deaths", "deaths_by")) {
       assertEquals("GRANT SELECT ON craftcore."+view+" TO 'creepy_ro'@'%'", ReadGrants.sql(view));
     }
     try (Connection c = DriverManager.getConnection("jdbc:h2:mem:viewgrant_"+UUID.randomUUID()+";MODE=MySQL")) {
       assertFalse(ReadGrants.apply(c, "v_player_inventory"));
       assertFalse(ReadGrants.apply(c, "v_player_balance"));
       assertFalse(ReadGrants.apply(c, "v_order_fulfillment"));
+      assertFalse(ReadGrants.apply(c, "player_deaths"));
+      assertFalse(ReadGrants.apply(c, "deaths_by"));
       try (ResultSet r = c.createStatement().executeQuery("SELECT 1")) { assertTrue(r.next()); assertEquals(1, r.getInt(1)); }
     }
   }

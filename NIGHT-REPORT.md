@@ -157,3 +157,10 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Admin: `/cc parkour rename <id> <Name...>` und `/cc parkour icon <id> [material]` mit Completion; Hologramme und Ingest verwenden Kursnamen.
 - Isolierter Docker-Gradle-Test: 11 SQL-/H2-Tests erfolgreich. Voller Build FEHLER vor Tests: Serverbibliotheken fehlen; Commands und Ingest nicht getestet, MariaDB nicht verifiziert.
 - Buildversuch: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack-pr21\data\lobby:/workspace/data/lobby:ro" -w /workspace/plugins-src/parkour-bridge gradle:9-jdk gradle clean build --no-daemon`. Kein Restart, Merge oder Staging nach `data`.
+
+## Night-Fixes Abschluss 31.10.2026
+- Lobby: Compose `DIFFICULTY=easy`; keine weitere Peaceful-Erzwingung in versionierten Configs/CraftCore gefunden. Bestehende Gamerule `minecraft:spawn_mobs false` bleibt unangetastet.
+- Befehle/Menues: `/verkaufen` (`/sell`), `/bank` (`/money`), `/market` und Verkaufsbutton; `/shop` (`/markt`) mit help, Spieler, show/meine/cancel, sell, remove, entfernen, undo sowie Shop-, Kaufauftrag- und Bearbeitungsmenues; `/ah` mit sell, my, search, zurueckziehen/cancel; `/cc deaths backfill`; `/menu`, `/help`, `/sidebar` (`/sb`).
+- DB: `player_deaths(event_id,uuid,ts,cause_type,killer,entity_type,block,server)`, `deaths_by(uuid,key,value)`, `player_death_backfill(uuid,server,stat_key,stat_value)`, `player_death_backfill_done(uuid,server)`; SELECT-Grants fuer `player_deaths` und `deaths_by` fehlertolerant. Statistik-/Inventar-Snapshots alle 60 s.
+- Feature-Branches command-ux, listings-withdrawal, sell-gui bereits enthalten; Drag-and-drop, Sell-all und Kaufauftraege vorhanden; Tests zu Verkaufspreis/Limit/Rueckgabe, DIRT/Sperren, Kaufauftrag und Death-Summe. Docker Gradle clean build: 210 Tests, 0 Fehler, 12 uebersprungen (darunter MariaDB-Tests).
+- Offen: Live-Gamerule, Spawn-Ei, `/summon`, Grants/MariaDB und GUI-Drag-and-drop nicht live geprueft; unbekannte Items und GUI-Transaktionssicherheit nicht vollstaendig end-to-end getestet. Kein Restart, Merge oder JAR-Staging.
