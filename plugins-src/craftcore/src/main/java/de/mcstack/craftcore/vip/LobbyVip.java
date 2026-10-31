@@ -45,9 +45,9 @@ public final class LobbyVip implements CommandExecutor {
             var decision=VipReconcile.decide(world.status(),world.slot(),world.id(),host.slots());
             switch (decision.kind()) {
                 case HOST_UNAVAILABLE -> { message(owner,"VIP-Host nicht erreichbar, bitte spaeter erneut versuchen"); return; }
-                case STOPPED -> { store.idleStopped(world.id()); world=new VipStore.World(world.id(),world.name(),"stopped",null); }
-                case RUNNING -> { if (!"running".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"running",decision.slot()); world=new VipStore.World(world.id(),world.name(),"running",decision.slot()); }
-                case STARTING -> { if (!"starting".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"starting",decision.slot()); world=new VipStore.World(world.id(),world.name(),"starting",decision.slot()); }
+                case STOPPED -> { store.idleStopped(world.id()); world=new VipStore.World(world.id(),world.name(),"stopped",null,world.type()); }
+                case RUNNING -> { if (!"running".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"running",decision.slot()); world=new VipStore.World(world.id(),world.name(),"running",decision.slot(),world.type()); }
+                case STARTING -> { if (!"starting".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"starting",decision.slot()); world=new VipStore.World(world.id(),world.name(),"starting",decision.slot(),world.type()); }
                 case UNCHANGED -> { }
             }
         }
