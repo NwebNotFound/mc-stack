@@ -84,6 +84,10 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug FROM parkour_courses ORDER BY slug")) { List<String> ids=new ArrayList<>(); while(r.next()) ids.add(r.getString(1)); return ids; } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return List.of(); }
  }
+ Map<String,String> courseNames() {
+  try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug, course_name FROM v_parkour_courses")) { Map<String,String> names=new LinkedHashMap<>(); while(r.next()) names.put(r.getString(1),r.getString(2)); return names; } }
+  catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return Map.of(); }
+ }
  boolean updateCourse(String slug,String field,String value) throws SQLException {
   if(!List.of("display_name","icon").contains(field)) throw new IllegalArgumentException(field);
   try(Connection c=db(); PreparedStatement s=c.prepareStatement("UPDATE parkour_courses SET "+field+"=? WHERE slug=?")) { s.setString(1,value); s.setString(2,slug); boolean found=s.executeUpdate()>0; if(found) refresh(); return found; }
