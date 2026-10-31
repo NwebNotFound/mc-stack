@@ -10,6 +10,7 @@ import org.bukkit.event.inventory.*;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.Damageable;
 
 final class Market implements Listener {
   static Market instance;
@@ -140,18 +141,24 @@ final class Market implements Listener {
       else switch(slot) { case 45 -> open(p,menu.category,menu.query,menu.page-1); case 53 -> open(p,menu.category,menu.query,menu.page+1); case 46 -> open(p,"bloecke",menu.query,0); case 47 -> open(p,"materialien",menu.query,0); case 48 -> open(p,"ausruestung",menu.query,0); case 49 -> open(p,"nahrung",menu.query,0); case 50 -> open(p,"technik",menu.query,0); case 51 -> open(p,"alle",menu.query,0); case 52 -> p.sendMessage("Suche mit /market <Suchbegriff>; /market zeigt wieder alle Artikel."); default -> {} }
     } catch(Exception ex) { core.getLogger().warning("Bank: "+ex); p.sendMessage("Bankaktion fehlgeschlagen. Bitte spaeter erneut versuchen."); }
   }
+  static long durabilityPrice(long cents, int damage, int maxDurability) {
+    if(maxDurability<=0) return cents;
+    int remaining=Math.max(0,Math.min(maxDurability,maxDurability-Math.max(0,damage)));
+    return cents / maxDurability * remaining + cents % maxDurability * remaining / maxDurability;
+  }
   private void sell(Player p, Material m) throws Exception {
     if(!tradable(m) || core.tx(c->sellBlocked(c,core.getConfig(),m))!=null) {p.sendMessage("Dieser Artikel ist nicht an die Bank verkaufbar.");return;}
     PlayerInventory inv=p.getInventory(); int slot=-1;
-    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && !stack.hasItemMeta()) { slot=i; break; } }
+    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && (!stack.hasItemMeta() || (m.getMaxDurability()>0 && stack.getItemMeta() instanceof Damageable))) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
     ItemStack before=inv.getItem(slot).clone(); ItemStack after=before.clone(); after.setAmount(before.getAmount()-1); inv.setItem(slot,after.getAmount()==0?null:after);
+    int damage=before.getItemMeta() instanceof Damageable d ? d.getDamage() : 0;
     String id=UUID.randomUUID().toString(); UUID player=p.getUniqueId();
     try {
       boolean accepted=core.tx(c->{String day=dayKey();
         String owner=DiscordRevenue.lock(c,player.toString(),day);
         if(sellBlocked(c,core.getConfig(),m)!=null) return false;
-        long cp=price(c,m,false,false).cents(); if(cp<1 || !BuybackCaps.reserve(c,core.getConfig(),owner,m,day) || !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit()))return false;
+        long cp=durabilityPrice(price(c,m,false,false).cents(),damage,m.getMaxDurability()); if(cp<1 || !BuybackCaps.reserve(c,core.getConfig(),owner,m,day) || !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit()))return false;
         core.exec(c,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",id,player.toString(),m.name(),1,cp,"PENDING"); BankJournal.finishSale(c,id,material->price(c,m,true,false)); WebsiteStats.event(c,m.name(),1,cp,"bank"); return true;});
       if(!accepted){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht oder Verkaufspreis unter 0,01 CP.");return;}
     } catch(Exception ex) { inv.setItem(slot,before); throw ex; }
