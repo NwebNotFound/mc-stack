@@ -37,7 +37,7 @@ In der Lobby per `/vw` (Befehl) und GUI-Menü (NPC „VIP-Welten“):
 - **Ein Container pro laufender Welt** (`vipworld-1..N`, Slots im Pool, nicht pro Welt). Image wie pvp (itzg Paper 26.3), `MEMORY` ~1.25G Heap bei `mem_limit` 1.5g (konfigurierbar).
 - Beim Start mountet der Host-Service das Welt-Verzeichnis `data/vipworlds/<id>/` und die Addons der Welt in einen freien Slot.
 - In Velocity sind die Slot-Server fest eingetragen (`vipworld-1..3`), damit keine Velocity-Neustarts nötig sind. CraftCore-Lobby weiß, welche Welt in welchem Slot läuft.
-- **Maximal 3 VIP-Welten gleichzeitig** (`vipworlds.max-running`, konfigurierbar), zusätzlich begrenzt durch das RAM-Budget (5.).
+- **Standard maximal 2 VIP-Welten gleichzeitig** (`vipworlds.max-running`, konfigurierbar bis 3), zusätzlich hart begrenzt durch das RAM-Budget (5.).
 
 ### Start / Stop (wie PvP)
 
@@ -80,9 +80,12 @@ Gemessen am 31.10.2026, 19:53 CET mit `docker stats` (ohne Spieler):
 
 - PC: 32 GB, davon ~4 GB für Windows/Docker reserviert → ~28 GB nutzbar.
 - **Wichtig:** Die Docker-VM (WSL2) sieht aktuell nur **15,57 GiB** (keine `.wslconfig`, WSL-Standard = 50 %). Ohne Anpassung bleiben ~7 GiB für VIP-Welten + PvP.
-- Mit 3 × 1,5 GB = 4,5 GB passt es knapp in die aktuelle VM; für mehr Puffer `.wslconfig` mit `memory=24GB` (offene Frage).
+- **Entscheidung Nils (31.10.):** Nicht die vollen 32 GB nutzen. `.wslconfig` mit `memory=20GB`, ~12 GB bleiben bei Windows. Survival und das normale System dürfen keinen RAM verlieren.
+- **Survival-Budget ist fest und hat Vorrang** (4G Heap + Overhead, reserviert ~5 GB). Lobby, Velocity, DB, Bot und pvp sind ebenfalls fest reserviert.
+- VIP-Welten bekommen nur den Rest: 20 GB − ~4 GB Docker/VM-Overhead − feste Dienste (~9,5 GB inkl. pvp 1,25g) ≈ 6 GB → **Standard 2 laufende Welten à 1,5 GB**, konfigurierbar bis 3.
+- Der Host-Service **verweigert jeden Start**, wenn die Summe der `mem_limit` (inkl. Survival-Reserve) das Budget überschreiten würde. Dann geht die Welt in die Queue; Survival wird nie verdrängt.
 - Konfigurierbar in `config/vipworlds.yml` (nicht `.env`, keine Geheimnisse):
-  - `ram.total-mb`, `ram.reserved-mb`, `ram.per-world-mb` (Default 1536), `max-running` (Default 3).
+  - `ram.total-mb`, `ram.reserved-mb`, `ram.per-world-mb` (Default 1536), `ram.survival-reserved-mb` (fest, Vorrang), `max-running` (Default 2, max. 3).
   - Host-Service rechnet vor jedem Start: Summe `mem_limit` laufender Container + neue Welt ≤ `total - reserved`. Sonst Queue.
 
 ## 6. Addons
@@ -155,10 +158,10 @@ vip_world_settings(world_id, key, value)
 ## 12. Offene Fragen an Nils
 
 Zu jeder Frage steht der Vorschlag. Nils muss nur antworten, wo er anders entscheiden will.
-**Echte Entscheidungen (bitte beantworten): Nr. 1 und Nr. 11.**
+**Echte Entscheidung (bitte beantworten): Nr. 11.** Nr. 1 ist entschieden.
 
-1. **[Entscheidung]** Mehr RAM für Docker per `.wslconfig`? Aktuell sieht Docker nur 15,57 GiB. → Vorschlag: `memory=24GB`.
-2. Maximal gleichzeitig laufende Welten und RAM pro Welt? → Vorschlag: 3 Welten à 1,5 GB (`mem_limit`), konfigurierbar.
+1. ~~[Entscheidung]~~ **Entschieden (Nils, 31.10.):** `.wslconfig` `memory=20GB`, ~12 GB bleiben bei Windows; Survival hat festes Budget mit Vorrang.
+2. Maximal gleichzeitig laufende Welten und RAM pro Welt? → Festgelegt: Standard 2 Welten à 1,5 GB, konfigurierbar bis 3; Start nur, wenn das Budget reicht.
 3. Zeit bis Auto-Stop ohne Spieler? → Vorschlag: 10 Minuten.
 4. Erste Addon-Allowlist? → Vorschlag: WorldEdit, WorldGuard, Chunky (nur Admin) und ein paar Vanilla-Tweaks-Datapacks. Alles kostenlos, mit Hash.
 5. Welche Welttypen? → Vorschlag: normal, flach, void, eigener Seed. Alle erlaubt.
