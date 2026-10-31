@@ -33,6 +33,21 @@ class ParkourSqlTest {
   cache.get("b",load); assertEquals(2,calls[0]); cache.clear(); cache.get("a",load); assertEquals(3,calls[0]);
   assertNull(cache.get("missing",()->{ calls[0]++; return null; })); assertNull(cache.get("missing",load)); assertEquals(4,calls[0]);
  }
+ @Test void courseFloorMatchesCaseButNotSeparators() {
+  assertEquals(-60.0,ParkourSql.courseFloor(Map.of("Cave Rush",-60),"cave rush"));
+  assertNull(ParkourSql.courseFloor(Map.of("cave_rush",-60),"Cave Rush"));
+  assertNull(ParkourSql.courseFloor(Map.of("Cave Rush",-60),"Cave_Rush"));
+ }
+ @Test void reloadClearUsesNewCourseFloorOverride() throws Exception {
+  ParkourSql.FloorCache cache=new ParkourSql.FloorCache(); Map<String,Integer> overrides=new HashMap<>();
+  overrides.put("Cave Rush",-60);
+  ParkourSql.FloorLoader load=()->ParkourSql.courseFloor(overrides,"Cave Rush");
+  assertEquals(-60.0,cache.get("Cave Rush",load));
+  overrides.put("Cave Rush",-70);
+  assertEquals(-60.0,cache.get("Cave Rush",load));
+  cache.clear();
+  assertEquals(-70.0,cache.get("Cave Rush",load));
+ }
  @Test void migrationRekeysOldTableOnlyOnce() {
   assertEquals(List.of(ParkourSql.REKEY), ParkourSql.migration(List.of("uuid")));
   assertEquals(List.of(ParkourSql.REKEY), ParkourSql.migration(List.of()));

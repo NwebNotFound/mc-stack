@@ -2,7 +2,7 @@
 # (Start, Checkpoints, Ziel) ist. Kurze Spruenge nach unten sind damit erlaubt.
 fall-distance-below-floor: 4.0
 # Optionale absolute Y-Grenzen pro Kurs (Kursnamen ohne Beachtung der Gross-/Kleinschreibung).
-# Beispiel: course-floors: {cave_rush: -60}
+# Beispiel: course-floors: {"Cave Rush": -60}
 # Ohne Eintrag gilt die berechnete Grenze; nach Aenderungen Konfiguration neu laden.
 course-floors: {}
 # Mit /parkour setboard setzen. Koordinaten werden in dieser Datei gespeichert.
