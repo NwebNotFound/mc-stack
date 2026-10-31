@@ -7,6 +7,7 @@ dependencies {
  implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.6'
  testImplementation fileTree(dir: '../../data/lobby/libraries', include: '**/*.jar')
  testImplementation files('../../data/lobby/plugins/Lobby Parkour-26.3-v1.4.1.jar')
+ testImplementation 'com.h2database:h2:2.3.232'
  testImplementation 'org.mockito:mockito-core:5.19.0'
  testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

@@ -63,6 +63,24 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE); s.execute(ParkourSql.ADD_COURSE_NAME);
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
+  for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
+  try { s.execute("GRANT SELECT ON v_parkour_courses TO creepy_ro"); } catch(SQLException ex) { getLogger().log(Level.WARNING,"SELECT-Grant fuer creepy_ro konnte nicht gesetzt werden",ex); }
+  try { syncCourses(c); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht synchronisiert werden",ex); }
+ }
+ private void syncCourses(Connection c) throws SQLException {
+  try(Statement source=ParkoursDatabase.getConnection().createStatement(); ResultSet rows=source.executeQuery("SELECT pk_name FROM parkours"); PreparedStatement insert=c.prepareStatement("INSERT INTO parkour_courses (slug) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM parkour_courses WHERE slug=?)")) {
+   while(rows.next()) { String slug=ParkourSql.course(rows.getString(1)); if(slug!=null) { insert.setString(1,slug); insert.setString(2,slug); insert.executeUpdate(); } }
+  }
+  try(Statement s=c.createStatement()) { s.executeUpdate(ParkourSql.CAVE_NAME); }
+ }
+ List<String> courseIds() {
+  try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug FROM parkour_courses ORDER BY slug")) { List<String> ids=new ArrayList<>(); while(r.next()) ids.add(r.getString(1)); return ids; } }
+  catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return List.of(); }
+ }
+ boolean updateCourse(String slug,String field,String value) throws SQLException {
+  if(!List.of("display_name","icon").contains(field)) throw new IllegalArgumentException(field);
+  try(Connection c=db(); PreparedStatement s=c.prepareStatement("UPDATE parkour_courses SET "+field+"=? WHERE slug=?")) { s.setString(1,value); s.setString(2,slug); boolean found=s.executeUpdate()>0; if(found) refresh(); return found; }
+
  }
  @Override public void reloadConfig() { super.reloadConfig(); floors.clear(); }
  @Override public void onDisable() { floors.clear(); worker.shutdown(); try { if(!worker.awaitTermination(10,TimeUnit.SECONDS)) getLogger().warning("Ausstehende Parkour-Datenbankaufgaben nicht abgeschlossen"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); } }
@@ -129,14 +147,14 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseConsoleCommand(ServerCommandEvent e) { if(ParkourRules.isCourseCommand(e.getCommand())) floors.clear(); }
  @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); peaks.remove(e.getPlayer().getUniqueId()); }
  private void save(UUID id,String course,String name,long ms) { worker.execute(()->{
-  try(Connection c=db(); PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,ParkourSql.course(course)); s.setString(3,course); s.setString(4,name); s.setLong(5,ms); s.executeUpdate(); refresh(); }
+  try(Connection c=db()) { try(PreparedStatement add=c.prepareStatement("INSERT INTO parkour_courses (slug) VALUES (?) ON DUPLICATE KEY UPDATE slug=VALUES(slug)")) { add.setString(1,ParkourSql.course(course)); add.executeUpdate(); } try(PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,ParkourSql.course(course)); s.setString(3,course); s.setString(4,name); s.setLong(5,ms); s.executeUpdate(); refresh(); } }
   catch(SQLException ex) { getLogger().log(Level.SEVERE,"Parkour-Bestzeit konnte nicht gespeichert werden fuer "+id,ex); }
  }); }
  private void refresh() { if(worker.isShutdown()) return; worker.execute(()->{
-  Map<String,List<ParkourSql.Entry>> byCourse=new TreeMap<>();
-  try(Connection c=db(); Statement s=c.createStatement(); ResultSet r=s.executeQuery(ParkourSql.TOP)) { Map<String,Set<String>> seen=new HashMap<>(); while(r.next()) { String course=ParkourSql.course(r.getString(1)); if(course==null) continue; List<ParkourSql.Entry> entries=byCourse.computeIfAbsent(course,k->new ArrayList<>()); if(entries.size()<10 && seen.computeIfAbsent(course,k->new HashSet<>()).add(r.getString(2))) entries.add(new ParkourSql.Entry(r.getString(3),r.getLong(4))); } }
+  Map<String,List<ParkourSql.Entry>> byCourse=new TreeMap<>(); Map<String,String> names=new HashMap<>();
+  try(Connection c=db(); Statement s=c.createStatement()) { try(ResultSet n=s.executeQuery("SELECT slug,course_name FROM v_parkour_courses")) { while(n.next()) names.put(n.getString(1),n.getString(2)); } try(ResultSet r=s.executeQuery(ParkourSql.TOP)) { Map<String,Set<String>> seen=new HashMap<>(); while(r.next()) { String course=ParkourSql.course(r.getString(1)); if(course==null) continue; List<ParkourSql.Entry> entries=byCourse.computeIfAbsent(course,k->new ArrayList<>()); if(entries.size()<10 && seen.computeIfAbsent(course,k->new HashSet<>()).add(r.getString(2))) entries.add(new ParkourSql.Entry(r.getString(3),r.getLong(4))); } } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Bestenliste konnte nicht gelesen werden",ex); return; }
-  if(isEnabled()) getServer().getScheduler().runTask(this,()->renderAll(byCourse));
+  if(isEnabled()) getServer().getScheduler().runTask(this,()->renderAll(byCourse,names));
  }); }
  /** "board" = Sammeltafel aller Kurse (bisherige Tafel), "boards.<kurs>" = Top 10 eines Kurses. */
  private void removeRetiredBoards() {
@@ -150,10 +168,11 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   }
   saveConfig();
  }
- private void renderAll(Map<String,List<ParkourSql.Entry>> byCourse) {
-  render("board",ParkourSql.allBoards(byCourse));
+ private void renderAll(Map<String,List<ParkourSql.Entry>> byCourse,Map<String,String> names) {
+  StringJoiner boards=new StringJoiner("\n\n"); byCourse.forEach((slug,entries)->boards.add(ParkourSql.board(ParkourSql.displayName(slug,names.get(slug)),entries)));
+  render("board",byCourse.isEmpty()?ParkourSql.allBoards(Map.of()):boards.toString());
   var sec=getConfig().getConfigurationSection("boards");
-  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(name,byCourse.getOrDefault(course,List.of()))); }
+  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(ParkourSql.displayName(course,names.get(course)),byCourse.getOrDefault(course,List.of()))); }
  }
  private void render(String key,String text) {
   Location loc=getConfig().getLocation(key+".location"); if(loc==null || loc.getWorld()==null) return;

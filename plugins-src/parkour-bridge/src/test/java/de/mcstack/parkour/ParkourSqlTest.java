@@ -8,6 +8,24 @@ class ParkourSqlTest {
   assertEquals("cave_rush",ParkourSql.course("Cave Rush")); assertEquals("cave_rush",ParkourSql.course("cave  rush"));
   assertEquals("cave_rush",ParkourSql.course("-Cave-Rush-")); assertEquals("kurs1",ParkourSql.course("kurs1")); assertNull(ParkourSql.course("---"));
  }
+ @Test void iconAndDisplayFallback() {
+  assertEquals("diamond_sword",ParkourSql.icon("minecraft:DIAMOND_SWORD")); assertEquals("paper",ParkourSql.icon("PAPER"));
+  assertNull(ParkourSql.icon("other:paper")); assertNull(ParkourSql.icon("a-b")); assertNull(ParkourSql.icon("x".repeat(49))); assertNull(ParkourSql.icon(""));
+  assertEquals("cave_rush",ParkourSql.displayName("cave_rush"," ")); assertEquals("Cave Rush",ParkourSql.displayName("cave_rush","Cave Rush"));
+ }
+ @Test void courseMigrationIsIdempotentAndViewHasExactColumns() throws Exception {
+  try(var c=java.sql.DriverManager.getConnection("jdbc:h2:mem:courses;MODE=MariaDB;DB_CLOSE_DELAY=-1"); var s=c.createStatement()) {
+   s.execute("CREATE TABLE parkour_times (course VARCHAR(64))"); s.execute("INSERT INTO parkour_times VALUES ('cave_rush'),('other')");
+   for(int i=0;i<2;i++) {
+    for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
+    if(i==0) s.execute("UPDATE parkour_courses SET display_name='Custom', icon='stone' WHERE slug='other'");
+   }
+   try(var r=s.executeQuery("SELECT * FROM v_parkour_courses ORDER BY slug")) {
+    assertEquals(3,r.getMetaData().getColumnCount()); assertEquals("SLUG",r.getMetaData().getColumnLabel(1)); assertEquals("COURSE_NAME",r.getMetaData().getColumnLabel(2)); assertEquals("COURSE_ICON",r.getMetaData().getColumnLabel(3));
+    assertTrue(r.next()); assertEquals("Cave Rush",r.getString(2)); assertEquals("paper",r.getString(3)); assertTrue(r.next()); assertEquals("Custom",r.getString(2)); assertEquals("stone",r.getString(3)); assertFalse(r.next());
+   }
+  }
+ }
  @Test void floorCacheLoadsOncePerCourseAndReloadsAfterClear() throws Exception {
   ParkourSql.FloorCache cache=new ParkourSql.FloorCache(); int[] calls={0};
   ParkourSql.FloorLoader load=()->{ calls[0]++; return -52.0; };

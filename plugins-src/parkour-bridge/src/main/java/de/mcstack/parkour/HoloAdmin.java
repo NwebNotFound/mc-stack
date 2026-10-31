@@ -41,6 +41,7 @@ final class HoloAdmin implements CommandExecutor, TabCompleter {
  @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] a) {
   if(!sender.hasPermission("craftcore.holo.admin")) return true;
   if(!(sender instanceof Player p)) { sender.sendMessage("Bitte im Spiel verwenden."); return true; }
+  if(a.length>=1 && a[0].equalsIgnoreCase("parkour")) return parkour(p,a);
   if(a.length<2 || !a[0].equalsIgnoreCase("holo")) { p.sendMessage("/cc holo list | remove [id] | move <id>"); return true; }
   if(a[1].equalsIgnoreCase("list") && a.length==2) {
    List<Board> all=boards(); if(all.isEmpty()) p.sendMessage("Keine ParkourBridge-Tafeln vorhanden.");
@@ -70,9 +71,27 @@ final class HoloAdmin implements CommandExecutor, TabCompleter {
   }
   p.sendMessage("/cc holo list | remove [id] | move <id>"); return true;
  }
+ private boolean parkour(Player p,String[] a) {
+  if(a.length<3 || !(a[1].equalsIgnoreCase("rename") || a[1].equalsIgnoreCase("icon"))) { p.sendMessage("/cc parkour rename <id> <Name...> | icon <id> [material]"); return true; }
+  String slug=a[2].toLowerCase(Locale.ROOT);
+  if(!plugin.courseIds().contains(slug)) { p.sendMessage("Kurs nicht gefunden: "+slug); return true; }
+  boolean rename=a[1].equalsIgnoreCase("rename"); String value;
+  if(rename) { value=String.join(" ",Arrays.copyOfRange(a,3,a.length)).trim(); if(value.isEmpty() || value.length()>64) { p.sendMessage("Name muss 1 bis 64 Zeichen lang sein."); return true; } }
+  else {
+   if(a.length>4) { p.sendMessage("Zu viele Argumente."); return true; }
+   Material material;
+   if(a.length==3) material=p.getInventory().getItemInMainHand().getType();
+   else { String icon=ParkourSql.icon(a[3]); material=icon==null?null:Material.matchMaterial(icon); }
+   if(material==null || material.isAir() || !material.isItem()) { p.sendMessage("Ungueltiges Material oder kein Item in der Hand."); return true; }
+   value=ParkourSql.icon(material.getKey().getKey()); if(value==null) { p.sendMessage("Ungueltiges Material."); return true; }
+  }
+  try { if(plugin.updateCourse(slug,rename?"display_name":"icon",value)) p.sendMessage("Kurs "+slug+" aktualisiert: "+value); else p.sendMessage("Kurs nicht gefunden: "+slug); }
+  catch(java.sql.SQLException ex) { plugin.getLogger().log(java.util.logging.Level.WARNING,"Kurs konnte nicht gespeichert werden",ex); p.sendMessage("Kurs konnte nicht gespeichert werden."); }
+  return true;
+ }
  @Override public List<String> onTabComplete(CommandSender sender,Command cmd,String alias,String[] a) {
   if(!sender.hasPermission("craftcore.holo.admin")) return List.of();
-  List<String> choices=a.length==1?List.of("holo"):a.length==2 && a[0].equalsIgnoreCase("holo")?List.of("list","remove","move"):a.length==3 && a[0].equalsIgnoreCase("holo") && (a[1].equalsIgnoreCase("remove")||a[1].equalsIgnoreCase("move"))?boards().stream().map(Board::id).toList():List.of();
+  List<String> choices=a.length==1?List.of("holo","parkour"):a[0].equalsIgnoreCase("parkour") && a.length==2?List.of("rename","icon"):a[0].equalsIgnoreCase("parkour") && a.length==3 && (a[1].equalsIgnoreCase("rename") || a[1].equalsIgnoreCase("icon"))?plugin.courseIds():a[0].equalsIgnoreCase("parkour") && a.length==4 && a[1].equalsIgnoreCase("icon")?Arrays.stream(Material.values()).filter(m->!m.isLegacy() && m.isItem() && !m.isAir()).map(m->m.getKey().getKey()).filter(x->ParkourSql.icon(x)!=null).sorted().toList():a.length==2 && a[0].equalsIgnoreCase("holo")?List.of("list","remove","move"):a.length==3 && a[0].equalsIgnoreCase("holo") && (a[1].equalsIgnoreCase("remove")||a[1].equalsIgnoreCase("move"))?boards().stream().map(Board::id).toList():List.of();
   return choices.stream().filter(x->x.toLowerCase(Locale.ROOT).startsWith(a[a.length-1].toLowerCase(Locale.ROOT))).toList();
  }
 }
