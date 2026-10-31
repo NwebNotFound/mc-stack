@@ -762,7 +762,60 @@ async def maybe_push_history(session, token, now=None):
     if _hist_push["last"] is not None and now - _hist_push["last"] < HISTORY_EVERY:
         return None
     _hist_push["last"] = now
-    return await push_history(session, token)
+    ok = await push_history(session, token)
+    try:
+        await push_economy(session, token)
+    except Exception as e:  # fail-soft: Economy darf History nie stoeren
+        log.warning("economy_daily Push fehlgeschlagen (%s)", type(e).__name__)
+    return ok
+
+
+ECONOMY_DAYS = 90
+ECONOMY_COLS = ("money_supply_cp", "minted_cp", "burned_cp", "net_cp")
+_econ = {"warned": False}
+
+
+def _cp(v):
+    if v is None:
+        return None
+    try:
+        return int(round(float(v)))
+    except (TypeError, ValueError):
+        return None
+
+
+def build_economy(cols, rows, days=ECONOMY_DAYS):
+    """v_economy_daily -> [{day: 'YYYY-MM-DD', money_supply_cp: int, ...}], letzte `days` Tage, aufsteigend."""
+    idx = {c: i for i, c in enumerate(cols)}
+    if "day" not in idx:
+        return []
+    out = []
+    for r in rows:
+        d = r[idx["day"]]
+        if d is None:
+            continue
+        day = d.isoformat()[:10] if hasattr(d, "isoformat") else str(d)[:10]
+        e = {"day": day}
+        for c in ECONOMY_COLS:
+            if c in idx:
+                e[c] = _cp(r[idx[c]])
+        out.append(e)
+    out.sort(key=lambda e: e["day"])
+    return out[-days:]
+
+
+async def push_economy(session, token):
+    """economy_daily im History-Takt; View-Fehler -> einmal loggen, Key weglassen."""
+    res = await asyncio.to_thread(fetch_rows, "v_economy_daily")
+    if not res:
+        if not _econ["warned"]:
+            log.warning("v_economy_daily nicht lesbar, economy_daily wird weggelassen")
+            _econ["warned"] = True
+        return None
+    _econ["warned"] = False
+    data = build_economy(*res)
+    st, _ = await _post(session, token, {"economy_daily": data}, "Economy-Daily")
+    return st < 300
 
 
 async def push_history(session, token, now=None):

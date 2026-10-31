@@ -195,3 +195,35 @@ class RealtimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EconomyDailyTest(unittest.TestCase):
+    def test_build_economy(self):
+        import datetime, decimal
+        cols = ["day", "money_supply_cp", "minted_cp", "burned_cp", "net_cp"]
+        rows = [(datetime.date(2026, 10, 31), decimal.Decimal("1234.6000"), None, None, None),
+                (datetime.date(2026, 10, 30), decimal.Decimal("1000"), decimal.Decimal("5"), None, None)]
+        out = ingest.build_economy(cols, rows)
+        self.assertEqual(out[0], {"day": "2026-10-30", "money_supply_cp": 1000, "minted_cp": 5,
+                                  "burned_cp": None, "net_cp": None})
+        self.assertEqual(out[1]["money_supply_cp"], 1235)
+        many = [(datetime.date(2026, 1, 1) + datetime.timedelta(days=i), 1) for i in range(120)]
+        self.assertEqual(len(ingest.build_economy(["day", "money_supply_cp"], many)), 90)
+
+    def test_economy_fail_soft(self):
+        posted = []
+
+        async def fake_post(session, token, payload, label):
+            posted.append(payload)
+            return 200, "{}"
+
+        async def run():
+            ingest._econ["warned"] = False
+            with mock.patch.object(ingest, "fetch_rows", lambda n: None), \
+                 mock.patch.object(ingest, "_post", fake_post), \
+                 self.assertLogs("creepy.ingest", "WARNING") as cm:
+                await ingest.push_economy(None, "t")
+                await ingest.push_economy(None, "t")
+            self.assertEqual(len(cm.output), 1)
+        asyncio.run(run())
+        self.assertEqual(posted, [])
