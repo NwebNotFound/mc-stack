@@ -185,10 +185,11 @@ class LbPager(discord.ui.View):
         self.title, self.rows, self.me, self.page = title, rows, me, 0
         self.raw = raw or []
         self.pages = max(1, (len(rows) + self.PER - 1) // self.PER)
-        if courses and len(courses) > 1:
-            sel = (selected or "").strip().lower()
+        if courses:
+            import parkour
+            sel = parkour.slug(selected) if selected and selected != "*" else ""
             opts = [discord.SelectOption(label="Alle Kurse (beste Zeit je Spieler)", value="*", default=not sel)]
-            opts += [discord.SelectOption(label=c[:100], value=c[:100], default=c == sel) for c in courses[:24]]
+            opts += [discord.SelectOption(label=n[:100], value=c[:100], default=c == sel) for c, n in courses[:24]]
             menu = discord.ui.Select(placeholder="Kurs w\u00e4hlen", options=opts, row=1)
             menu.callback = self._pick
             self.course_menu = menu
@@ -200,7 +201,8 @@ class LbPager(discord.ui.View):
         v = self.course_menu.values[0]
         course = None if v == "*" else v
         self.rows = parkour.rank(self.raw, course)
-        self.title = f"Parkour \u2013 {course}" if course else "Parkour"
+        name = parkour.display(self.raw, course)
+        self.title = f"Parkour \u2013 {name}" if name else "Parkour"
         self.me, self.page = None, 0
         self.pages = max(1, (len(self.rows) + self.PER - 1) // self.PER)
         for o in self.course_menu.options:
