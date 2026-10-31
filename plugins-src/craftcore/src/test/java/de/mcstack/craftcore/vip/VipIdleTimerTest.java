@@ -17,8 +17,16 @@ class VipIdleTimerTest {
         assertFalse(timer.tick(false)); clock.now=119_999; assertFalse(timer.tick(false));
         clock.now=120_000; assertTrue(timer.tick(false));
     }
-    @Test void negativeGraceStopsImmediately() {
-        assertTrue(new VipIdleTimer(new FakeClock(),600_000,-1).tick(false));
+    @Test void negativeGraceIsClampedToThirtySeconds() {
+        assertMinimumGrace(-1_000);
+    }
+    @Test void tenSecondGraceIsClampedToThirtySeconds() {
+        assertMinimumGrace(10_000);
+    }
+    private void assertMinimumGrace(long graceMillis) {
+        FakeClock clock=new FakeClock(); VipIdleTimer timer=new VipIdleTimer(clock,600_000,graceMillis);
+        clock.now=29_000; assertFalse(timer.tick(false));
+        clock.now=30_000; assertTrue(timer.tick(false));
     }
     @Test void joinCancelsAndLastQuitRestartsInterval() {
         FakeClock clock=new FakeClock(); VipIdleTimer timer=new VipIdleTimer(clock,600_000,120_000);

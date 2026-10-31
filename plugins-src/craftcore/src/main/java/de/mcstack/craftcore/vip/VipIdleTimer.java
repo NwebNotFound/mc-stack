@@ -10,7 +10,7 @@ public final class VipIdleTimer {
     private boolean visited;
     public VipIdleTimer(Clock clock, long delayMillis, long graceMillis) {
         this.clock=Objects.requireNonNull(clock); this.delayMillis=delayMillis;
-        this.graceMillis=Math.max(0,graceMillis); this.startedAt=clock.millis();
+        this.graceMillis=Math.max(30_000,graceMillis); this.startedAt=clock.millis();
     }
     public boolean tick(boolean occupied) {
         if (occupied) { visited=true; idleSince=null; return false; }
