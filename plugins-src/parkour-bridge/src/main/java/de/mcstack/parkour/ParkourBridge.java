@@ -35,7 +35,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); removeRetiredBoards(); refresh();
  }
  private void migrate(Connection c,Statement s) throws SQLException {
-  s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE);
+  s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE); s.execute(ParkourSql.ADD_COURSE_NAME);
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
  }
@@ -92,7 +92,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  } @EventHandler(priority=EventPriority.LOWEST,ignoreCancelled=false) public void before(PlayerInteractEvent e) {
   if(e.getAction()!=Action.PHYSICAL || e.getClickedBlock()==null) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null || s.getCompletedCheckpoints()!=s.getMaxCheckpoints()) return;
-  try { Location end=query().getEndLocation(s.getParkourName()); if(end!=null && end.getBlock().equals(e.getClickedBlock())) { String course=ParkourSql.course(s.getParkourName()); if(course!=null) candidates.put(p.getUniqueId(),new Candidate(s,course,s.getElapsedTimeMillis())); } }
+  try { Location end=query().getEndLocation(s.getParkourName()); if(end!=null && end.getBlock().equals(e.getClickedBlock())) { String course=s.getParkourName(); if(ParkourSql.course(course)!=null) candidates.put(p.getUniqueId(),new Candidate(s,course,s.getElapsedTimeMillis())); } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Ziel konnte nicht gelesen werden",ex); }
  }
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=false) public void after(PlayerInteractEvent e) {
@@ -104,12 +104,12 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true) public void courseConsoleCommand(ServerCommandEvent e) { if(ParkourRules.isCourseCommand(e.getCommand())) floors.clear(); }
  @EventHandler public void quit(PlayerQuitEvent e) { candidates.remove(e.getPlayer().getUniqueId()); peaks.remove(e.getPlayer().getUniqueId()); }
  private void save(UUID id,String course,String name,long ms) { worker.execute(()->{
-  try(Connection c=db(); PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,course); s.setString(3,name); s.setLong(4,ms); s.executeUpdate(); refresh(); }
+  try(Connection c=db(); PreparedStatement s=c.prepareStatement(ParkourSql.UPSERT)) { s.setString(1,id.toString()); s.setString(2,ParkourSql.course(course)); s.setString(3,course); s.setString(4,name); s.setLong(5,ms); s.executeUpdate(); refresh(); }
   catch(SQLException ex) { getLogger().log(Level.SEVERE,"Parkour-Bestzeit konnte nicht gespeichert werden fuer "+id,ex); }
  }); }
  private void refresh() { if(worker.isShutdown()) return; worker.execute(()->{
   Map<String,List<ParkourSql.Entry>> byCourse=new TreeMap<>();
-  try(Connection c=db(); Statement s=c.createStatement(); ResultSet r=s.executeQuery(ParkourSql.TOP)) { while(r.next()) byCourse.computeIfAbsent(r.getString(1),k->new ArrayList<>()).add(new ParkourSql.Entry(r.getString(2),r.getLong(3))); }
+  try(Connection c=db(); Statement s=c.createStatement(); ResultSet r=s.executeQuery(ParkourSql.TOP)) { Map<String,Set<String>> seen=new HashMap<>(); while(r.next()) { String course=ParkourSql.course(r.getString(1)); if(course==null) continue; List<ParkourSql.Entry> entries=byCourse.computeIfAbsent(course,k->new ArrayList<>()); if(entries.size()<10 && seen.computeIfAbsent(course,k->new HashSet<>()).add(r.getString(2))) entries.add(new ParkourSql.Entry(r.getString(3),r.getLong(4))); } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Bestenliste konnte nicht gelesen werden",ex); return; }
   if(isEnabled()) getServer().getScheduler().runTask(this,()->renderAll(byCourse));
  }); }

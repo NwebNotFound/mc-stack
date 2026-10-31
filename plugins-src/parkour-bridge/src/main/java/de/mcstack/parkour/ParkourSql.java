@@ -18,10 +18,11 @@ final class ParkourSql {
  /** Kurs fuer Altzeilen ohne Kurs (Tabelle war bisher pro Spieler). */
  static final String LEGACY_COURSE = "lobby";
  static final String ADD_COURSE = "ALTER TABLE parkour_times ADD COLUMN IF NOT EXISTS course VARCHAR(64) NOT NULL DEFAULT '" + LEGACY_COURSE + "' AFTER uuid";
+ static final String ADD_COURSE_NAME = "ALTER TABLE parkour_times ADD COLUMN IF NOT EXISTS course_name VARCHAR(64) NULL AFTER course";
  static final String PK_COLUMNS = "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='parkour_times' AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION";
  static final String REKEY = "ALTER TABLE parkour_times DROP PRIMARY KEY, ADD PRIMARY KEY (uuid, course)";
- static final String UPSERT = "INSERT INTO parkour_times (uuid,course,name,best_ms,updated_at) VALUES (?,?,?,?,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE name=IF(VALUES(best_ms)<best_ms,VALUES(name),name), updated_at=IF(VALUES(best_ms)<best_ms,VALUES(updated_at),updated_at), best_ms=LEAST(best_ms,VALUES(best_ms))";
- static final String TOP = "SELECT course,name,best_ms FROM (SELECT course,name,best_ms,ROW_NUMBER() OVER (PARTITION BY course ORDER BY best_ms ASC, updated_at ASC, uuid ASC) rn FROM parkour_times WHERE best_ms>0) t WHERE rn<=10 ORDER BY course, rn";
+ static final String UPSERT = "INSERT INTO parkour_times (uuid,course,course_name,name,best_ms,updated_at) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE course_name=VALUES(course_name), name=IF(VALUES(best_ms)<best_ms,VALUES(name),name), updated_at=IF(VALUES(best_ms)<best_ms,VALUES(updated_at),updated_at), best_ms=LEAST(best_ms,VALUES(best_ms))";
+ static final String TOP = "SELECT course,uuid,name,best_ms FROM parkour_times WHERE best_ms>0 ORDER BY best_ms ASC, updated_at ASC, uuid ASC";
 
  /** Migrationsschritte nach ADD_COURSE: Rekey nur, wenn der PK noch nicht (uuid, course) ist. Loescht nie Daten. */
  static List<String> migration(List<String> pkColumns) {
@@ -41,7 +42,7 @@ final class ParkourSql {
   if(value.length()>=2 && value.startsWith("\"") && value.endsWith("\"")) value=value.substring(1,value.length()-1).trim();
   return value.isEmpty() || value.length()>64 || value.indexOf('.')>=0 || value.indexOf('\"')>=0 ? null : value;
  }
- static String boardKey(String name) { return course(name); }
+ static String boardKey(String name) { return name.trim().toLowerCase(Locale.ROOT); }
  /** Y aus Lobby-Parkour-Ort "world,x,y,z,yaw,pitch"; null wenn unlesbar. */
  static Double locY(String loc) {
   if (loc == null) return null; String[] p = loc.split(",");

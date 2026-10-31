@@ -25,8 +25,8 @@ class ParkourSqlTest {
   assertTrue(ParkourSql.CREATE.contains("PRIMARY KEY (uuid, course)"));
   assertTrue(ParkourSql.ADD_COURSE.contains("IF NOT EXISTS") && ParkourSql.ADD_COURSE.contains("NOT NULL DEFAULT 'lobby'"));
  }
- @Test void upsertKeepsBestPerPlayerAndCourse() { assertTrue(ParkourSql.UPSERT.contains("(uuid,course,name,best_ms,updated_at)")); assertTrue(ParkourSql.UPSERT.contains("LEAST(best_ms,VALUES(best_ms))")); }
- @Test void topIsTenPerCourse() { assertTrue(ParkourSql.TOP.contains("PARTITION BY course")); assertTrue(ParkourSql.TOP.contains("rn<=10")); }
+ @Test void upsertKeepsBestPerPlayerAndCourse() { assertTrue(ParkourSql.UPSERT.contains("(uuid,course,course_name,name,best_ms,updated_at)")); assertTrue(ParkourSql.UPSERT.contains("LEAST(best_ms,VALUES(best_ms))")); }
+ @Test void oldRowsRemainReadableAndSorted() { assertTrue(ParkourSql.ADD_COURSE_NAME.contains("IF NOT EXISTS")); assertTrue(ParkourSql.TOP.contains("ORDER BY best_ms ASC")); }
  @Test void boardsPerCourse() {
   List<ParkourSql.Entry> e = new ArrayList<>(); for (int i = 1; i <= 12; i++) e.add(new ParkourSql.Entry("p" + i, i * 1000L));
   String b = ParkourSql.board("test", e);
