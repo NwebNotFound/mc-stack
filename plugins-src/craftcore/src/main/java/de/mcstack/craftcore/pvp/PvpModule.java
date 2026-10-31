@@ -52,7 +52,7 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] a) {
         if(!(sender instanceof Player p)) { sender.sendMessage("Nur fuer Spieler.");return true; }
         if(a.length==1 && a[0].equalsIgnoreCase("leave")) { p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation()); p.setGameMode(GameMode.ADVENTURE); return true; }
-        if(!p.hasPermission("craftcore.build.pvp")) {p.sendMessage("Keine Berechtigung.");return true;}
+        if(!PvpAccess.mayBypass(p::hasPermission)) {p.sendMessage("Keine Berechtigung.");return true;}
         try {
             if(a.length==1 && a[0].equalsIgnoreCase("build")) { p.teleport(build.getSpawnLocation());p.setGameMode(GameMode.CREATIVE);return true; }
             if(a.length>=2 && a[0].equalsIgnoreCase("arena")) {
@@ -85,7 +85,7 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     private List<String> names() {Set<String> n=new TreeSet<>(drafts.keySet());String[] files=arenas.list((dir,name)->name.endsWith(".yml"));if(files!=null) for(String f:files)n.add(f.substring(0,f.length()-4));return new ArrayList<>(n);}
     private List<String> kitNames() {var s=kits.getConfigurationSection("kits");return s==null?List.of():new ArrayList<>(s.getKeys(false));}
     @Override public List<String> onTabComplete(CommandSender sender,Command cmd,String alias,String[] a) {
-        List<String> opts=List.of(); boolean allowed=sender.hasPermission("craftcore.build.pvp");
+        List<String> opts=List.of(); boolean allowed=PvpAccess.mayBypass(sender::hasPermission);
         if(a.length==1) opts=allowed?List.of("build","leave","arena","kit"):List.of("leave");
         else if(allowed && a.length==2 && a[0].equalsIgnoreCase("arena")) opts=List.of("create","pos1","pos2","region","setspawn","save","list","remove");
         else if(allowed && a.length==2 && a[0].equalsIgnoreCase("kit")) opts=List.of("create","icon","list","remove");
