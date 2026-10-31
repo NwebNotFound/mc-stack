@@ -74,7 +74,7 @@ final class LaunchPads implements Listener, TabExecutor {
       for (var p:pads) sender.sendMessage(p.id()+": "+p.world()+" "+p.x()+","+p.y()+","+p.z()+" -> "+p.targetX()+","+p.targetY()+","+p.targetZ());
       return true;
     }
-    if (args.length<2) return false;
+    if (args.length<2) { sender.sendMessage(net.kyori.adventure.text.Component.text("LaunchPads: ").append(net.kyori.adventure.text.Component.text("[Liste]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc launch list"))).append(net.kyori.adventure.text.Component.text(" | Setzen: /cc launch set <id>"))); return true; }
     String action=args[0].toLowerCase(Locale.ROOT), id=args[1];
     if (!id.matches("[A-Za-z0-9_-]+")) { sender.sendMessage("Ungueltige ID (erlaubt: Buchstaben, Zahlen, _ und -)."); return true; }
     List<Map<String, Object>> entries=configuredPads();
@@ -83,8 +83,8 @@ final class LaunchPads implements Listener, TabExecutor {
       if (index<0) { sender.sendMessage("LaunchPad nicht gefunden: "+id); return true; }
       entries.remove(index); savePads(entries); sender.sendMessage("LaunchPad entfernt: "+id); return true;
     }
-    if (!action.equals("set") && !action.equals("target")) return false;
-    if ((action.equals("set") && args.length!=2 && args.length!=5) || (action.equals("target") && args.length!=2)) return false;
+    if (!action.equals("set") && !action.equals("target")) { sender.sendMessage("Unbekannte Aktion. Nutze /cc launch list oder /cc launch set <id>."); return true; }
+    if ((action.equals("set") && args.length!=2 && args.length!=5) || (action.equals("target") && args.length!=2)) { sender.sendMessage("Bitte nutze /cc launch "+action+" <id>"+(action.equals("set")?" [x y z]":"")); return true; }
     if (!(sender instanceof Player player)) { sender.sendMessage("Dieser Befehl ist nur fuer Spieler verfuegbar."); return true; }
     if (action.equals("target")) {
       if (index<0) { sender.sendMessage("LaunchPad nicht gefunden: "+id); return true; }
