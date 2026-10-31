@@ -202,7 +202,7 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    profiles: [cloudflare]
+    profiles: ["tunnel"]
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:

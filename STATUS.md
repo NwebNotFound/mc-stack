@@ -15,7 +15,7 @@ NwebNotFound steht auf beiden Whitelists und ist auf beiden Backends OP (Level 4
 ## Optionale Tunnel: Einträge in `.env`
 
 - `SECRET_KEY=`: playit-Agent-Secret aus dem playit-Dashboard eintragen. Danach `docker compose --profile playit up -d playit`. Im Dashboard getrennte Tunnel zu `velocity:25565/TCP` und `survival:24454/UDP` einrichten und Service-Namensauflösung des Agenten prüfen. Zugewiesenen öffentlichen UDP-Host und Port wie oben in `voice_host` eintragen. Die Compose-interne Verbindung zum Survival-Service benötigt keine Host-Portfreigabe.
-- `TUNNEL_TOKEN=`: Token eines eingerichteten Cloudflare-Tunnels eintragen, dann `docker compose --profile cloudflare up -d cloudflared`. Token allein richtet weder Minecraft-TCP noch Voice-UDP ein; geeignete Cloudflare-Produkte, Client-Zugang und Routing müssen gesondert geprüft werden.
+- `TUNNEL_TOKEN=`: Token eines eingerichteten Cloudflare-Tunnels eintragen, dann `docker compose --profile tunnel up -d cloudflared`. Token allein richtet weder Minecraft-TCP noch Voice-UDP ein; geeignete Cloudflare-Produkte, Client-Zugang und Routing müssen gesondert geprüft werden.
 
 Die Profile sind standardmäßig aus. Leere oder nur eingetragene Werte starten sie nicht automatisch: Das jeweilige Profil muss ausdrücklich aktiviert werden. Secrets nicht weitergeben. `RCON_PASSWORD` wird bei neuer Installation automatisch zufällig in `.env` erzeugt; `MINECRAFT_VERSION` kann optional auf eine getestete Version gesetzt werden. Das separate Forwarding-Secret liegt in `secrets/forwarding.secret` und wird ebenfalls automatisch erstellt. Bestehende Dateien werden nicht überschrieben.
 
