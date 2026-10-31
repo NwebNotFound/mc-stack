@@ -14,6 +14,9 @@ import org.bukkit.command.*;
 import org.bukkit.entity.*;
 import org.bukkit.event.*;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.Levelled;
+import org.bukkit.block.data.Waterlogged;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.*;
@@ -27,6 +30,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  private final Map<UUID, Candidate> candidates=new HashMap<>();
  private final ParkourSql.FloorCache floors=new ParkourSql.FloorCache();
  private String password;
+ private boolean configReady;
  private record Candidate(ParkourSession session, String course, long ms) {}
 
  private Connection db() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000","craftcore",password); }
@@ -36,6 +40,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=db(); Statement s=c.createStatement()) { migrate(c,s); } }
   catch(Exception e) { getLogger().log(Level.SEVERE,"Parkour-Datenbank nicht verfuegbar",e); getServer().getPluginManager().disablePlugin(this); return; }
   saveDefaultConfig();
+  getConfig(); configReady=true; warnInvalidWaterMode();
   var floorSection=getConfig().getConfigurationSection("course-floors");
   if(floorSection!=null && !floorSection.getKeys(false).isEmpty()) getLogger().info("course-floors aktiv: "+floorSection.getValues(false));
   getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh();
@@ -84,7 +89,11 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try(Connection c=db(); PreparedStatement s=c.prepareStatement("UPDATE parkour_courses SET "+field+"=? WHERE slug=?")) { s.setString(1,value); s.setString(2,slug); boolean found=s.executeUpdate()>0; if(found) refresh(); return found; }
 
  }
- @Override public void reloadConfig() { super.reloadConfig(); floors.clear(); }
+ private void warnInvalidWaterMode() {
+  String raw=getConfig().getString("water-reset");
+  if(raw!=null && !ParkourRules.validWaterMode(raw)) getLogger().warning("Unbekannter water-reset-Wert '"+raw+"', verwende feet");
+ }
+ @Override public void reloadConfig() { super.reloadConfig(); floors.clear(); if(configReady) warnInvalidWaterMode(); }
  @Override public void onDisable() { floors.clear(); worker.shutdown(); try { if(!worker.awaitTermination(10,TimeUnit.SECONDS)) getLogger().warning("Ausstehende Parkour-Datenbankaufgaben nicht abgeschlossen"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); } }
  private Query query() { return new Query(ParkoursDatabase.getConnection()); }
  private Location checkpoint(ParkourSession s) throws SQLException {
@@ -135,8 +144,12 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void move(PlayerMoveEvent e) {
   Location to=e.getTo(); if(to==null || e.getFrom().getY()==to.getY()) return;
   Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) { peaks.remove(p.getUniqueId()); return; }
-  // Wasser beruehrt -> zurueck zum Checkpoint
-  if(p.isInWater() || to.getBlock().getType()==Material.WATER) { reset(p,s,e); return; }
+  // Wasser am Fuss bzw. je nach Einstellung bei Beruehrung -> zurueck zum Checkpoint
+  Block feet=to.getBlock(); BlockData data=feet.getBlockData(); boolean water=feet.getType()==Material.WATER;
+  String waterMode=ParkourRules.waterMode(getConfig().getString("water-reset"));
+  boolean feetWater=water || (!"touch".equalsIgnoreCase(waterMode) && data instanceof Waterlogged logged && logged.isWaterlogged());
+  int waterLevel=water && data instanceof Levelled levelled ? levelled.getLevel() : 0;
+  if(ParkourRules.waterReset(waterMode,p.isInWater(),feetWater,waterLevel,to.getY()-feet.getY())) { reset(p,s,e); return; }
   // Optionales Ruecksetzen bei harten Landungen; weiche Bloecke und Schonzeit bleiben ausgenommen.
   boolean climbable=Tag.CLIMBABLE.isTagged(e.getFrom().getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.getBlock().getType())
    || Tag.CLIMBABLE.isTagged(e.getFrom().clone().add(0,1,0).getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.clone().add(0,1,0).getBlock().getType());

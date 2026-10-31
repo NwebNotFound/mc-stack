@@ -4,6 +4,29 @@ import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 class ParkourRulesTest {
+ @Test void waterModeNormalizesAndValidates() {
+  assertEquals("feet",ParkourRules.waterMode("FEET"));
+  assertEquals("off",ParkourRules.waterMode(" off "));
+  assertEquals("feet",ParkourRules.waterMode("bogus"));
+  assertEquals("feet",ParkourRules.waterMode(null));
+  assertFalse(ParkourRules.validWaterMode("bogus"));
+  assertTrue(ParkourRules.validWaterMode("touch"));
+  String fallback=ParkourRules.waterMode("bogus");
+  assertFalse(ParkourRules.waterReset(fallback,true,false,0,0.5));
+  assertTrue(ParkourRules.waterReset(fallback,false,true,0,0.5));
+ }
+ @Test void waterResetRespectsModeAndFluidSurface() {
+  assertFalse(ParkourRules.waterReset("feet",true,false,0,0.5));
+  assertTrue(ParkourRules.waterReset("feet",false,true,0,0.5));
+  assertFalse(ParkourRules.waterReset("feet",true,true,7,0.5));
+  assertTrue(ParkourRules.waterReset("feet",false,true,8,0.5));
+  assertFalse(ParkourRules.waterReset("off",true,true,0,0.5));
+  assertTrue(ParkourRules.waterReset("touch",true,false,0,0.5));
+  assertTrue(ParkourRules.waterReset("touch",false,true,7,0.5));
+  assertFalse(ParkourRules.waterReset("unknown",true,false,0,0.5));
+  assertFalse(ParkourRules.waterReset("feet",false,true,0,8.0/9.0));
+  assertEquals(1.0/9.0,ParkourRules.waterSurface(7),1e-9);
+ }
  @Test void footprintIncludesCenterAndCorners() {
   double[][] points=ParkourRules.footprint(10,20); assertEquals(5,points.length);
   assertArrayEquals(new double[]{10,20},points[0],1e-9);
