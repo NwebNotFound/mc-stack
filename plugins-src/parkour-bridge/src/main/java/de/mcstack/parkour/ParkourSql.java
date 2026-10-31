@@ -34,7 +34,7 @@ final class ParkourSql {
   if (parkourName == null || parkourName.isBlank()) return null;
   String c = parkourName.toLowerCase(Locale.ROOT).replaceAll("[\\s-]+", "_").replaceAll("^_+|_+$", "");
   if (c.isEmpty()) return null;
-  return c;
+  return c.length() > 64 ? c.substring(0, 64) : c;
  }
  /** Kursargument als Rest oder in Anfuehrungszeichen; Punkte sind in Bukkit-Konfigurationspfaden reserviert. */
  static String argument(String[] args) {
