@@ -1316,6 +1316,26 @@ def register(bot):
         show_view = pager.pages > 1 or bool(cs)
         await interaction.followup.send(note or None, file=await pager.file(), view=pager if show_view else discord.utils.MISSING)
 
+    @lb.command(name="pvp", description="PvP-Bestenliste: Siege, Niederlagen, Unentschieden und Winrate")
+    async def lb_pvp(interaction: discord.Interaction):
+        import pvp, ingest, gui
+        await interaction.response.defer()
+        res = await asyncio.to_thread(ingest.fetch_rows, "v_pvp_stats")
+        if not res:
+            return await interaction.followup.send("PvP-Stats sind gerade nicht erreichbar, versuch es gleich nochmal.")
+        rows = pvp.rank(pvp.build_stats(*res))
+        link = bot.db.execute("SELECT uuid FROM links WHERE discord_id=? AND state='active'", (interaction.user.id,)).fetchone()
+        me, note = None, ""
+        if link:
+            u = link[0].replace("-", "")
+            mine = next((x for x in rows if x[3].replace("-", "") == u), None)
+            if mine and mine[0] > 10:
+                me = mine[:3]
+            if not mine:
+                note = "-# Du hast noch kein Match \u2013 `/pvp queue` in der Lobby!"
+        pager = gui.LbPager("PvP \u2013 Siege", rows, me, fmt=str, empty="Noch keine Matches \u2013 ab in die PvP-Queue!")
+        await interaction.followup.send(note or None, file=await pager.file(), view=pager if pager.pages > 1 else discord.utils.MISSING)
+
     tree.add_command(lb)
     import shops
     shops.register(bot, tree)

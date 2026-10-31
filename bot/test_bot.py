@@ -161,7 +161,7 @@ class GuiV110Tests(unittest.IsolatedAsyncioTestCase):
 
     def test_changelog_latest(self):
         import json
-        self.assertEqual(json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))[-1]["version"], "1.14")
+        self.assertEqual(json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))[-1]["version"], "1.15")
 
 class InviteTests(unittest.TestCase):
     def test_limit_is_two(self):

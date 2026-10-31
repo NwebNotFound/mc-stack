@@ -275,8 +275,10 @@ def fmt_ms(ms):
     return f"{m:02d}:{rest // 1000:02d}.{rest % 1000:03d}"
 
 
-def render_leaderboard(title, rows, me=None):
-    """rows: [(rank, name, best_ms)], me: optional (rank, name, best_ms) ausserhalb der Top 10"""
+def render_leaderboard(title, rows, me=None, fmt=None, empty=None):
+    """rows: [(rank, name, best_ms)], me: optional (rank, name, best_ms) ausserhalb der Top 10.
+    fmt: Wert-Formatierer (Standard fmt_ms), empty: Text bei leerer Liste."""
+    fmt = fmt or fmt_ms
     W = 1000
     H = 150 + max(1, len(rows)) * 50 + (70 if me else 0) + 30
     img = Image.new("RGBA", (W, H), BG + (255,))
@@ -291,7 +293,7 @@ def render_leaderboard(title, rows, me=None):
     y = 120
     if not rows:
         d.rounded_rectangle([20, y, W - 20, y + 50], 12, fill=PANEL)
-        d.text((40, y + 14), "Noch keine Zeiten \u2013 lauf den Parkour als Erste:r!", font=_f(18, False), fill=SUB)
+        d.text((40, y + 14), empty or "Noch keine Zeiten \u2013 lauf den Parkour als Erste:r!", font=_f(18, False), fill=SUB)
     def row(y, rank, name, ms, hl=False):
         d.rounded_rectangle([20, y, W - 20, y + 44], 12, fill=(52, 55, 70) if hl else PANEL)
         c = medals.get(rank)
@@ -304,7 +306,7 @@ def render_leaderboard(title, rows, me=None):
         if h:
             img.alpha_composite(h.resize((32, 32), Image.NEAREST), (80, y + 6))
         d.text((126, y + 10), name, font=_f(20), fill=TXT)
-        d.text((W - 40, y + 10), fmt_ms(ms), font=_f(20), fill=c or TXT, anchor="ra")
+        d.text((W - 40, y + 10), fmt(ms), font=_f(20), fill=c or TXT, anchor="ra")
     for rank, name, ms in rows:
         row(y, rank, name, ms, me is not None and False)
         y += 50

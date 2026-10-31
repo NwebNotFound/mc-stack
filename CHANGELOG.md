@@ -2,6 +2,7 @@
 
 ## Für Spieler
 
+- Neu im Discord: `/leaderboard pvp` zeigt die PvP-Bestenliste mit Siegen, Niederlagen, Unentschieden, Winrate (ab 5 Matches) und Lieblings-Kit.
 - In der Lobby stehen jetzt NPCs. Schau sie aus der Nähe an, dann siehst du, was sie machen; per Klick bringen sie dich zum Beispiel auf einen anderen Server oder öffnen ein Menü.
 - Es gibt jetzt Ränge: Spieler, VIP, MVP, Builder und Admin. In der Lobby siehst du den Rang farbig im Chat, in der Tabliste und über dem Kopf.
 - In Survival zeigt dein Name die Farbe deines Teams. Team-Owner stellen sie mit `/team color <farbe>` ein (z. B. blau, gelb, lila).
@@ -12,6 +13,11 @@
 - Verkaufen ist vorerst ausgeschaltet. Wir sagen Bescheid, sobald es wieder geht.
 
 ## Admin
+
+### PR #46
+
+- Creepy: `/leaderboard pvp` liest `v_pvp_stats` über `creepy_ro` (Sortierung: Siege, dann Winrate), neues Modul `bot/pvp.py`.
+- Ingest: Feld `pvp_stats` im 5-Minuten-Push (`uuid`, `name`, `wins`, `losses`, `draws`, `matches`, `winrate_pct`, `favorite_kit`); fehlt die View oder ist sie leer, wird das Feld weggelassen (nie `[]`). Fehlt die Spalte `favorite_kit`, wird `null` gesendet.
 
 ### PR #37, #38
 
