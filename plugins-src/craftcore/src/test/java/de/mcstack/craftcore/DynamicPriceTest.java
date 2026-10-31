@@ -2,9 +2,30 @@ package de.mcstack.craftcore;
 
 import java.sql.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.bukkit.configuration.file.YamlConfiguration;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DynamicPriceTest {
+  @AfterEach void resetSettings() { DynamicPrice.configure(new YamlConfiguration()); }
+  @Test void configurationControlsNudgeDecayAndBounds() throws Exception {
+    var cfg=new YamlConfiguration();
+    var defaults=DynamicPrice.readConfig(cfg);
+    assertEquals(.8,defaults.floor()); assertEquals(1.2,defaults.ceiling());
+    assertEquals(.003,defaults.strength()); assertEquals(64,defaults.volumeScale());
+    cfg.set("market.dynamic.half-life-hours",2); cfg.set("market.dynamic.floor",.3);
+    cfg.set("market.dynamic.ceiling",3.0); cfg.set("market.dynamic.volume-scale",64);
+    cfg.set("market.dynamic.strength",.25); DynamicPrice.configure(cfg);
+    try(Connection c=db("configured_dynamic")) {
+      assertEquals(.75,DynamicPrice.trade(c,"STONE",64,16,1000),1e-9);
+      assertEquals(.875,DynamicPrice.current(c,"STONE",1000+7200000),1e-9);
+      assertEquals(.3,DynamicPrice.trade(c,"STONE",6400,64,1000),1e-9);
+      assertEquals(3,DynamicPrice.trade(c,"STONE",-6400,64,1000),1e-9);
+      cfg.set("market.dynamic.enabled",false); DynamicPrice.configure(cfg);
+      assertEquals(1,DynamicPrice.current(c,"STONE",1000));
+      assertEquals(1,DynamicPrice.trade(c,"STONE",64,64,1000));
+    }
+  }
   private Connection db(String name) throws SQLException {
     Connection c=DriverManager.getConnection("jdbc:h2:mem:"+name+";MODE=MySQL");
     DynamicPrice.migrate(c); DynamicPrice.migrate(c); c.setAutoCommit(false); return c;
