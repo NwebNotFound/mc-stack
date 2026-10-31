@@ -1,8 +1,13 @@
 package de.mcstack.craftcore;
 
 import java.util.Map;
+import java.util.Locale;
+import java.util.Set;
 
 public final class ServerProfile {
+  public static final Set<String> ECONOMY_COMMANDS = Set.of(
+      "balance", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "testrun");
+
   private ServerProfile() {}
 
   public static boolean isPvp(String server) { return "pvp".equalsIgnoreCase(server); }
@@ -10,7 +15,7 @@ public final class ServerProfile {
   public static boolean economyEnabled(String server) { return !isPvp(server); }
 
   public static boolean commandAllowed(boolean economyEnabled, String commandName) {
-    return economyEnabled || "pvp".equalsIgnoreCase(commandName) || "pvpdebug".equalsIgnoreCase(commandName);
+    return economyEnabled || (commandName != null && !ECONOMY_COMMANDS.contains(commandName.toLowerCase(Locale.ROOT)));
   }
 
   public static String pvpStartupError(String password, boolean driverLoaded) {
