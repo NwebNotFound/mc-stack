@@ -90,7 +90,10 @@ final class Features implements Listener {
       if(pending)Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());});
     } catch(Exception ex){plugin.getLogger().warning("Lobby-Spawn konnte nicht gepr?ft werden: "+ex.getMessage());p.sendMessage("Lobby-Spawn konnte nicht gesetzt werden. Bitte /spawn erneut nutzen.");}
   }
-  @EventHandler(ignoreCancelled=true) public void move(PlayerMoveEvent e){if(e.getTo()!=null && (e.getFrom().getX()!=e.getTo().getX() || e.getFrom().getY()!=e.getTo().getY() || e.getFrom().getZ()!=e.getTo().getZ()))cancel(e.getPlayer());}
+  @EventHandler(ignoreCancelled=true) public void move(PlayerMoveEvent e){
+    Location from=e.getFrom(), to=e.getTo();
+    if(to!=null && (!Objects.equals(from.getWorld(),to.getWorld()) || WarmupMove.blockChanged(from.getBlockX(),from.getBlockY(),from.getBlockZ(),to.getBlockX(),to.getBlockY(),to.getBlockZ())))cancel(e.getPlayer());
+  }
   @EventHandler(ignoreCancelled=true) public void damage(EntityDamageEvent e){if(e.getEntity() instanceof Player p)cancel(p);}
   @EventHandler public void quit(PlayerQuitEvent e){cancel(e.getPlayer());}
   @EventHandler(ignoreCancelled=true) public void place(BlockPlaceEvent e){if(!can(e.getPlayer(),e.getBlock().getLocation()))e.setCancelled(true);}
