@@ -32,7 +32,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(password==null || password.isBlank()) { getLogger().severe("Datenbankpasswort fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
   try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=db(); Statement s=c.createStatement()) { migrate(c,s); } }
   catch(Exception e) { getLogger().log(Level.SEVERE,"Parkour-Datenbank nicht verfuegbar",e); getServer().getPluginManager().disablePlugin(this); return; }
-  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); refresh();
+  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); removeRetiredBoards(); refresh();
  }
  private void migrate(Connection c,Statement s) throws SQLException {
   s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE);
@@ -114,10 +114,21 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(isEnabled()) getServer().getScheduler().runTask(this,()->renderAll(byCourse));
  }); }
  /** "board" = Sammeltafel aller Kurse (bisherige Tafel), "boards.<kurs>" = Top 10 eines Kurses. */
+ private void removeRetiredBoards() {
+  var section=getConfig().getConfigurationSection("retired-boards"); if(section==null) return;
+  for(String key:new ArrayList<>(section.getKeys(false))) {
+   String path="retired-boards."+key; Location loc=getConfig().getLocation(path+".location");
+   if(loc==null || loc.getWorld()==null) { getLogger().warning("Alte Tafel kann nicht entfernt werden: "+key); continue; }
+   loc.getChunk().load(); String id=getConfig().getString(path+".entity");
+   try { Entity entity=id==null?null:Bukkit.getEntity(UUID.fromString(id)); if(entity!=null && !(entity instanceof TextDisplay)) { getLogger().warning("Alte Tafel hat unerwarteten Entity-Typ: "+key); continue; } if(entity!=null) entity.remove(); getConfig().set(path,null); }
+   catch(IllegalArgumentException ex) { getLogger().warning("Ungueltige Tafel-ID: "+key); }
+  }
+  saveConfig();
+ }
  private void renderAll(Map<String,List<ParkourSql.Entry>> byCourse) {
   render("board",ParkourSql.allBoards(byCourse));
   var sec=getConfig().getConfigurationSection("boards");
-  if(sec!=null) for(String course:sec.getKeys(false)) render("boards."+course,ParkourSql.board(course,byCourse.getOrDefault(course,List.of())));
+  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(name,byCourse.getOrDefault(course,List.of()))); }
  }
  private void render(String key,String text) {
   Location loc=getConfig().getLocation(key+".location"); if(loc==null || loc.getWorld()==null) return;
@@ -125,6 +136,9 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(id!=null) try { Entity entity=Bukkit.getEntity(UUID.fromString(id)); if(entity instanceof TextDisplay t) display=t; } catch(IllegalArgumentException ignored) {}
   if(display==null) { display=loc.getWorld().spawn(loc,TextDisplay.class,t->{ t.setBillboard(Display.Billboard.CENTER); t.setPersistent(true); t.setSeeThrough(false); }); getConfig().set(key+".entity",display.getUniqueId().toString()); saveConfig(); }
   display.text(Component.text(text));
+ }
+ private String actualCourse(String requested) throws SQLException {
+  try(PreparedStatement s=ParkoursDatabase.getConnection().prepareStatement("SELECT pk_name FROM parkours WHERE lower(pk_name)=lower(?)")) { s.setString(1,requested); try(ResultSet r=s.executeQuery()) { return r.next()?r.getString(1):null; } }
  }
  private void setBoard(Player p,String key) {
   Location previous=getConfig().getLocation(key+".location"); if(previous!=null && previous.getWorld()!=null) previous.getChunk().load();
@@ -134,11 +148,16 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
   if(!(sender instanceof Player p)) { sender.sendMessage("Nur im Spiel verfuegbar."); return true; }
   if(args.length==1 && args[0].equalsIgnoreCase("leave")) { if(!ParkourSessionManager.isInSession(p.getUniqueId())) { p.sendMessage("Du bist nicht im Parkour."); return true; } ParkourSessionManager.restoreInventory(p); ParkourSessionManager.endSession(p.getUniqueId()); p.sendMessage("Parkour verlassen."); return true; }
-  if(args.length>=1 && args.length<=2 && args[0].equalsIgnoreCase("setboard")) {
+  if(args.length>=1 && args[0].equalsIgnoreCase("setboard")) {
    if(!p.isOp()) { p.sendMessage("Nur OPs duerfen die Bestenliste setzen."); return true; }
-   String course=args.length==2 ? ParkourSql.course(args[1]) : null;
-   if(args.length==2 && (course==null || !course.matches("[a-z0-9_-]+"))) { p.sendMessage("Ungueltige Kurs-ID."); return true; }
-   setBoard(p,course==null ? "board" : "boards."+course); p.sendMessage(course==null ? "Parkour-Bestenliste (alle Kurse) gesetzt." : "Parkour-Bestenliste fuer Kurs "+course+" gesetzt."); return true;
+   if(args.length==1) { setBoard(p,"board"); p.sendMessage("Parkour-Bestenliste (alle Kurse) gesetzt."); return true; }
+   String requested=ParkourSql.argument(args);
+   if(requested==null) { p.sendMessage("Ungueltiger Kursname."); return true; }
+   try {
+    String name=actualCourse(requested); if(name==null) { p.sendMessage("Kurs nicht gefunden: "+requested); return true; }
+    String key=ParkourSql.boardKey(name); String path="boards."+key;
+    getConfig().set(path+".course",name); setBoard(p,path); p.sendMessage("Parkour-Bestenliste fuer Kurs "+name+" gesetzt."); return true;
+   } catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurs konnte nicht gelesen werden",ex); p.sendMessage("Kurs konnte nicht gelesen werden."); return true; }
   }
   p.sendMessage("/parkour leave | /parkour setboard [kurs] (OP)"); return true;
  }

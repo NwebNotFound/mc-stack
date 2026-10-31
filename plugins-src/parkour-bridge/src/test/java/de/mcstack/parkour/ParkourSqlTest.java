@@ -30,11 +30,11 @@ class ParkourSqlTest {
  @Test void boardsPerCourse() {
   List<ParkourSql.Entry> e = new ArrayList<>(); for (int i = 1; i <= 12; i++) e.add(new ParkourSql.Entry("p" + i, i * 1000L));
   String b = ParkourSql.board("test", e);
-  assertTrue(b.startsWith("Parkour test - Top 10\n1. p1  0:01.000"));
+  assertTrue(b.startsWith("test\nTop 10\n1. p1  0:01.000"));
   assertTrue(b.contains("\n10. p10  0:10.000")); assertFalse(b.contains("11."));
-  assertEquals("Parkour test - Top 10\nNoch keine Bestzeiten", ParkourSql.board("test", List.of()));
+  assertEquals("test\nTop 10\nNoch keine Bestzeiten", ParkourSql.board("test", List.of()));
   Map<String, List<ParkourSql.Entry>> m = new TreeMap<>(); m.put("a", List.of(new ParkourSql.Entry("x", 1))); m.put("b", List.of());
-  assertEquals("Parkour a - Top 10\n1. x  0:00.001\n\nParkour b - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
+  assertEquals("a\nTop 10\n1. x  0:00.001\n\nb\nTop 10\nNoch keine Bestzeiten", ParkourSql.allBoards(m));
   assertEquals("Parkour - Top 10\nNoch keine Bestzeiten", ParkourSql.allBoards(Map.of()));
  }
  @Test void floorIsLowestCoursePointMinusDistance() {

@@ -35,6 +35,13 @@ final class ParkourSql {
   if (c.isEmpty()) return null;
   return c.length() > 64 ? c.substring(0, 64) : c;
  }
+ /** Kursargument als Rest oder in Anfuehrungszeichen; Punkte sind in Bukkit-Konfigurationspfaden reserviert. */
+ static String argument(String[] args) {
+  String value=String.join(" ", Arrays.copyOfRange(args,1,args.length)).trim();
+  if(value.length()>=2 && value.startsWith("\"") && value.endsWith("\"")) value=value.substring(1,value.length()-1).trim();
+  return value.isEmpty() || value.length()>64 || value.indexOf('.')>=0 || value.indexOf('\"')>=0 ? null : value;
+ }
+ static String boardKey(String name) { return course(name); }
  /** Y aus Lobby-Parkour-Ort "world,x,y,z,yaw,pitch"; null wenn unlesbar. */
  static Double locY(String loc) {
   if (loc == null) return null; String[] p = loc.split(",");
@@ -46,7 +53,7 @@ final class ParkourSql {
   return min == null ? null : min - Math.max(1, distance);
  }
  record Entry(String name, long ms) {} static String board(String course, List<Entry> entries) {
-  StringBuilder t = new StringBuilder("Parkour ").append(course).append(" - Top 10");
+  StringBuilder t = new StringBuilder(course).append("\nTop 10");
   for (int i = 0; i < Math.min(10, entries.size()); i++) t.append("\n").append(i + 1).append(". ").append(entries.get(i).name()).append("  ").append(TimeFormat.format(entries.get(i).ms()));
   if (entries.isEmpty()) t.append("\nNoch keine Bestzeiten");
   return t.toString();
