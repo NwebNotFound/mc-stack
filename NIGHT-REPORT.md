@@ -115,6 +115,13 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - `difficulty=peaceful` unveraendert; feindliche Mobs koennen auch nach manueller Erzeugung verschwinden. Nach regulaerem Neustart Gamerule sowie Spawn-Ei und `/summon` pruefen.
 - Befehl im Datapack: `gamerule minecraft:spawn_mobs false`; kein Staging nach `data` und kein Merge.
 
+## Parkour-Folgeauftrag 31.10.2026
+- Branch `parkour/multi-course-boards`, Commit `694f24c` gepusht; `origin/parkour/course-floor` war bereits enthalten, Lease-Push ohne Aenderung.
+- `/cc holo list`, `/cc holo remove [id]` (Klick bestaetigen), `/cc holo move <id>`; Entfernung wird vor Entity-Loeschung gespeichert, markierte Waisen werden bei Start und Chunk-Laden beseitigt. Ingame nicht getestet.
+- `Parkour 1`: alte ParkourBridge-Entity `32c9142e-0e22-4316-9246-1429541122ab` ist als `retired-boards.1` vorgemerkt; Lobby-Parkour-Tabellen `leaderboards` und `leaderboard_lines` aktuell leer. Zuordnung des sichtbaren Texts nicht ingame bestaetigt. Nach regulaerem Neustart sollte die vorgemerkte Entity verschwinden; sonst `/cc holo list` und `/cc holo remove <id>` samt Bestaetigung.
+- Docker `gradle clean build --no-daemon`: 20 Tests erfolgreich; Slug-Beispiele abgedeckt. Befehl: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack\data\lobby:/workspace/data/lobby:ro" -w /workspace/plugins-src/parkour-bridge gradle:9-jdk gradle clean build --no-daemon`.
+- Gestagt `data/lobby/plugins/update/parkour-bridge.jar`, SHA256 `5FA38DFDD9E63F12D501D5CB09BE0967CFCE51D890CC0342FE9FD0218A3FD5D9`; kein Neustart oder Merge. Externer Ingest nicht Ende-zu-Ende getestet.
+
 ## CraftCore finaler Build 31.10.2026
 - Branch `craft/lobby-mob-spawning`, Quell-Commit `f89cbc10b8e64f3d1e154b21bc37b3761d63baa0`; `8c5faa9` ist Vorfahr, `/cclaunch` und Launchpad im Quellstand vorhanden.
 - Docker `clean build`: FEHLER, 202 Tests, 2 fehlgeschlagen (`BuyOrderTransactionTest.insufficientInventoryRollsBackSale`, `EconomyEndToEndTest.h2`), 12 uebersprungen; keine fertige JAR kopiert. Lobby bestehend SHA256 `4EECCF415BC3BA7807294AE56738DB0C0399873C92B58DA41E9CA0BDF6B4A5D6`; Survival-JAR fehlt, daher kein SHA256.
@@ -138,3 +145,9 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Bankverkauf pro Stueck mit Journal; bei Limit/Fehler sowie Schliessen, Disconnect und Stop Rueckgabe oder Drop.
 - Docker `gradle build --no-daemon` mit Serverbibliotheken: erfolgreich; GUI-Logiktests fuer Preis, Limit und Rueckgabe.
 - Kein Neustart, Merge oder Staging nach `data`; Ingame-Verhalten nicht getestet.
+
+## Finale Builds 31.10.2026
+- CraftCore Quelle `71006a3cf03142423761139b0deddcdd04f33995`: Docker clean build gruen, 210 Tests, 12 uebersprungen; Build-JAR SHA256 `38FD71B717B19E301E3C7F1CA22A571F18E3F49E584CFB1BBB1D5B3DE750F4C7`.
+- Parkour Quelle `1779a79b1144e736a470fc62b607c2fb329c5cb4`, auf `58a2963` rebast und mit Lease gepusht: Docker clean build gruen, 22 Tests; Build-JAR SHA256 `85BF4E6DC8ECF144322175262551BAF2FCB01BDFEFE8A653FB177E1A77391D56`.
+- Bestehende Lobby-Update-JARs: CraftCore SHA256 `4EECCF415BC3BA7807294AE56738DB0C0399873C92B58DA41E9CA0BDF6B4A5D6`, Quell-Commit unbekannt; ParkourBridge SHA256 `5FA38DFDD9E63F12D501D5CB09BE0967CFCE51D890CC0342FE9FD0218A3FD5D9`, Quelle laut vorherigem Report `694f24c`.
+- Keine der neuen JARs gestagt; kein Restart oder Merge. Survival-Update-JAR fehlt.
