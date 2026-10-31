@@ -9,7 +9,11 @@ final class SellTransaction {
   static final String PENDING_MIGRATION = "ALTER TABLE sell_pending ADD COLUMN IF NOT EXISTS resolution VARCHAR(16) NOT NULL DEFAULT 'PENDING'";
   static final String STATUS_MIGRATION = "ALTER TABLE sell_pending ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PENDING'";
   static void refundOwed(Connection c, String key, String player, String nbt, int amount) throws SQLException {
-    try (PreparedStatement q=c.prepareStatement("INSERT INTO sell_pending(idem_key,player_uuid,item_nbt,amount,cp,resolution,status) VALUES(?,?,?,?,0,'NOT_COMMITTED','REFUND_OWED') ON DUPLICATE KEY UPDATE status='REFUND_OWED', resolution='NOT_COMMITTED'")) {
+    try (PreparedStatement q=c.prepareStatement("UPDATE sell_pending SET status='REFUND_OWED', resolution='NOT_COMMITTED' WHERE idem_key=? AND status<>'DELIVERED'")) {
+      q.setString(1,key);
+      if(q.executeUpdate()>0) return;
+    }
+    try (PreparedStatement q=c.prepareStatement("INSERT IGNORE INTO sell_pending(idem_key,player_uuid,item_nbt,amount,cp,resolution,status) VALUES(?,?,?,?,0,'NOT_COMMITTED','REFUND_OWED')")) {
       q.setString(1,key); q.setString(2,player); q.setString(3,nbt); q.setInt(4,amount); q.executeUpdate();
     }
   }

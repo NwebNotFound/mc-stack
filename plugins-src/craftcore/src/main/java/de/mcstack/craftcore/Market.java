@@ -207,16 +207,26 @@ final class Market implements Listener {
     List<String> lore=new ArrayList<>();
     lore.add("Alle geeigneten Stacks verkaufen.");
     try {
+      List<ItemStack> stacks=new ArrayList<>();
       for(int slot=0;slot<45;slot++) {
         ItemStack stack=menu.inventory.getItem(slot);
-        if(!eligible(stack)||!hasPrice(stack.getType())) continue;
+        if(eligible(stack)&&hasPrice(stack.getType())) stacks.add(stack);
+      }
+      Map<Material,Price> prices=core.tx(c->previewPrices(stacks.stream().map(ItemStack::getType).toList(), m->price(c,m,false,false)));
+      for(ItemStack stack:stacks) {
         int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
-        long unit=Math.max(1,durabilityPrice(core.tx(c->price(c,stack.getType(),false,false)).cents(),damage,stack.getType().getMaxDurability()));
+        long unit=Math.max(1,durabilityPrice(prices.get(stack.getType()).cents(),damage,stack.getType().getMaxDurability()));
         lore.add(sellPreview(stack.getType().name(),unit,stack.getAmount()));
       }
     } catch(Exception ex) { core.getLogger().warning("Verkaufspreis-Vorschau: "+ex.getClass().getSimpleName()); }
     lore.add("Preis beim Verkauf kann abweichen.");
     ItemMeta meta=button.getItemMeta(); meta.setLore(lore); button.setItemMeta(meta); menu.inventory.setItem(49,button);
+  }
+  interface PreviewQuote { Price get(Material material) throws SQLException; }
+  static Map<Material,Price> previewPrices(List<Material> materials, PreviewQuote quote) throws SQLException {
+    Map<Material,Price> prices=new EnumMap<>(Material.class);
+    for(Material material:materials) if(!prices.containsKey(material)) prices.put(material,quote.get(material));
+    return prices;
   }
   static String sellPreview(String item,long unit,int amount) { return item+": "+Money.format(unit)+" / Stueck, "+Money.format(total(unit,amount))+" / Stack"; }
   private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }

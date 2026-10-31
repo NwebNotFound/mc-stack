@@ -25,6 +25,14 @@ class SellGuiTest {
     cfg.set("market.reset-hour",12);
     assertEquals(125,snapshot.maxSell()); assertEquals(8,snapshot.perDay()); assertEquals(5,snapshot.resetHour());
   }
+  @Test void previewQuotesEachDistinctMaterialOnce() throws Exception {
+    var materials=java.util.List.of(org.bukkit.Material.STONE,org.bukkit.Material.STONE,org.bukkit.Material.DIRT);
+    var calls=new java.util.ArrayList<org.bukkit.Material>();
+    var prices=Market.previewPrices(materials,m->{calls.add(m); return new Market.Price(m==org.bukkit.Material.STONE?10:20,0,"-");});
+    assertEquals(java.util.List.of(org.bukkit.Material.STONE,org.bukkit.Material.DIRT),calls);
+    assertEquals(10,prices.get(org.bukkit.Material.STONE).cents());
+    assertEquals(20,prices.get(org.bukkit.Material.DIRT).cents());
+  }
   @Test void dailyLimitLeavesUnsoldItems() {
     assertEquals(3,Market.affordable(375,100,8));
     assertEquals(0,Market.affordable(99,100,8));
