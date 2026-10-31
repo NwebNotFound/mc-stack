@@ -24,13 +24,12 @@ import org.bukkit.util.Vector;
 final class CitizensNpcs implements Listener {
   private final CraftCore core;
   private final UserMenu menu;
-  private final de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
   private final File file;
   private final YamlConfiguration config;
   private final Map<String,NpcDefinitions.NpcDef> definitions=new LinkedHashMap<>();
   private final Map<String,NPC> npcs=new HashMap<>();
   private boolean active;
-  CitizensNpcs(CraftCore core, UserMenu menu, de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp) { this.core=core; this.menu=menu; this.lobbyPvp=lobbyPvp; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
+  CitizensNpcs(CraftCore core, UserMenu menu) { this.core=core; this.menu=menu; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
   void start() {
     ConfigurationSection section=config.getConfigurationSection("npcs");
     if(section!=null) for(String key:section.getKeys(false)) try {
@@ -94,7 +93,15 @@ final class CitizensNpcs implements Listener {
       var def=definitions.get(entry.getKey());
       switch(def.action()) {
         case SERVER -> { try { player.sendPluginMessage(core,"BungeeCord",Portals.connectMessage(def.actionArg())); } catch(IOException ex) { core.getLogger().warning("NPC-Verbindung fehlgeschlagen: "+ex.getMessage()); } }
-        case MENU -> { if(def.actionArg().equalsIgnoreCase("pvp")) { if(lobbyPvp!=null) lobbyPvp.openMenu(player); } else if(def.actionArg().equalsIgnoreCase("bank") || def.actionArg().equalsIgnoreCase("shop") || def.actionArg().equalsIgnoreCase("ah") || def.actionArg().equalsIgnoreCase("stats")) player.performCommand(def.actionArg()); else menu.open(player,def.actionArg().toLowerCase(Locale.ROOT)); }
+        case MENU -> {
+          var lobbyPvp=core.lobbyPvp();
+          switch(NpcDefinitions.menuAction(def.actionArg(),lobbyPvp!=null)) {
+            case PVP -> lobbyPvp.openMenu(player);
+            case PVP_UNAVAILABLE -> { player.sendMessage("PvP-Menue ist gerade nicht verfuegbar."); core.getLogger().warning("PvP-Menue fuer NPC " + def.key() + " ist nicht verfuegbar."); }
+            case COMMAND -> player.performCommand(def.actionArg());
+            case MENU -> menu.open(player,def.actionArg().toLowerCase(Locale.ROOT));
+          }
+        }
         case COMMAND -> player.performCommand(def.actionArg().replace("{player}",player.getName()));
         case NONE -> { }
       }

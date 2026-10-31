@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -37,6 +38,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private final PvpHostClient host = new PvpHostClient();
     private final PvpQueue queue = new PvpQueue();
     private final Map<UUID, String> lastKit = new HashMap<>();
+    private final AtomicBoolean buildStarting = new AtomicBoolean();
     // Accessed only on the server thread, including while a pair is starting.
     private final Set<UUID> matching = new HashSet<>();
     private String activeMatchId;
@@ -76,7 +78,12 @@ public final class LobbyPvp implements Listener, TabExecutor {
             openMenu(player);
         } else if (args.length == 1 && args[0].equalsIgnoreCase("build")) {
             if (!PvpAccess.mayBypass(player::hasPermission)) player.sendMessage("Keine Berechtigung.");
-            else { UUID id = player.getUniqueId(); player.sendMessage("PvP-Server wird gestartet ..."); Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> startBuild(id)); }
+            else if (!tryStartBuild(buildStarting)) player.sendMessage("PvP-Server startet bereits ...");
+            else {
+                UUID id = player.getUniqueId();
+                try { player.sendMessage("PvP-Server wird gestartet ..."); Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> startBuild(id)); }
+                catch (RuntimeException e) { buildStarting.set(false); throw e; }
+            }
         } else if (args[0].equalsIgnoreCase("arena") || args[0].equalsIgnoreCase("kit")) {
             player.sendMessage("Arenen und Kits werden auf dem PvP-Server bearbeitet: /pvp build");
         } else player.sendMessage("/pvp queue|leave|build|arena|kit");
@@ -164,7 +171,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
     @EventHandler public void drag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof Menu) event.setCancelled(true);
     }
-    @EventHandler public void quit(PlayerQuitEvent event) { queue.leave(event.getPlayer().getUniqueId()); }
+    @EventHandler public void quit(PlayerQuitEvent event) { UUID id = event.getPlayer().getUniqueId(); queue.leave(id); lastKit.remove(id); }
     private void tick() {
         for (UUID id : matching) {
             Player player = Bukkit.getPlayer(id);
@@ -227,19 +234,22 @@ public final class LobbyPvp implements Listener, TabExecutor {
         }
         fail(id, pair, null);
     }
+    static boolean tryStartBuild(AtomicBoolean starting) { return starting.compareAndSet(false, true); }
     private void startBuild(UUID id) {
-        if (!host.status().equals("online") && !host.start()) { Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden")); return; }
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
-        while (System.nanoTime() < deadline) {
-            if (host.status().equals("online")) {
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    Player player = Bukkit.getPlayer(id);
-                    if (player != null) try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht gestartet werden"); }
-                }); return;
+        try {
+            if (!host.status().equals("online") && !host.start()) { Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden")); return; }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+            while (System.nanoTime() < deadline) {
+                if (host.status().equals("online")) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        Player player = Bukkit.getPlayer(id);
+                        if (player != null) try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht gestartet werden"); }
+                    }); return;
+                }
+                try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
-            try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-        }
-        Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden"));
+            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden"));
+        } finally { buildStarting.set(false); }
     }
     private void connectPlayer(Player player) throws java.io.IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();

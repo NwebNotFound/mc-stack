@@ -4,6 +4,12 @@ import java.util.*;
 
 final class NpcDefinitions {
   enum ActionType { SERVER, MENU, COMMAND, NONE }
+  enum MenuAction { PVP, PVP_UNAVAILABLE, COMMAND, MENU }
+  static MenuAction menuAction(String arg, boolean pvpAvailable) {
+    if (arg.equalsIgnoreCase("pvp")) return pvpAvailable ? MenuAction.PVP : MenuAction.PVP_UNAVAILABLE;
+    if (Set.of("bank", "shop", "ah", "stats").contains(arg.toLowerCase(Locale.ROOT))) return MenuAction.COMMAND;
+    return MenuAction.MENU;
+  }
   record Action(ActionType type, String arg) {}
   record NpcDef(String key, String displayName, String skin, String message, ActionType action, String actionArg) {
     NpcDef {

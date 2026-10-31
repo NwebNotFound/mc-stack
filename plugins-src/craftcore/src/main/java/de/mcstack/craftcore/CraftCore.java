@@ -45,8 +45,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private Npcs npcs;
   private CitizensNpcs citizensNpcs;
   private de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
+  de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp() { return lobbyPvp; }
   private void startCitizensNpcs() {
-    if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu, lobbyPvp); citizensNpcs.start(); }
+    if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
   }
   @EventHandler public void citizensEnabled(org.bukkit.event.server.PluginEnableEvent event) { if (event.getPlugin().getName().equalsIgnoreCase("Citizens")) startCitizensNpcs(); }
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();

@@ -6,6 +6,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static de.mcstack.craftcore.NpcDefinitions.*;
 
 class NpcDefinitionsTest {
+  @Test void pvpMenuAvailability() {
+    assertEquals(MenuAction.PVP_UNAVAILABLE, menuAction("PvP", false));
+    assertEquals(MenuAction.PVP, menuAction("pvp", true));
+    assertEquals(MenuAction.COMMAND, menuAction("bank", false));
+    assertEquals(MenuAction.MENU, menuAction("home", false));
+  }
   @Test void actions() {
     assertEquals(new Action(ActionType.SERVER,"lobby"),parseAction("server lobby"));
     assertEquals(new Action(ActionType.MENU,"bank"),parseAction("menu bank"));
