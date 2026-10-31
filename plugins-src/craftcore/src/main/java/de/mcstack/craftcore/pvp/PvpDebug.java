@@ -26,8 +26,8 @@ public final class PvpDebug implements CommandExecutor {
                     var found=store.pendingFor(id);
                     result="PvP join: "+PvpAccess.decide(found.isPresent(),false)+" matchId="+found.map(PvpStore.Assignment::matchId).orElse("-");
                 } else result=store.markStatus(matchId,"pending","failed") ? "PvP-Zuweisung abgebrochen: "+matchId : "Keine pending PvP-Zuweisung: "+matchId;
-                Bukkit.getScheduler().runTask(plugin,()->sender.sendMessage(result));
-            } catch(Exception e) { Bukkit.getScheduler().runTask(plugin,()->sender.sendMessage("PvP-Datenbankfehler: "+e.getMessage())); }
+                Bukkit.getScheduler().runTask(plugin,()->{ plugin.getLogger().info("pvpdebug: "+result); sender.sendMessage(result); });
+            } catch(Exception e) { Bukkit.getScheduler().runTask(plugin,()->{ plugin.getLogger().warning("pvpdebug: PvP-Datenbankfehler: "+e.getMessage()); sender.sendMessage("PvP-Datenbankfehler: "+e.getMessage()); }); }
         });
         return true;
     }
