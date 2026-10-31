@@ -269,5 +269,21 @@
         "text": "Bestzeiten pro Strecke siehst du mit /leaderboard parkour"
       }
     ]
+  },
+  {
+    "version": "1.15",
+    "date": "31.10.2026",
+    "changes": [
+      {
+        "area": "discord",
+        "type": "neu",
+        "text": "PvP-Bestenliste mit /leaderboard pvp – Siege, Niederlagen, Unentschieden, Winrate und Lieblings-Kit"
+      },
+      {
+        "area": "discord",
+        "type": "neu",
+        "text": "PvP-Stats landen auch auf der Website"
+      }
+    ]
   }
 ]

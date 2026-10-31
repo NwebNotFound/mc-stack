@@ -771,6 +771,10 @@ async def maybe_push_history(session, token, now=None):
         await push_ranks(session, token)
     except Exception as e:  # fail-soft: Raenge duerfen History nie stoeren
         log.warning("player_ranks Push fehlgeschlagen (%s)", type(e).__name__)
+    try:
+        await push_pvp(session, token)
+    except Exception as e:  # fail-soft: PvP darf History nie stoeren
+        log.warning("pvp_stats Push fehlgeschlagen (%s)", type(e).__name__)
     return ok
 
 
@@ -862,6 +866,24 @@ async def push_ranks(session, token):
         return None
     _ranks["warned"] = False
     st, _ = await _post(session, token, {"player_ranks": data}, "Player-Ranks")
+    return st < 300
+
+
+_pvp = {"warned": False}
+
+
+async def push_pvp(session, token):
+    """pvp_stats im 5-Minuten-Takt; View-Fehler/leer -> einmal loggen, Key weglassen (nie [])."""
+    import pvp
+    res = await asyncio.to_thread(fetch_rows, "v_pvp_stats")
+    data = pvp.build_stats(*res) if res else []
+    if not data:
+        if not _pvp["warned"]:
+            log.warning("v_pvp_stats nicht lesbar oder leer, pvp_stats wird weggelassen")
+            _pvp["warned"] = True
+        return None
+    _pvp["warned"] = False
+    st, _ = await _post(session, token, {"pvp_stats": data}, "PvP-Stats")
     return st < 300
 
 

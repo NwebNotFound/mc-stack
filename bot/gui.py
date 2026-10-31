@@ -180,8 +180,9 @@ class LbPager(discord.ui.View):
     """Bestenliste mit Blaettern: rows = [(rang, name, ms, uuid)], 10 pro Seite."""
     PER = 10
 
-    def __init__(self, title, rows, me=None, courses=None, raw=None, selected=None):
+    def __init__(self, title, rows, me=None, courses=None, raw=None, selected=None, fmt=None, empty=None):
         super().__init__(timeout=600)
+        self.fmt, self.empty = fmt, empty
         self.title, self.rows, self.me, self.page = title, rows, me, 0
         self.raw = raw or []
         self.pages = max(1, (len(rows) + self.PER - 1) // self.PER)
@@ -217,7 +218,7 @@ class LbPager(discord.ui.View):
     async def file(self):
         import io, stats_card
         part = [(r, n, ms) for r, n, ms, _ in self.rows[self.page * self.PER:(self.page + 1) * self.PER]]
-        png = await asyncio.to_thread(stats_card.render_leaderboard, f"{self.title} \u2013 Seite {self.page + 1}/{self.pages}" if self.pages > 1 else self.title, part, self.me if self.page == 0 else None)
+        png = await asyncio.to_thread(stats_card.render_leaderboard, f"{self.title} \u2013 Seite {self.page + 1}/{self.pages}" if self.pages > 1 else self.title, part, self.me if self.page == 0 else None, self.fmt, self.empty)
         return discord.File(io.BytesIO(png), filename="leaderboard.png")
 
     async def _flip(self, interaction, d):
