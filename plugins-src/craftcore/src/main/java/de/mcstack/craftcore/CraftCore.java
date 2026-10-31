@@ -209,7 +209,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     p.setScoreboard(board);
     return board;
   }
-  void sellBalance(UUID id,long cp) { Scoreboard board=sidebars.get(id); if(board!=null) setLine(board,2,"CP: ",String.format(Locale.GERMANY,"%,d CP",cp/100),NamedTextColor.GREEN); }
+  void sellBalance(UUID id,long cp) { Scoreboard board=sidebars.get(id); if(board!=null) setLine(board,2,"CP: ",Money.format(cp),NamedTextColor.GREEN); }
   private void sidebar(Player p) {
     try {
       if (!tx(c->SidebarPreference.enabled(c,p.getUniqueId().toString()))) return;
@@ -217,7 +217,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       long cp=balance(p.getUniqueId());
       Scoreboard board=sidebars.computeIfAbsent(p.getUniqueId(),id->createSidebar(p));
       setLine(board,1,"Server: ",server,NamedTextColor.AQUA);
-      setLine(board,2,"CP: ",String.format(Locale.GERMANY,"%,d CP",cp/100),NamedTextColor.GREEN);
+      setLine(board,2,"CP: ",Money.format(cp),NamedTextColor.GREEN);
       setLine(board,3,"Online: ",Integer.toString(Bukkit.getOnlinePlayers().size()),NamedTextColor.WHITE);
       setLine(board,4,"Team: ",team==null?"-":team,NamedTextColor.YELLOW);
     } catch(Exception e) { getLogger().warning("Sidebar: "+e.getMessage()); }

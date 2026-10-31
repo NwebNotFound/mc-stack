@@ -70,6 +70,8 @@ class CraftFixesTest {
       s.execute("CREATE TABLE IF NOT EXISTS accounts (uuid CHAR(36) PRIMARY KEY, balance BIGINT NOT NULL DEFAULT 0)");
       PlayerStats.migrate(c);
       s.execute("CREATE OR REPLACE VIEW v_player_stats AS SELECT p.uuid,p.name mc_name,CAST(a.balance/100.0 AS DECIMAL(21,2)) money,st.playtime_s,st.kills,st.deaths,st.blocks_mined,st.updated_at FROM known_players p LEFT JOIN accounts a ON a.uuid=p.uuid LEFT JOIN player_stats st ON st.uuid=p.uuid");
+      MarketEffective.ensureSchema(c);
+      PriceMeta.ensureSchema(s);
       WebsiteStats.migrate(c);
       ResultSet cols=s.executeQuery("SHOW COLUMNS FROM v_market WHERE Field IN ('buy_enabled','sell_enabled')"); int n=0; while(cols.next())n++; assertEquals(2,n);
       String u=UUID.randomUUID().toString(); s.execute("INSERT INTO known_players VALUES('"+u+"','fixtest"+u.substring(0,6)+"')");

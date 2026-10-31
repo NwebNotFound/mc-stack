@@ -92,26 +92,31 @@ final class Market implements Listener {
     if(!buy) cents=PriceModel.cappedSell(cents,PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble("market.buy-factor",1.5)),floor),cfg.getDouble("market.max-sell-ratio",0.35));
     return cents;
   }
+  record SellConfig(long baseBuy, long baseSell, long maxSell, int perDay, double recipeCost,
+                    long minimumPurchase, double base, java.time.ZoneId zone, int resetHour, long revenueLimit) {}
+  SellConfig sellConfig(Material m) {
+    var cfg=core.getConfig(); Quote q=items.get(m);
+    return sellConfig(cfg,m,bankCents(m,q.base(),true),bankCents(m,q.base(),false),recipeCosts.getOrDefault(m,Double.POSITIVE_INFINITY),minimumPurchases.getOrDefault(m,1L),q.base(),revenueLimit());
+  }
+  static SellConfig sellConfig(org.bukkit.configuration.Configuration cfg,Material m,long baseBuy,long baseSell,double recipeCost,long minimumPurchase,double base,long limit) {
+    return new SellConfig(baseBuy,baseSell,
+      BuybackCaps.capCents(cfg,m,Long.MAX_VALUE),BuybackCaps.perDay(cfg,m),
+      recipeCost,minimumPurchase,base,
+      java.time.ZoneId.of(cfg.getString("market.reset-zone","Europe/Berlin")),cfg.getInt("market.reset-hour",5),limit);
+  }
   Price price(Connection c, Material m, boolean trade, boolean buy) throws SQLException {
-    Quote q=items.get(m); long now=System.currentTimeMillis();
+    return price(c,m,trade,buy,sellConfig(m));
+  }
+  Price price(Connection c, Material m, boolean trade, boolean buy, SellConfig config) throws SQLException {
+    long now=System.currentTimeMillis();
     double f=DynamicPrice.current(c,m.name(),now);
-    long baseBuy=bankCents(m,q.base(),true);
-    // Across the entire permitted band, a sale can never pay more than a later purchase.
-    long sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
-      DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
-      DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
-    sell=safeSell(sell,recipeCosts.get(m));
-    long purchase=Math.max(minimumPurchases.getOrDefault(m,1L),Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell)));
-    if(trade) {
-      f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
-      sell=BuybackCaps.capCents(core.getConfig(),m,Math.min(
-        DynamicPrice.apply(bankCents(m,q.base(),false),f,false),
-        DynamicPrice.apply(baseBuy,DynamicPrice.FLOOR,true)));
-      sell=safeSell(sell,recipeCosts.get(m));
-      purchase=Math.max(minimumPurchases.getOrDefault(m,1L),Math.max(DynamicPrice.apply(baseBuy,f,true),BankPrice.minimumBuy(sell)));
-    }
-    WebsiteStats.catalog(c,m.name(),purchase,sell,q.base(),now);
-    return new Price(buy?purchase:sell,q.base()*f,trade?(buy?"auf":"ab"):"-");
+    if(trade) f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
+    long sell=safeSell(Math.min(config.maxSell(),Math.min(
+      DynamicPrice.apply(config.baseSell(),f,false),
+      DynamicPrice.apply(config.baseBuy(),DynamicPrice.FLOOR,true))),config.recipeCost());
+    long purchase=Math.max(config.minimumPurchase(),Math.max(DynamicPrice.apply(config.baseBuy(),f,true),BankPrice.minimumBuy(sell)));
+    WebsiteStats.catalog(c,m.name(),purchase,sell,config.base(),now);
+    return new Price(buy?purchase:sell,config.base()*f,trade?(buy?"auf":"ab"):"-");
   }
 
   static long safeSell(long cents, Double recipeCost) {
@@ -199,8 +204,21 @@ final class Market implements Listener {
   }
   private void refreshSell(SellMenu menu) {
     ItemStack button=button(Material.LIME_DYE,"Verkauf bestaetigen");
-    ItemMeta meta=button.getItemMeta(); meta.setLore(List.of("Alle geeigneten Stacks verkaufen.","Der Preis wird beim Verkauf berechnet.")); button.setItemMeta(meta); menu.inventory.setItem(49,button);
+    List<String> lore=new ArrayList<>();
+    lore.add("Alle geeigneten Stacks verkaufen.");
+    try {
+      for(int slot=0;slot<45;slot++) {
+        ItemStack stack=menu.inventory.getItem(slot);
+        if(!eligible(stack)||!hasPrice(stack.getType())) continue;
+        int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
+        long unit=Math.max(1,durabilityPrice(core.tx(c->price(c,stack.getType(),false,false)).cents(),damage,stack.getType().getMaxDurability()));
+        lore.add(sellPreview(stack.getType().name(),unit,stack.getAmount()));
+      }
+    } catch(Exception ex) { core.getLogger().warning("Verkaufspreis-Vorschau: "+ex.getClass().getSimpleName()); }
+    lore.add("Preis beim Verkauf kann abweichen.");
+    ItemMeta meta=button.getItemMeta(); meta.setLore(lore); button.setItemMeta(meta); menu.inventory.setItem(49,button);
   }
+  static String sellPreview(String item,long unit,int amount) { return item+": "+Money.format(unit)+" / Stueck, "+Money.format(total(unit,amount))+" / Stack"; }
   private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }
   @EventHandler public void sellDrag(InventoryDragEvent e) {
     if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu))return;
@@ -233,15 +251,16 @@ final class Market implements Listener {
       String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes());
       String key=UUID.randomUUID().toString();
       int damage=stack.getItemMeta() instanceof Damageable d?d.getDamage():0;
+      SellConfig config=sellConfig(stack.getType());
       ItemStack sold=stack;
       int selectedSlot=slot;
       sellFlow.start(lock,()->menu.inventory.setItem(selectedSlot,null),
-          ()->sellStack(player,key,nbt,sold,damage),
+          ()->sellStack(player,key,nbt,sold,damage,config),
           result->finishSell(p,player,key,sold,result));
     }
   }
   private record SellResult(SellTransaction.CommitStatus status, boolean limited, long cp, long balance) {}
-  private SellResult sellStack(UUID uuid,String key,String nbt,ItemStack stack,int damage) {
+  private SellResult sellStack(UUID uuid,String key,String nbt,ItemStack stack,int damage,SellConfig config) {
      Material material=stack.getType(); int amount=stack.getAmount();
     long[] cp={0}, balance={0}; Connection original=null;
     SellTransaction.CommitStatus status=SellTransaction.CommitStatus.NOT_COMMITTED;
@@ -257,14 +276,14 @@ final class Market implements Listener {
         try (Statement q=c.createStatement(); ResultSet r=q.executeQuery("SELECT GET_LOCK('craftcore-write', 5)")) {if(!r.next()||r.getInt(1)!=1)throw new SQLException("DB lock timeout");}
         try {
           SellTransaction.run(c,key,tx->{
-            String day=dayKey(), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
-            long unit=Math.max(1,durabilityPrice(price(tx,material,false,false).cents(),damage,material.getMaxDurability()));
+            String day=DailyRevenue.dayKey(java.time.Instant.now(),config.zone(),config.resetHour()), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
+            long unit=Math.max(1,durabilityPrice(price(tx,material,false,false,config).cents(),damage,material.getMaxDurability()));
             cp[0]=total(unit,amount);
-            if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,revenueLimit()),unit,amount)<amount) throw new SellLimit();
-            for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,core.getConfig(),owner,material,day)) throw new SellLimit();
-            if(!DiscordRevenue.reserve(tx,owner,day,cp[0],revenueLimit())) throw new SellLimit();
+            if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,config.revenueLimit()),unit,amount)<amount) throw new SellLimit();
+            for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,config.perDay(),owner,material,day)) throw new SellLimit();
+            if(!DiscordRevenue.reserve(tx,owner,day,cp[0],config.revenueLimit())) throw new SellLimit();
             core.exec(tx,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",key,uuid.toString(),material.name(),amount,cp[0],"PENDING");
-            BankJournal.finishSale(tx,key,m->price(tx,material,true,false));
+            BankJournal.finishSale(tx,key,m->price(tx,material,true,false,config));
             WebsiteStats.event(tx,material.name(),amount,cp[0],"bank");
             core.exec(tx,"UPDATE sell_pending SET cp=?, resolution='COMMITTED' WHERE idem_key=?",cp[0],key);
             balance[0]=core.balance(tx,uuid); return null;
