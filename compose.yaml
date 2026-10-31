@@ -95,12 +95,17 @@ services:
     <<: *paper
     profiles: ["pvp"]
     restart: "no"
+    depends_on:
+      craftcore-db:
+        condition: service_healthy
     mem_limit: 1g
     environment:
       <<: *paper-environment
       MEMORY: 768M
       USE_AIKAR_FLAGS: "true"
       CRAFTCORE_SERVER: pvp
+      CRAFTCORE_DB_USER: craft_pvp
+      CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_PVP_DB_PASSWORD:-}"
       MOTD: MC Stack PvP
       LEVEL_TYPE: minecraft:flat
       GENERATOR_SETTINGS: '{"biome":"minecraft:the_void","layers":[],"structures":{}}'
