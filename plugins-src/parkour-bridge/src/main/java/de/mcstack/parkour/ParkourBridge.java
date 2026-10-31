@@ -35,7 +35,10 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(password==null || password.isBlank()) { getLogger().severe("Datenbankpasswort fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
   try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=db(); Statement s=c.createStatement()) { migrate(c,s); } }
   catch(Exception e) { getLogger().log(Level.SEVERE,"Parkour-Datenbank nicht verfuegbar",e); getServer().getPluginManager().disablePlugin(this); return; }
-  saveDefaultConfig(); getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh();
+  saveDefaultConfig();
+  var floorSection=getConfig().getConfigurationSection("course-floors");
+  if(floorSection!=null && !floorSection.getKeys(false).isEmpty()) getLogger().info("course-floors aktiv: "+floorSection.getValues(false));
+  getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh();
  }
 
  boolean saveConfigChecked() {
@@ -101,7 +104,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  private Double loadFloorY(String parkourName) throws SQLException {
   var section=getConfig().getConfigurationSection("course-floors");
   Double override=ParkourSql.courseFloor(section==null?Map.of():section.getValues(false),parkourName);
-  if(override!=null) return ParkourSql.effectiveFloor(null,override);
+  if(override!=null) { getLogger().info("Kursboden fuer "+parkourName+": "+override+" (course-floors)"); return ParkourSql.effectiveFloor(null,override); }
   List<Double> ys=new ArrayList<>(); Connection c=ParkoursDatabase.getConnection();
   try(PreparedStatement p=c.prepareStatement("SELECT start_cp,end_cp FROM parkours WHERE pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) { ys.add(ParkourSql.locY(r.getString(1))); ys.add(ParkourSql.locY(r.getString(2))); } } }
   try(PreparedStatement p=c.prepareStatement("SELECT c.location FROM checkpoints c JOIN parkours k ON k.id=c.parkour_id WHERE k.pk_name=?")) { p.setString(1,parkourName); try(ResultSet r=p.executeQuery()) { while(r.next()) ys.add(ParkourSql.locY(r.getString(1))); } }
