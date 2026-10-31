@@ -13,6 +13,8 @@ public final class RankDisplay {
     TEAM_COLORS = Collections.unmodifiableMap(colors);
   }
   private RankDisplay() {}
+  /** Only the console may grant admin or change a player who currently is admin. */
+  public static boolean rankChangeAllowed(boolean console, String targetGroup, Collection<String> currentGroups) { if (console) return true; if ("admin".equalsIgnoreCase(targetGroup)) return false; return currentGroups.stream().noneMatch(g -> "admin".equalsIgnoreCase(g)); }
   public static Rank pick(Collection<String> groups) { return RANKS.stream().filter(r -> groups.stream().anyMatch(g -> r.name().equalsIgnoreCase(g))).max(Comparator.comparingInt(Rank::weight)).orElse(RANKS.get(RANKS.size()-1)); }
   public static String parseColor(String prefix) { return prefix != null && prefix.length() >= 2 && prefix.charAt(0) == '&' && "0123456789abcdef".indexOf(Character.toLowerCase(prefix.charAt(1))) >= 0 ? "&" + Character.toLowerCase(prefix.charAt(1)) : "&7"; }
   public static String teamName(Rank rank) { return truncate(String.format(Locale.ROOT,"r%03d_%s",100-rank.weight(),rank.name())); }

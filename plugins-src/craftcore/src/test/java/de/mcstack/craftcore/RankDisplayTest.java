@@ -32,4 +32,12 @@ class RankDisplayTest {
       try(var r=s.executeQuery("SELECT color FROM teams WHERE id=1")) { assertTrue(r.next()); assertEquals("&f",r.getString(1)); }
     }
   }
+  @Test void onlyConsoleTouchesAdmin() {
+    assertFalse(RankDisplay.rankChangeAllowed(false,"admin",List.of("default")));
+    assertFalse(RankDisplay.rankChangeAllowed(false,"ADMIN",List.of()));
+    assertFalse(RankDisplay.rankChangeAllowed(false,"vip",List.of("admin")));
+    assertTrue(RankDisplay.rankChangeAllowed(false,"mvp",List.of("vip")));
+    assertTrue(RankDisplay.rankChangeAllowed(true,"admin",List.of("default")));
+    assertTrue(RankDisplay.rankChangeAllowed(true,"vip",List.of("admin")));
+  }
 }
