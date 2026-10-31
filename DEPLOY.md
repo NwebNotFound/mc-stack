@@ -10,3 +10,9 @@
    - Autostart nach PC-Neustart: einmalig `powershell -ExecutionPolicy Bypass -File tools\pvp-host-service\install-task.ps1`. Registriert die Aufgabe "mc-stack PvP host service" (bei Anmeldung, Neustart bei Fehler 3x/1 min, ohne Zeitlimit), die `tools\pvp-host-service\run.ps1` startet.
    - Container einmal anlegen: `docker compose --profile pvp create pvp` (der Dienst macht nur `docker start/stop`).
    - Test aus Velocity: `GET /status` mit Header `X-PvP-Token` -> `sleeping`/`online`.
+
+### PvP Schritt 3 (Match-Ablauf)
+- Vor dem Deploy: `scripts/pvp-matchflow.sql` als craft_admin ausfuehren (nach `pvp-db-user.sql`).
+- Lobby braucht `PVP_HOST_TOKEN` aus `.env` (compose reicht ihn durch) -> Lobby neu erstellen (`docker compose up -d --no-deps lobby`).
+- pvp neu anlegen: `docker compose --profile pvp up --no-start --force-recreate --no-deps pvp`.
+- NPC: `/cc npc create PvP` mit Aktion `command pvp queue`.

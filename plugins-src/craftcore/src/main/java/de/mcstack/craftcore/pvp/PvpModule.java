@@ -13,19 +13,22 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class PvpModule implements CommandExecutor, TabCompleter {
     private final JavaPlugin plugin;
+    private final PvpStore.ConnectionSource connectionSource;
+    private PvpMatches matches;
     private World build;
     private final File arenas, kitsFile;
     private YamlConfiguration kits;
     private final Map<UUID,Location[]> selections=new HashMap<>();
     private final Map<String,Draft> drafts=new TreeMap<>();
     private static class Draft { PvpLogic.Region region; final Map<Integer,Location> spawns=new TreeMap<>(); }
-    public PvpModule(JavaPlugin plugin) { this.plugin=plugin; File root=new File(plugin.getDataFolder(),"pvp"); arenas=new File(root,"arenas"); kitsFile=new File(root,"kits.yml"); }
+    public PvpModule(JavaPlugin plugin, PvpStore.ConnectionSource connectionSource) { this.plugin=plugin; this.connectionSource=connectionSource; File root=new File(plugin.getDataFolder(),"pvp"); arenas=new File(root,"arenas"); kitsFile=new File(root,"kits.yml"); }
     public void start() {
         if(!arenas.mkdirs() && !arenas.isDirectory()) throw new IllegalStateException("Arena-Verzeichnis nicht verfuegbar");
         kits=YamlConfiguration.loadConfiguration(kitsFile);
         build=Bukkit.createWorld(new WorldCreator("pvp_build").generator(new ChunkGenerator() {}));
         if(build==null) throw new IllegalStateException("pvp_build konnte nicht geladen werden");
         PluginCommand cmd=Objects.requireNonNull(plugin.getCommand("pvp")); cmd.setExecutor(this); cmd.setTabCompleter(this);
+        matches=new PvpMatches(plugin,new PvpStore(connectionSource),arenas,kitsFile); matches.start();
     }
     private static PvpLogic.Point point(Location l) { return new PvpLogic.Point(l.getBlockX(),l.getBlockY(),l.getBlockZ()); }
     private boolean inBuild(Player p) { if(!p.getWorld().equals(build)) {p.sendMessage("Nur in pvp_build verfuegbar.");return false;} return true; }
@@ -72,7 +75,7 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
                 if(op.equals("create")) {if(kits.contains(key)) throw new IllegalArgumentException("Kit existiert bereits.");kits.set(key+".contents",Arrays.asList(p.getInventory().getStorageContents()));kits.set(key+".armor",Arrays.asList(p.getInventory().getArmorContents()));kits.set(key+".offhand",p.getInventory().getItemInOffHand());}
                 else if(op.equals("icon")) {if(!kits.contains(key)) throw new IllegalArgumentException("Kit nicht gefunden.");ItemStack item=p.getInventory().getItemInMainHand();if(item.getType().isAir()) throw new IllegalArgumentException("Item in der Hand fehlt.");kits.set(key+".icon",item.clone());}
                 else if(op.equals("remove")) {if(!kits.contains(key)) throw new IllegalArgumentException("Kit nicht gefunden.");kits.set(key,null);}
-                else throw new IllegalArgumentException("Ungueltiger Kit-Befehl."); kits.save(kitsFile);p.sendMessage("Kit aktualisiert: "+a[2]);return true;
+                else throw new IllegalArgumentException("Ungueltiger Kit-Befehl."); kits.save(kitsFile);matches.syncKits();p.sendMessage("Kit aktualisiert: "+a[2]);return true;
             }
             p.sendMessage("/pvp build|leave|arena|kit");
         } catch(IllegalArgumentException | IOException e) {p.sendMessage("PvP: "+e.getMessage());} return true;
