@@ -91,6 +91,34 @@ services:
       - "25565/tcp"
       - "25575/tcp"
 
+  pvp:
+    <<: *paper
+    profiles: ["pvp"]
+    restart: "no"
+    mem_limit: 1g
+    environment:
+      <<: *paper-environment
+      MEMORY: 768M
+      USE_AIKAR_FLAGS: "true"
+      CRAFTCORE_SERVER: pvp
+      MOTD: MC Stack PvP
+      LEVEL_TYPE: minecraft:flat
+      GENERATOR_SETTINGS: '{"biome":"minecraft:the_void","layers":[],"structures":{}}'
+      GENERATE_STRUCTURES: "FALSE"
+      VIEW_DISTANCE: "4"
+      SIMULATION_DISTANCE: "3"
+      SPAWN_MONSTERS: "false"
+      SPAWN_ANIMALS: "false"
+      SPAWN_NPCS: "false"
+      ALLOW_NETHER: "false"
+      COPY_PLUGINS_SRC: /pvp-plugins
+    volumes:
+      - ./data/pvp:/data
+      - ./config/lobby-paper:/config:ro
+      - ./config/pvp-plugins:/pvp-plugins:ro
+    expose:
+      - "25565/tcp"
+
   survival:
     <<: *paper
     depends_on:

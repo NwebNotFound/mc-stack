@@ -68,6 +68,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private boolean transfer(UUID from,UUID to,long amount) throws Exception { return tx(c->EconomyStore.transfer(c,from.toString(),to.toString(),amount)); }
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
+    if ("pvp".equalsIgnoreCase(server)) { new de.mcstack.craftcore.pvp.PvpModule(this).start(); return; }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
     try {
       Class.forName("org.mariadb.jdbc.Driver");

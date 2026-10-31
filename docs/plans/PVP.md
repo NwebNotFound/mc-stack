@@ -1,6 +1,14 @@
 # Plan: PvP-Server (on demand)
 
-Status: Plan, kein Code. Reihenfolge: Ränge ✓ → NPCs ✓ → **PvP** → VIP-Welten → Mario Party.
+Status: Infrastruktur und Build-Modul in Umsetzung. Reihenfolge: Ränge ✓ → NPCs ✓ → **PvP** → VIP-Welten → Mario Party.
+
+## Entscheidungen (31.10.2026)
+- Nur 1v1, Best of 3: Runde 1 Kit von Spieler A, Runde 2 Kit von Spieler B, Runde 3 zuf?llig das Kit von Spieler A oder Spieler B; beide Spieler erhalten pro Runde dasselbe Kit.
+- PvP ist vollst?ndig von Survival getrennt: eigenes Inventar, keine CP, Coins oder Belohnungen. Elo und Zuschauen kommen sp?ter.
+- Nur builder/admin bauen Arenen und Kits. Pro Runde gelten f?nf Minuten; danach ist die Runde unentschieden und ohne Wertung.
+- Stopp 120 Sekunden nach leerem Server (keine Builder und keine Queue). Start/Stopp erfolgen ?ber den Host-Dienst ausschlie?lich f?r `mc-stack-pvp-1`; dieser bindet standardm??ig an `127.0.0.1`.
+- Ein Bo3-Match z?hlt als ein Sieg bzw. eine Niederlage. `pvp_matches` bleibt eine Zeile pro Match mit Match-Sieger und -Verlierer; `kit` enth?lt das Kit von Runde 1. Optional speichert `pvp_rounds` die Felder `match_id`, `round_no`, `kit`, `winner_uuid` (NULL bei Unentschieden) und `duration_ms`. `v_pvp_stats` z?hlt nur Matches.
+- Plugin-Jars stammen beim Start aus `config/<server>-plugins` (`COPY_PLUGINS_SRC`) und ?berschreiben Dateien in `data/<server>/plugins`.
 
 ## Ist-Stand (31.10.2026)
 - Velocity + Paper 26.3 (Lobby, Survival) in Docker (`compose.yaml`, itzg/minecraft-server), MariaDB 11.8, LuckPerms auf MariaDB mit SQL-Messaging.
@@ -25,14 +33,14 @@ Status: Plan, kein Code. Reihenfolge: Ränge ✓ → NPCs ✓ → **PvP** → VI
 ## Lobby: Queue + NPC
 - Citizens-NPC „PvP“ (vorhandenes `/cc npc`, Aktion `menu pvp`).
 - Menü: Kit-Auswahl (Icons aus `/pvp kit`), Button „Queue beitreten/verlassen“, Anzeige Queue-Länge + Server-State.
-- Matching: FIFO, 1v1, gleiches Kit (Vorschlag) oder jeder sein Kit (offene Frage).
+- Matching: FIFO, 1v1, Kit-Reihenfolge wie oben entschieden.
 - Queue liegt in der Lobby (CraftCore); Match-Zuweisung per Plugin-Message/DB-Tabelle `pvp_queue` an den PvP-Server.
 
 ## Matches
 - Arena zufällig aus den gespeicherten Arenen.
 - Pro Match eine **Instanzkopie** der Arena-Welt (`pvp_m_<match_id>`, Kopie des Templates aus `arenas/<name>`), nach Matchende entladen und **gelöscht**.
 - `max_parallel_matches` konfigurierbar (erwartet 4–6, bei 1 GB messen). Darüber: Spieler bleiben in der Queue.
-- Matchende: Tod/Disconnect = Niederlage, Zeitlimit (Vorschlag 5 min, dann Unentschieden ohne Wertung). Danach zurück in die Lobby.
+- Matchende: Tod/Disconnect = Niederlage, Zeitlimit pro Runde (5 min, dann Unentschieden ohne Wertung). Danach zurück in die Lobby.
 
 ## Bauen: Welt `pvp_build`
 - Creative-Welt `pvp_build` auf dem PvP-Server, Zugang nur über `/pvp build` (Permission `craftcore.build.pvp`, LuckPerms für `builder` und `admin`).
@@ -83,12 +91,12 @@ CREATE TABLE pvp_matches (
 4. DB-Tabelle, Views, Grants-Script, Ingest-Keys.
 5. Lasttest: parallele Matches bei 1 GB messen, `max_parallel_matches` setzen.
 
-## Offene Fragen an Nils
+## Beantwortete Fragen an Nils
 - Nur 1v1 oder später auch 2v2/FFA?
-- Kit: beide Spieler dasselbe (Wahl des Ersten / Zufall) oder jeder sein eigenes?
-- Zeitlimit pro Match und was bei Ablauf (Unentschieden, Sudden Death)?
+- Beantwortet: Bo3-Kit-Reihenfolge wie oben.
+- Beantwortet: f?nf Minuten pro Runde, danach Unentschieden.
 - Belohnungen (Coins/Vault) für Siege? Wenn ja, wie viel, und Schutz gegen Absprachen (Win-Trading)?
 - Ranked/Elo jetzt oder später?
-- Grace bis zum Stoppen (Vorschlag 120 s) ok?
+- Beantwortet: 120 Sekunden.
 - Zuschauer-Modus gewünscht?
-- Wer neben builder/admin darf Arenen/Kits bauen?
+- Beantwortet: nur builder/admin.
