@@ -3,7 +3,7 @@ version: 0.1.1
 main: de.mcstack.craftcore.CraftCore
 api-version: '26.3'
 depend: [Vault]
-softdepend: [LuckPerms]
+softdepend: [LuckPerms, Citizens]
 commands:
   rank:
     description: Rang setzen
@@ -11,7 +11,6 @@ commands:
     permission: craftcore.rank.set
   cc:
     description: CraftCore Administration
-    permission: craftcore.admin
   ccportal:
     description: Portale verwalten
     permission: craftcore.portal.admin
@@ -99,6 +98,8 @@ commands:
     permission: craftcore.minerush.edit
 permissions:
   craftcore.rank.set:
+    default: op
+  craftcore.admin.npc:
     default: op
   craftcore.admin:
     default: op

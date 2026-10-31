@@ -5,12 +5,15 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 class CommandDescriptorTest {
- @Test void playerAliasesAndAdminPermissionsAreRegisteredWithoutOverridingVanilla() {
+ @Test void playerAliasesAndAdminPermissionsAreRegisteredWithoutOverridingVanilla() throws Exception {
   var config=YamlConfiguration.loadConfiguration(new InputStreamReader(getClass().getResourceAsStream("/plugin.yml"), StandardCharsets.UTF_8));
   assertTrue(config.getStringList("commands.shop.aliases").contains("markt"));
   assertTrue(config.getStringList("commands.balance.aliases").containsAll(java.util.List.of("bal","geld")));
   assertTrue(config.getStringList("commands.sidebar.aliases").contains("sb"));
-  assertEquals("craftcore.admin",config.getString("commands.cc.permission"));
+  assertFalse(config.contains("commands.cc.permission"));
+  try (var stream=getClass().getResourceAsStream("/plugin.yml")) {
+   assertTrue(new String(stream.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n").contains("  craftcore.admin.npc:\n    default: op"));
+  }
   assertEquals("craftcore.portal.admin",config.getString("commands.ccportal.permission"));
   assertEquals("craftcore.launch.admin",config.getString("commands.cclaunch.permission"));
   assertFalse(config.contains("commands.scoreboard"));

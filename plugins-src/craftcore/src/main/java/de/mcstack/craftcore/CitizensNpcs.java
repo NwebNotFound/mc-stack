@@ -1,0 +1,143 @@
+package de.mcstack.craftcore;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import net.citizensnpcs.api.CitizensAPI;
+import net.citizensnpcs.api.event.NPCLeftClickEvent;
+import net.citizensnpcs.api.event.NPCRightClickEvent;
+import net.citizensnpcs.api.npc.NPC;
+import net.citizensnpcs.trait.LookClose;
+import net.citizensnpcs.trait.SkinTrait;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.*;
+import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.util.Vector;
+
+final class CitizensNpcs implements Listener {
+  private final CraftCore core;
+  private final UserMenu menu;
+  private final File file;
+  private final YamlConfiguration config;
+  private final Map<String,NpcDefinitions.NpcDef> definitions=new LinkedHashMap<>();
+  private final Map<String,NPC> npcs=new HashMap<>();
+  private boolean active;
+  CitizensNpcs(CraftCore core, UserMenu menu) { this.core=core; this.menu=menu; file=new File(core.getDataFolder(),"npcs.yml"); config=YamlConfiguration.loadConfiguration(file); }
+  void start() {
+    ConfigurationSection section=config.getConfigurationSection("npcs");
+    if(section!=null) for(String key:section.getKeys(false)) try {
+      ConfigurationSection entry=section.getConfigurationSection(key);
+      if(entry==null) continue;
+      definitions.put(key,NpcDefinitions.load(key,entry.getValues(false)));
+    } catch(RuntimeException ex) { core.getLogger().warning("NPC " + key + ": " + ex.getMessage()); }
+    Bukkit.getPluginManager().registerEvents(this,core);
+    activate();
+    Bukkit.getScheduler().runTaskTimer(core,this::actionbars,5L,5L);
+  }
+  void activate() {
+    if(active || !Bukkit.getPluginManager().isPluginEnabled("Citizens")) return;
+    active=true;
+    for(var def:definitions.values()) apply(def);
+    save();
+  }
+  @EventHandler public void citizensReady(net.citizensnpcs.api.event.CitizensEnableEvent e) { activate(); }
+  @EventHandler public void enable(org.bukkit.event.server.PluginEnableEvent e) { if(e.getPlugin().getName().equalsIgnoreCase("Citizens")) activate(); }
+  @EventHandler public void disable(PluginDisableEvent e) { if(e.getPlugin().getName().equalsIgnoreCase("Citizens")) { active=false; npcs.clear(); } }
+  private void apply(NpcDefinitions.NpcDef def) {
+    String path="npcs."+def.key();
+    NPC npc=npcs.get(def.key());
+    if(npc==null && config.contains(path+".citizensId")) {
+      NPC found=CitizensAPI.getNPCRegistry().getById(config.getInt(path+".citizensId"));
+      if(found!=null && found.getUniqueId().toString().equals(config.getString(path+".citizensUuid"))) npc=found;
+    }
+    if(npc==null) npc=CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color(def.displayName()));
+    npcs.put(def.key(),npc);
+    config.set(path+".citizensId",npc.getId()); config.set(path+".citizensUuid",npc.getUniqueId().toString());
+    npc.setName(color(def.displayName()));
+    npc.data().setPersistent(NPC.Metadata.NAMEPLATE_VISIBLE, true);
+    if(!def.skin().isBlank()) npc.getOrAddTrait(SkinTrait.class).setSkinName(def.skin(),true);
+    LookClose look=npc.getOrAddTrait(LookClose.class); look.lookClose(true); look.setRange(8); look.setRealisticLooking(true);
+    Location location=config.getLocation(path+".location");
+    if(!npc.isSpawned() && location!=null && location.getWorld()!=null) npc.spawn(location);
+  }
+  private static String color(String value) { return ChatColor.translateAlternateColorCodes('&',value); }
+  private void save() {
+    for(var def:definitions.values()) for(var entry:NpcDefinitions.save(def).entrySet()) config.set("npcs."+def.key()+"."+entry.getKey(),entry.getValue());
+    try { core.getDataFolder().mkdirs(); config.save(file); } catch(IOException ex) { core.getLogger().severe("NPC-Datei konnte nicht gespeichert werden: "+ex.getMessage()); }
+  }
+  private void actionbars() {
+    if(!active) return;
+    for(Player p:Bukkit.getOnlinePlayers()) {
+      Location eye=p.getEyeLocation(); Vector direction=eye.getDirection(); NpcDefinitions.NpcDef closest=null; double best=Double.POSITIVE_INFINITY;
+      for(var def:definitions.values()) {
+        NPC npc=npcs.get(def.key()); if(npc==null || !npc.isSpawned() || def.message().isEmpty()) continue;
+        Location pos=npc.getEntity().getLocation().add(0,1.0,0); if(!pos.getWorld().equals(eye.getWorld())) continue;
+        double distance=eye.distanceSquared(pos);
+        if(distance<best && NpcDefinitions.inViewAndRange(eye.getX(),eye.getY(),eye.getZ(),direction.getX(),direction.getY(),direction.getZ(),pos.getX(),pos.getY(),pos.getZ())) { closest=def; best=distance; }
+      }
+      if(closest!=null) p.sendActionBar(LegacyComponentSerializer.legacyAmpersand().deserialize(closest.message()));
+    }
+  }
+  @EventHandler public void right(NPCRightClickEvent e) { interact(e.getNPC(),e.getClicker()); }
+  @EventHandler public void left(NPCLeftClickEvent e) { interact(e.getNPC(),e.getClicker()); }
+  private void interact(NPC npc,Player player) {
+    if(!active) return;
+    for(var entry:npcs.entrySet()) if(entry.getValue().equals(npc)) {
+      var def=definitions.get(entry.getKey());
+      switch(def.action()) {
+        case SERVER -> { try { player.sendPluginMessage(core,"BungeeCord",Portals.connectMessage(def.actionArg())); } catch(IOException ex) { core.getLogger().warning("NPC-Verbindung fehlgeschlagen: "+ex.getMessage()); } }
+        case MENU -> { if(def.actionArg().equalsIgnoreCase("bank") || def.actionArg().equalsIgnoreCase("shop") || def.actionArg().equalsIgnoreCase("ah") || def.actionArg().equalsIgnoreCase("stats")) player.performCommand(def.actionArg()); else menu.open(player,def.actionArg().toLowerCase(Locale.ROOT)); }
+        case COMMAND -> player.performCommand(def.actionArg().replace("{player}",player.getName()));
+        case NONE -> { }
+      }
+      return;
+    }
+  }
+  void command(CommandSender sender,String[] args) {
+    if(!sender.hasPermission("craftcore.admin.npc")) { sender.sendMessage("Keine Berechtigung."); return; }
+    if(!active) { sender.sendMessage("Citizens ist nicht aktiv."); return; }
+    if(args.length==0) { sender.sendMessage("/cc npc create|setskin|setmessage|setaction|move|remove|list"); return; }
+    String op=args[0].toLowerCase(Locale.ROOT);
+    if(op.equals("list")) { definitions.values().forEach(d->sender.sendMessage(color(d.displayName())+" - "+d.action().name().toLowerCase(Locale.ROOT)+(d.actionArg().isEmpty()?"":" "+d.actionArg()))); return; }
+    try {
+      if(args.length<2) throw new IllegalArgumentException("Name fehlt");
+      if(op.equals("create")) {
+        if(!(sender instanceof Player player)) throw new IllegalArgumentException("Nur im Spiel");
+        String name=String.join(" ",Arrays.copyOfRange(args,1,args.length)), key=NpcDefinitions.keyFromName(name);
+        if(definitions.containsKey(key) || NpcDefinitions.find(definitions.values(),name).isPresent()) throw new IllegalArgumentException("NPC existiert bereits");
+        var def=new NpcDefinitions.NpcDef(key,name,"","",NpcDefinitions.ActionType.NONE,"");
+        definitions.put(key,def); config.set("npcs."+key+".location",player.getLocation()); apply(def); save(); sender.sendMessage("NPC erstellt."); return;
+      }
+      NpcDefinitions.NpcDef def=null; int nameEnd=1;
+      int limit=(op.equals("move") || op.equals("remove")) ? args.length : args.length-1;
+      for(int end=limit;end>=2;end--) { var match=NpcDefinitions.find(definitions.values(),String.join(" ",Arrays.copyOfRange(args,1,end))); if(match.isPresent()) { def=match.get(); nameEnd=end; break; } }
+      if(def==null) throw new IllegalArgumentException("NPC nicht gefunden");
+      String path="npcs."+def.key();
+      if(op.equals("remove")) { if(args.length!=nameEnd) throw new IllegalArgumentException("Ungueltige Argumente"); NPC npc=npcs.remove(def.key()); if(npc!=null) npc.destroy(); definitions.remove(def.key()); config.set(path,null); save(); sender.sendMessage("NPC entfernt."); return; }
+      if(op.equals("move")) { if(args.length!=nameEnd || !(sender instanceof Player player)) throw new IllegalArgumentException("Nur im Spiel: /cc npc move <name>"); config.set(path+".location",player.getLocation()); NPC npc=npcs.get(def.key()); if(npc.isSpawned()) npc.teleport(player.getLocation(),org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN); else npc.spawn(player.getLocation()); save(); sender.sendMessage("NPC verschoben."); return; }
+      if(args.length<=nameEnd) throw new IllegalArgumentException("Wert fehlt");
+      String value=String.join(" ",Arrays.copyOfRange(args,nameEnd,args.length));
+      switch(op) {
+        case "setskin" -> { if(args.length!=nameEnd+1) throw new IllegalArgumentException("Ein Skinname erwartet"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),value,def.message(),def.action(),def.actionArg()); }
+        case "setmessage" -> def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),value,def.action(),def.actionArg());
+        case "setaction" -> { var action=NpcDefinitions.parseAction(value); if(action.type()==NpcDefinitions.ActionType.MENU && !Set.of("menu","bank","shop","ah","stats","pay","trade","team","claim","home","vip").contains(action.arg().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Unbekanntes Menue"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),def.message(),action.type(),action.arg()); }
+        default -> throw new IllegalArgumentException("Unbekannter Unterbefehl");
+      }
+      definitions.put(def.key(),def); apply(def); save(); sender.sendMessage("NPC aktualisiert.");
+    } catch(IllegalArgumentException ex) { sender.sendMessage(ex.getMessage()); }
+  }
+  List<String> complete(CommandSender sender,String[] args) {
+    if(!sender.hasPermission("craftcore.admin.npc")) return List.of();
+    if(args.length==1) return UserMenu.complete(args[0],"create","setskin","setmessage","setaction","move","remove","list");
+    if(args.length==2 && Set.of("setskin","setmessage","setaction","move","remove").contains(args[0].toLowerCase(Locale.ROOT))) return definitions.keySet().stream().filter(k->k.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
+    if(args.length==3 && args[0].equalsIgnoreCase("setaction")) return UserMenu.complete(args[2],"server","menu","command","none");
+    return List.of();
+  }
+}
