@@ -14,14 +14,19 @@ public final class VipIdleStop implements Listener {
     public VipIdleStop(JavaPlugin plugin) {
         this.plugin=plugin;
         long minutes=10;
-        File config=new File("config/vipworlds.yml");
-        try { YamlConfiguration yaml=new YamlConfiguration(); yaml.load(config); minutes=positive(yaml.getString("idle-minutes"),minutes); }
+        long grace=120;
+        File config=new File(System.getenv().getOrDefault("VIP_CONFIG","config/vipworlds.yml"));
+        try { YamlConfiguration yaml=new YamlConfiguration(); yaml.load(config); minutes=positive(yaml.getString("idle-minutes"),minutes); grace=minimumGrace(yaml.getString("join-grace-seconds"),grace); }
         catch (Exception ignored) { }
         minutes=positive(System.getenv("VIP_IDLE_MINUTES"),minutes);
-        timer=new VipIdleTimer(Clock.systemUTC(),minutes*60_000L);
+        timer=new VipIdleTimer(Clock.systemUTC(),minutes*60_000L,grace*1_000L);
     }
     private static long positive(String value,long fallback) {
         try { long n=Long.parseLong(value); return n>0 && n<=Long.MAX_VALUE/60_000 ? n : fallback; }
+        catch (RuntimeException ex) { return fallback; }
+    }
+    private static long minimumGrace(String value,long fallback) {
+        try { long n=Long.parseLong(value); return n<=Long.MAX_VALUE/1_000 ? Math.max(30,n) : fallback; }
         catch (RuntimeException ex) { return fallback; }
     }
     public void start() {

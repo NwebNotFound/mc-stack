@@ -41,6 +41,16 @@ public final class LobbyVip implements CommandExecutor {
         if (action.equals("list")) { var worlds=store.list(owner); message(owner,worlds.isEmpty() ? "Du hast noch keine VIP-Welten." : "Deine VIP-Welten: "+String.join(", ",worlds.stream().map(w->w.name()+" ("+w.status()+")").toList())); return; }
         var found=store.find(owner,args[1]); if (found.isEmpty()) { message(owner,"Deine VIP-Welt wurde nicht gefunden."); return; }
         var world=found.get();
+        if (Set.of("start","stop","join").contains(action)) {
+            var decision=VipReconcile.decide(world.status(),world.slot(),world.id(),host.slots());
+            switch (decision.kind()) {
+                case HOST_UNAVAILABLE -> { message(owner,"VIP-Host nicht erreichbar, bitte spaeter erneut versuchen"); return; }
+                case STOPPED -> { store.idleStopped(world.id()); world=new VipStore.World(world.id(),world.name(),"stopped",null); }
+                case RUNNING -> { if (!"running".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"running",decision.slot()); world=new VipStore.World(world.id(),world.name(),"running",decision.slot()); }
+                case STARTING -> { if (!"starting".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"starting",decision.slot()); world=new VipStore.World(world.id(),world.name(),"starting",decision.slot()); }
+                case UNCHANGED -> { }
+            }
+        }
         switch(action) {
             case "rename" -> { store.rename(owner,world.id(),args[2]); message(owner,"VIP-Welt umbenannt."); }
             case "join" -> { if (VipRules.canJoin(world.status(),world.slot())) connect(owner,world.slot()); else message(owner,"Starte die VIP-Welt zuerst."); }
