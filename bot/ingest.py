@@ -527,7 +527,7 @@ PARKOUR_COURSE_MAX = 32  # Website-Limit fuer Kurs-IDs
 import parkour
 
 
-def build_parkour(cols, rows, meta=None):
+def build_parkour(cols, rows, meta=None, hidden=None):
     """Bestzeit pro Spieler und Kurs aus parkour_times: [{course, mc_uuid, mc_name, time_ms, set_at}] (set_at ISO-UTC)."""
     best = {}
     for row in rows or ():
@@ -535,7 +535,7 @@ def build_parkour(cols, rows, meta=None):
         course = parkour.slug(r.get("course"))
         uuid = str(r.get("uuid") or "").strip().lower()
         ms = _num(r.get("best_ms"))
-        if not course or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
+        if not course or course in (hidden or ()) or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
             continue
         v = r.get("updated_at")
         try:
@@ -713,7 +713,8 @@ async def push_once(bot, session=None):
     pk = await asyncio.to_thread(fetch_rows, "parkour_times")
     if pk:
         pc = await asyncio.to_thread(fetch_rows, "v_parkour_courses")
-        payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None)
+        payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None,
+                                           hidden=parkour.hidden_slugs(*pc) if pc else None)
     h = payload_hash(payload)
     own = session is None
     session = session or aiohttp.ClientSession()

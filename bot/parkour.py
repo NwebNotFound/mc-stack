@@ -56,6 +56,22 @@ def course_meta(cols, rows):
     return out
 
 
+def hidden_slugs(cols, rows):
+    """v_parkour_courses.hidden -> Set der versteckten Slugs (Spalte optional)."""
+    out = set()
+    for row in rows or ():
+        r = dict(zip(cols, row))
+        h = r.get("hidden")
+        if h not in (None, 0, "0", False, b"\x00", "") and slug(r.get("slug")):
+            out.add(slug(r.get("slug")))
+    return out
+
+
+def drop_hidden(raw, hidden):
+    """raw-Tupel (Kurs an Index 4) ohne versteckte Kurse."""
+    return [r for r in raw if slug(r[4] if len(r) > 4 else None) not in hidden] if hidden else raw
+
+
 def apply_meta(raw, meta):
     """Name/Icon aus v_parkour_courses in raw-Tupel (Index 5/6) einsetzen; View gewinnt."""
     if not meta:
