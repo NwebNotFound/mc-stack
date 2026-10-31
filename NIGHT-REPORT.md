@@ -151,3 +151,9 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - Parkour Quelle `1779a79b1144e736a470fc62b607c2fb329c5cb4`, auf `58a2963` rebast und mit Lease gepusht: Docker clean build gruen, 22 Tests; Build-JAR SHA256 `85BF4E6DC8ECF144322175262551BAF2FCB01BDFEFE8A653FB177E1A77391D56`.
 - Bestehende Lobby-Update-JARs: CraftCore SHA256 `4EECCF415BC3BA7807294AE56738DB0C0399873C92B58DA41E9CA0BDF6B4A5D6`, Quell-Commit unbekannt; ParkourBridge SHA256 `5FA38DFDD9E63F12D501D5CB09BE0967CFCE51D890CC0342FE9FD0218A3FD5D9`, Quelle laut vorherigem Report `694f24c`.
 - Keine der neuen JARs gestagt; kein Restart oder Merge. Survival-Update-JAR fehlt.
+
+## Parkour-Kursmetadaten 31.10.2026 — Teilstand
+- Code `7cff9b5` auf `parkour/multi-course-boards` gepusht; `parkour_courses(slug, display_name, icon)`, View `v_parkour_courses(slug, course_name, course_icon)`; Cave Rush und SELECT-Grant-Migration ergaenzt.
+- Admin: `/cc parkour rename <id> <Name...>` und `/cc parkour icon <id> [material]` mit Completion; Hologramme und Ingest verwenden Kursnamen.
+- Isolierter Docker-Gradle-Test: 11 SQL-/H2-Tests erfolgreich. Voller Build FEHLER vor Tests: Serverbibliotheken fehlen; Commands und Ingest nicht getestet, MariaDB nicht verifiziert.
+- Buildversuch: `docker run --rm -v "${PWD}:/workspace" -v "C:\Users\nilsw\mc-stack-pr21\data\lobby:/workspace/data/lobby:ro" -w /workspace/plugins-src/parkour-bridge gradle:9-jdk gradle clean build --no-daemon`. Kein Restart, Merge oder Staging nach `data`.
