@@ -140,7 +140,7 @@ vip_world_settings(world_id, key, value)
 6. Lobby: `/vw` + GUI, Queue mit Priorität.
 7. Addons: Allowlist + Mount.
 8. Backups, Soft-Delete, Restore, Admin-Befehle.
-9. Panel-API (Abschnitt 13) über Tunnel + Access, danach Clouds Panel.
+9. Panel-API (Abschnitt 13) – auf Eis, nur nach Nils' Ja (Frage 16).
 10. Test mit Konsolen-Debug, danach echter Test durch Nils (wie PvP).
 11. STATUS.md.
 
@@ -158,7 +158,7 @@ vip_world_settings(world_id, key, value)
 ## 12. Offene Fragen an Nils
 
 Zu jeder Frage steht der Vorschlag. Nils muss nur antworten, wo er anders entscheiden will.
-**Echte Entscheidung (bitte beantworten): Nr. 11.** Nr. 1 ist entschieden.
+**Echte Entscheidungen (bitte beantworten): Nr. 11 und Nr. 16.** Nr. 1 ist entschieden.
 
 1. ~~[Entscheidung]~~ **Entschieden (Nils, 31.10.):** `.wslconfig` `memory=20GB`, ~12 GB bleiben bei Windows; Survival hat festes Budget mit Vorrang.
 2. Maximal gleichzeitig laufende Welten und RAM pro Welt? → Festgelegt: Standard 2 Welten à 1,5 GB, konfigurierbar bis 3; Start nur, wenn das Budget reicht.
@@ -175,8 +175,11 @@ Zu jeder Frage steht der Vorschlag. Nils muss nur antworten, wo er anders entsch
 13. Werden VIP/MVP verkauft? → Vorschlag: vorerst nicht. Falls doch: nur kosmetische Vorteile und eigene Welten, EULA vorher prüfen.
 14. Welt-Download für Spieler? → Vorschlag: vorerst nein, erst später als Admin-Export.
 15. Mehr RAM für pvp? → Vorschlag: ja, `mem_limit` auf 1.25g bei gleichem Heap (eigene PR).
+16. **[Entscheidung]** Soll es überhaupt ein Website-Panel (Abschnitt 13) geben? → Vorschlag: vorerst nein, erst nach Nils' Ja bauen, weil es eine neue Angriffsfläche ist.
 
 ## 13. API für Clouds Website-Panel
+
+> **Status: auf Eis.** Offene Frage an Nils (Nr. 16): Will er überhaupt ein Website-Panel? Erst nach seinem Ja bauen, weil es eine neue Angriffsfläche ist (öffentlich erreichbarer Einstieg über Tunnel + Access). Bis dahin nur `/vw` im Spiel.
 
 Das Panel (Cloudflare Worker) nutzt dieselben Funktionen wie `/vw`. Die Regeln (Slots, Rechte, RAM, Queue) prüft immer der Host-Service selbst, nie der Worker.
 
