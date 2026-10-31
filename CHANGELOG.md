@@ -2,6 +2,7 @@
 
 ## Für Spieler
 
+- In der Lobby stehen jetzt NPCs. Schau sie aus der Nähe an, dann siehst du, was sie machen; per Klick bringen sie dich zum Beispiel auf einen anderen Server oder öffnen ein Menü.
 - Es gibt jetzt Ränge: Spieler, VIP, MVP, Builder und Admin. In der Lobby siehst du den Rang farbig im Chat, in der Tabliste und über dem Kopf.
 - In Survival zeigt dein Name die Farbe deines Teams. Team-Owner stellen sie mit `/team color <farbe>` ein (z. B. blau, gelb, lila).
 - Die AFK-Markierung steht jetzt hinter deinem Namen und überschreibt den Rang nicht mehr.
@@ -11,6 +12,12 @@
 - Verkaufen ist vorerst ausgeschaltet. Wir sagen Bescheid, sobald es wieder geht.
 
 ## Admin
+
+### PR #37, #38
+
+- Citizens 2.0.44-b4268 (CitizensDev Jenkins, SHA256 `908E5C548AEBE22CC2D8CA88E0068CCC781CE90509A28758AB6F8DC450256D67`) nur auf der Lobby.
+- `/cc npc create <name> | setskin <name> <skin> | setmessage <name> <text> | setaction <name> <server|menu|command|none> [arg] | move <name> | remove <name> | list`, Permission `craftcore.admin.npc`. NPCs in `plugins/CraftCore/npcs.yml`, Namen exakt, keine IDs sichtbar.
+- CraftCore führt beim Start keine GRANTs mehr aus, wenn das Recht fehlt; Grants für `creepy_ro` stehen in `scripts/creepy-ro-grants.sql` (als craft_admin ausführen).
 
 ### PR #34
 
