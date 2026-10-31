@@ -42,6 +42,11 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private DeathEvents deathEvents;
   final Set<org.bukkit.inventory.Inventory> npcPreviews = Collections.newSetFromMap(new WeakHashMap<>());
   private Npcs npcs;
+  private CitizensNpcs citizensNpcs;
+  private void startCitizensNpcs() {
+    if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
+  }
+  @EventHandler public void citizensEnabled(org.bukkit.event.server.PluginEnableEvent event) { if (event.getPlugin().getName().equalsIgnoreCase("Citizens")) startCitizensNpcs(); }
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
   interface Work<T> { T run(Connection c) throws Exception; }
   Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
@@ -118,6 +123,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Auction(this).start();
       Deliveries.migrate(this);
       npcs=new Npcs(this); npcs.start();
+      startCitizensNpcs();
       new MineRushLootEditor(this).start();
       trade=new Trade(this); trade.start();
       economy=(Economy)Proxy.newProxyInstance(getClassLoader(),new Class[]{Economy.class},(proxy,method,args)->vault(method.getName(),args));
@@ -164,8 +170,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
   @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
     if(command.getName().equals("sidebar")) return args.length==1 ? UserMenu.complete(args[0],"an","aus") : List.of();
     if(command.getName().equals("cc")) {
-      if(!sender.hasPermission("craftcore.admin")) return List.of();
-      if(args.length==1) return UserMenu.complete(args[0],"portal","launch","deaths");
+      if(args.length>1 && args[0].equalsIgnoreCase("npc")) return citizensNpcs == null ? List.of() : citizensNpcs.complete(sender, Arrays.copyOfRange(args,1,args.length));
+      if(!sender.hasPermission("craftcore.admin")) return args.length==1 && sender.hasPermission("craftcore.admin.npc") ? UserMenu.complete(args[0],"npc") : List.of();
+      if(args.length==1) return sender.hasPermission("craftcore.admin.npc") ? UserMenu.complete(args[0],"portal","launch","deaths","npc") : UserMenu.complete(args[0],"portal","launch","deaths");
       if(args.length==2 && args[0].equalsIgnoreCase("deaths")) return UserMenu.complete(args[1],"backfill");
       String[] rest=Arrays.copyOfRange(args,1,args.length);
       if(args[0].equalsIgnoreCase("portal")) return portals.onTabComplete(sender,command,alias,rest);
@@ -250,6 +257,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
     if(command.getName().equals("rank")) return rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
+      if(args.length>0 && args[0].equalsIgnoreCase("npc")) { if (!sender.hasPermission("craftcore.admin.npc")) sender.sendMessage("Keine Berechtigung."); else if (citizensNpcs == null) sender.sendMessage("Citizens-NPCs sind nicht verfuegbar."); else citizensNpcs.command(sender,Arrays.copyOfRange(args,1,args.length)); return true; }
       if(!sender.hasPermission("craftcore.admin")) return true;
       if(args.length>0) {
         String[] rest=Arrays.copyOfRange(args,1,args.length);

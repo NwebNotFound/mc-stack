@@ -2,6 +2,7 @@ plugins { id 'java' }
 java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
 repositories {
     mavenCentral()
+    maven { url = 'https://maven.citizensnpcs.co/repo' }
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
 }
 def serverLibs = fileTree(dir: '../../data/survival/libraries', include: '**/*.jar')
@@ -16,6 +17,8 @@ tasks.register('verifyVaultApi') {
 }
 tasks.withType(JavaCompile).configureEach { dependsOn tasks.named('verifyVaultApi') }
 dependencies {
+    compileOnly('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }
+    testImplementation('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }
     compileOnly 'net.luckperms:api:5.4'
     testImplementation 'net.luckperms:api:5.4'
     if (!serverLibs.files.isEmpty()) {
