@@ -684,6 +684,14 @@ Der Auftrag ist unvollstaendig: weder alle 53 Preise noch alle Fallback-Artikel 
 
 Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide Testdatenbankcontainer gestoppt. Build SHA256 4B7BDDF2708CCDC60E0F95B3CEF478A442C67A2BC8CD253A45B28028F3ECA571; laufende Lobby und Survival jeweils EDB2B80EDDAE3B3C1ADCEEBC7AAE132B2B751CD415AFB7A2178147D5700C1D8B. Kein Backup, Deploy oder Neustart, da der Arbitrageschutz nicht nachgewiesen ist. Lobby, Survival, Velocity und Datenbank healthy; Changelog JSON gueltig. bot/ nicht bearbeitet, keine Vorlagen-config.yml angelegt.
 
+## 2026-10-31 16:40 – DB-Admin-Zugang neu
+- MariaDB-Root-Passwort neu gesetzt (Init-File-Neustart, Init-File gelöscht); steht nur in .env (MARIADB_ROOT_PASSWORD / MARIADB_ROOT_PASSWORD_ADMIN).
+- Neuer Admin craft_admin@'%' (ALL ON *.* WITH GRANT OPTION), Zugang in .env (MARIADB_ADMIN_USER/MARIADB_ADMIN_PASSWORD).
+- creepy_ro rotiert (bot/.env CRAFTCORE_DB_PASSWORD); SELECT auf v_economy_daily, v_auctions, v_auction_bids ergänzt.
+- Hash-Leak aus Log-Zeile 637 damit erledigt (alter Hash ungültig).
+- Backup: backups\pre-rootreset-20261031-163927.sql + .env/bot-.env-Kopien.
+
+
 ## 2026-10-31 17:35 – Ränge deployt (PR #34, Merge e1768c7)
 - Backup: backups\daily-20261031-173253-130 (Welten + craftcore.sql); alte JARs + LuckPerms-Dump: backups\ranks-deploy-20261031-173245 (luckperms.sql).
 - CraftCore SHA256 6E2EB710BC91D27A05681E3915F238B26EE7B8BD099611909CA4C7E7A758C5D7 auf Lobby + Survival; VipWorldsAFK SHA256 8703E16DDC6D06134E6F4DA7EB0F04AF848949E55147A58436AF991E68F355C6 auf Survival (Lobby hat kein AFK-Plugin). Restart, beide healthy, 0 Spieler online.
@@ -705,3 +713,11 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - PvP-Host-Dienst: Bind 127.0.0.1:25599, von Velocity via host.docker.internal erreichbar (Docker Desktop leitet auf Host-Loopback) -> keine vEthernet-Bindung, keine Firewallregel. Token nur in .env (PVP_HOST_TOKEN). Start per Aufgabenplanung "mc-stack PvP host service" bei Anmeldung (tools/pvp-host-service/run.ps1 liest PVP_HOST_* aus .env).
 - Tests aus Velocity: status 200 sleeping; start 200 -> online, TCP pvp:25565 ok; stop 200 -> sleeping; falscher Token 401, unbekannter Pfad 404. mc-stack-pvp-1 ist wieder gestoppt (Exited 0).
 - Offen: CraftCore lädt auf pvp nicht (fehlende Abhängigkeit Vault, keine DB-Konfig) -> config/pvp-plugins enthält vorerst kein CraftCore. Arena-Templates ohne Block-Entities. pvp nutzt config/lobby-paper. run.ps1 kommt mit PR feat/pvp-craftcore ins Repo. Stopp während des Bootens lief einmal in einen curl-Timeout (Wiederholung ok).
+
+## 2026-10-31 18:45 – PvP-CraftCore deployt (PR #42, Merge 87b090d)
+- Backup: backups\pvp42-deploy-20261031-184249 (craftcore.sql, .env-Kopie, vorherige pvp-Jars). 0 Spieler online. Lobby/Survival/Velocity nicht neu gestartet (nicht nötig).
+- tools/pvp-db-user.ps1 als craft_admin: CRAFTCORE_PVP_DB_PASSWORD nur in .env erzeugt; pvp_matches/pvp_rounds angelegt. SHOW GRANTS craft_pvp: USAGE; SELECT/INSERT/UPDATE/DELETE auf pvp_matches, pvp_rounds; SELECT auf v_player_rank. SELECT auf accounts -> ERROR 1142 (verweigert).
+- install-task.ps1 ausgeführt: Aufgabe "mc-stack PvP host service" = Repo-Version (run.ps1, bei Anmeldung, Neustart 3x/1 min), Dienst läuft (127.0.0.1:25599, ohne Token 401).
+- pvp mit Haupt-compose neu angelegt; Start/Stop über Host-Dienst aus Velocity: sleeping -> online -> sleeping. CraftCore 0.1.1 enabled, "PvP-Profil: Economy-Module deaktiviert", CRAFTCORE_DB_USER=craft_pvp; TCP pvp:25565 aus Velocity ok; craft_pvp Insert/Select/Delete auf pvp_matches ok, v_player_rank lesbar (5 Zeilen). mc-stack-pvp-1 wieder gestoppt.
+- Hinweis: Wenn der Host von creepy_ro eingeschränkt wird (statt '%'), craft_pvp genauso einschränken (scripts/pvp-db-user.sql anpassen).
+- Offen: Arena-Templates ohne Block-Entities; pvp nutzt config/lobby-paper. Host-Dienst-Aufgabe startet bei Anmeldung, nicht beim Systemstart; auf dem späteren Mini-PC muss sie beim Systemstart laufen (Trigger AtStartup, ohne Anmeldung).
