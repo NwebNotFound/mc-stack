@@ -1,0 +1,41 @@
+# Maximal gleichzeitig laufende Welten; hartes Maximum: 3.
+max-running: 2
+slots:
+  - vipworld-1
+  - vipworld-2
+  # - vipworld-3 # Optionaler dritter Slot
+
+# Survival ist fest reserviert und hat Vorrang vor VIP-Welten.
+ram:
+  total-mb: 20480
+  reserved-mb: 4096 # Docker/VM
+  survival-reserved-mb: 5120
+  fixed-services-mb:
+    lobby: 2048
+    velocity: 768
+    db: 768
+    bot+playit: 256
+    pvp: 1280
+  per-world-mb: 1536
+  heap-mb: 1280
+
+idle-minutes: 10
+join-grace-seconds: 120
+names:
+  min: 3
+  max: 24
+  pattern: '[A-Za-z0-9_-]'
+types: [normal, flat, void]
+
+# Werte aus LuckPerms-Meta; ohne Meta jeweils 0.
+perks:
+  slots:
+    meta-key: vipworlds.slots
+    default: 0
+  queue-priority:
+    meta-key: vipworlds.queue-priority
+    default: 0
+
+# TODO: Hook fuer Rangablauf; Entscheidung zu Frage 11 steht noch aus.
+expiry:
+  # Noch keine Aktion festgelegt.
