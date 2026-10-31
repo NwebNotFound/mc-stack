@@ -49,7 +49,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   @EventHandler public void citizensEnabled(org.bukkit.event.server.PluginEnableEvent event) { if (event.getPlugin().getName().equalsIgnoreCase("Citizens")) startCitizensNpcs(); }
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
   interface Work<T> { T run(Connection c) throws Exception; }
-  Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
+  Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", ServerProfile.dbUser(System.getenv()), password); }
   <T> T tx(Work<T> work) throws Exception { return tx(null, work); }
   <T> T tx(String idemKey, Work<T> work) throws Exception {
     try (Connection c = connection()) {
@@ -68,7 +68,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private boolean transfer(UUID from,UUID to,long amount) throws Exception { return tx(c->EconomyStore.transfer(c,from.toString(),to.toString(),amount)); }
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
-    if ("pvp".equalsIgnoreCase(server)) { new de.mcstack.craftcore.pvp.PvpModule(this).start(); return; }
+    if (!ServerProfile.economyEnabled(server)) { getLogger().info("PvP-Profil: Economy-Module deaktiviert"); new de.mcstack.craftcore.pvp.PvpModule(this).start(); return; }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
     try {
       Class.forName("org.mariadb.jdbc.Driver");

@@ -100,3 +100,9 @@ CREATE TABLE pvp_matches (
 - Beantwortet: 120 Sekunden.
 - Zuschauer-Modus gewünscht?
 - Beantwortet: nur builder/admin.
+
+## DB-Zugriff (Luna)
+- CraftCore auf pvp nutzt den eigenen DB-User `craft_pvp` (`scripts/pvp-db-user.sql`, angelegt via `tools/pvp-db-user.ps1` als craft_admin, Passwort nur in .env): DML nur auf `pvp_matches`/`pvp_rounds`, `SELECT` auf `v_player_rank`, kein Zugriff auf Economy/Inventare.
+- CraftCore laedt auf pvp keine Economy-Module (`ServerProfile.economyEnabled`, Test `ServerProfileTest`).
+- LuckPerms auf pvp nutzt wie die anderen Server die gemeinsame LuckPerms-DB (eigener LP-User, nur DB `luckperms`) mit SQL-Messaging, damit Raenge identisch sind.
+- Details zu Deploy und Host-Dienst-Autostart: `DEPLOY.md`.

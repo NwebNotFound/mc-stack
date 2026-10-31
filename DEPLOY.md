@@ -1,0 +1,12 @@
+# Deploy-Hinweise
+
+## PvP-Server (`pvp`, Compose-Profil `pvp`)
+1. Plugins (nicht im Repo, `*.jar` ist ignoriert): `craftcore.jar` (Build mit `gradle:9-jdk`), `Vault-1.7.3.jar` und `LuckPerms-Bukkit-5.5.71.jar` nach `config/pvp-plugins/` kopieren (gleiche Jars wie in `config/lobby-plugins/`). Beim Start kopiert itzg sie per `COPY_PLUGINS_SRC` nach `data/pvp/plugins`.
+2. DB-User: `powershell -ExecutionPolicy Bypass -File tools\pvp-db-user.ps1`. Legt `CRAFTCORE_PVP_DB_PASSWORD` in `.env` an (falls fehlend) und fuehrt `scripts/pvp-db-user.sql` als `craft_admin` aus: `craft_pvp` bekommt nur DML auf `pvp_matches`/`pvp_rounds` und `SELECT` auf `v_player_rank`, keinen Zugriff auf Economy-/Inventartabellen.
+3. CraftCore auf pvp (`CRAFTCORE_SERVER=pvp`) laedt nur das PvP-Modul, keine Economy-/Markt-/Inventar-Module (`ServerProfile.economyEnabled`). DB-Login `CRAFTCORE_DB_USER=craft_pvp`; das craftcore-Passwort wird im pvp-Container ueberschrieben.
+4. LuckPerms auf pvp nutzt wie Lobby/Survival/Velocity die gemeinsame LuckPerms-DB (`luckperms`, User `LUCKPERMS_DB_USER`, SQL-Messaging), damit Raenge/Permissions (`craftcore.build.pvp` fuer builder/admin) identisch sind. Dieser User hat nur Rechte auf die `luckperms`-DB.
+5. Host-Dienst (Start/Stop/Status nur fuer `mc-stack-pvp-1`):
+   - `.env`: `PVP_HOST_TOKEN` (zufaellig, 32 Byte hex), `PVP_HOST_PORT=25599`; `PVP_HOST_BIND` leer lassen (= 127.0.0.1). Velocity erreicht ihn ueber `host.docker.internal:25599` (Docker Desktop leitet auf Host-Loopback); keine Firewallregel, nie 0.0.0.0.
+   - Autostart nach PC-Neustart: einmalig `powershell -ExecutionPolicy Bypass -File tools\pvp-host-service\install-task.ps1`. Registriert die Aufgabe "mc-stack PvP host service" (bei Anmeldung, Neustart bei Fehler 3x/1 min, ohne Zeitlimit), die `tools\pvp-host-service\run.ps1` startet.
+   - Container einmal anlegen: `docker compose --profile pvp create pvp` (der Dienst macht nur `docker start/stop`).
+   - Test aus Velocity: `GET /status` mit Header `X-PvP-Token` -> `sleeping`/`online`.

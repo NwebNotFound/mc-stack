@@ -698,3 +698,10 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - Wichtig: Plugins kommen beim Start aus `config/lobby-plugins` bzw. `config/survival-plugins` (COPY_PLUGINS_SRC) und überschreiben `data/*/plugins`. Jars dort ablegen.
 - `scripts/creepy-ro-grants.sql` als craft_admin ausgeführt. Log: keine GRANT-Warnungen mehr, nur die INFO-Zeile. creepy_ro liest `v_player_rank`, `v_economy_daily`, `v_player_balance`.
 - Citizens geladen (0 NPCs). `/cc npc list` per Konsole ok; `create` geht nur im Spiel („Nur im Spiel“), Ingame-Test der NPCs offen.
+
+## 2026-10-31 18:35 – PvP Schritt 1+2 deployt (PR #41, Merge 8fe0fa8)
+- Backup: backups\daily-20261031-182418-959 (Welten + craftcore.sql, COMPLETE); alte JARs + velocity.toml: backups\pvp-deploy-20261031-182418. 0 Spieler online vor Restart.
+- CraftCore SHA256 AC16183422EFE5D8FCE5690D52C9B18DA2177032EBD94525C6D370E160B78D88 (gradle:9-jdk, BUILD SUCCESSFUL) auf Lobby + Survival; Lobby, Survival, Velocity neu gestartet, alle healthy.
+- PvP-Host-Dienst: Bind 127.0.0.1:25599, von Velocity via host.docker.internal erreichbar (Docker Desktop leitet auf Host-Loopback) -> keine vEthernet-Bindung, keine Firewallregel. Token nur in .env (PVP_HOST_TOKEN). Start per Aufgabenplanung "mc-stack PvP host service" bei Anmeldung (tools/pvp-host-service/run.ps1 liest PVP_HOST_* aus .env).
+- Tests aus Velocity: status 200 sleeping; start 200 -> online, TCP pvp:25565 ok; stop 200 -> sleeping; falscher Token 401, unbekannter Pfad 404. mc-stack-pvp-1 ist wieder gestoppt (Exited 0).
+- Offen: CraftCore lädt auf pvp nicht (fehlende Abhängigkeit Vault, keine DB-Konfig) -> config/pvp-plugins enthält vorerst kein CraftCore. Arena-Templates ohne Block-Entities. pvp nutzt config/lobby-paper. run.ps1 kommt mit PR feat/pvp-craftcore ins Repo. Stopp während des Bootens lief einmal in einen curl-Timeout (Wiederholung ok).
