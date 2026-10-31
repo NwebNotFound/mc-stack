@@ -41,15 +41,16 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private Npcs npcs;
   private final Map<UUID, Scoreboard> sidebars = new HashMap<>();
   interface Work<T> { T run(Connection c) throws Exception; }
-  private Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
-  <T> T tx(Work<T> work) throws Exception {
+  Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", password); }
+  <T> T tx(Work<T> work) throws Exception { return tx(null, work); }
+  <T> T tx(String idemKey, Work<T> work) throws Exception {
     try (Connection c = connection()) {
       try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT GET_LOCK('craftcore-write', 5)")) { if (!r.next() || r.getInt(1)!=1) throw new SQLException("DB lock timeout"); }
-      try { c.setAutoCommit(false); T result=work.run(c); c.commit(); return result; }
-      catch (Exception e) { c.rollback(); throw e; }
+      try { return SellTransaction.run(c, idemKey, work); }
       finally { try (Statement s=c.createStatement()) { s.execute("SELECT RELEASE_LOCK('craftcore-write')"); } }
     }
   }
+  SellTransaction.CommitStatus checkCommitStatus(String idemKey, Connection original, java.time.Duration timeout) { return SellTransaction.checkCommitStatus(idemKey, original, timeout, this::connection); }
   void exec(Connection c,String sql,Object... args) throws SQLException { try (PreparedStatement s=c.prepareStatement(sql)) { for(int i=0;i<args.length;i++) s.setObject(i+1,args[i]); s.executeUpdate(); } }
   String one(Connection c,String sql,Object... args) throws SQLException { try (PreparedStatement s=c.prepareStatement(sql)) { for(int i=0;i<args.length;i++) s.setObject(i+1,args[i]); try(ResultSet r=s.executeQuery()) { return r.next()?r.getString(1):null; } } }
   private void account(Connection c,UUID id) throws SQLException { exec(c,"INSERT IGNORE INTO accounts (uuid,balance) VALUES (?,0)",id.toString()); }
@@ -67,6 +68,10 @@ public final class CraftCore extends JavaPlugin implements Listener {
         s.execute("CREATE TABLE IF NOT EXISTS accounts (uuid CHAR(36) PRIMARY KEY, balance BIGINT NOT NULL DEFAULT 0)");
         s.execute("CREATE TABLE IF NOT EXISTS teams (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(16) NOT NULL UNIQUE)");
         s.execute("CREATE TABLE IF NOT EXISTS members (uuid CHAR(36) PRIMARY KEY, team_id BIGINT NOT NULL, role VARCHAR(8) NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE)");
+        s.execute(SellTransaction.DDL);
+        s.execute(SellTransaction.PENDING_DDL);
+        s.execute(SellTransaction.PENDING_MIGRATION);
+        s.execute(SellTransaction.STATUS_MIGRATION);
         InviteStore.prepareSchema(c);
         SidebarPreference.prepare(c);
       }
@@ -204,6 +209,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
     p.setScoreboard(board);
     return board;
   }
+  void sellBalance(UUID id,long cp) { Scoreboard board=sidebars.get(id); if(board!=null) setLine(board,2,"CP: ",Money.format(cp),NamedTextColor.GREEN); }
   private void sidebar(Player p) {
     try {
       if (!tx(c->SidebarPreference.enabled(c,p.getUniqueId().toString()))) return;
@@ -211,7 +217,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       long cp=balance(p.getUniqueId());
       Scoreboard board=sidebars.computeIfAbsent(p.getUniqueId(),id->createSidebar(p));
       setLine(board,1,"Server: ",server,NamedTextColor.AQUA);
-      setLine(board,2,"CP: ",String.format(Locale.GERMANY,"%,d CP",cp/100),NamedTextColor.GREEN);
+      setLine(board,2,"CP: ",Money.format(cp),NamedTextColor.GREEN);
       setLine(board,3,"Online: ",Integer.toString(Bukkit.getOnlinePlayers().size()),NamedTextColor.WHITE);
       setLine(board,4,"Team: ",team==null?"-":team,NamedTextColor.YELLOW);
     } catch(Exception e) { getLogger().warning("Sidebar: "+e.getMessage()); }

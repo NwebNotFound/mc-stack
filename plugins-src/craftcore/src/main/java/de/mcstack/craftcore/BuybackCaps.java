@@ -28,7 +28,9 @@ final class BuybackCaps {
   }
   /** Reserviert ein Stueck im Tageskontingent; false = Kontingent erschoepft. Ohne Deckel immer true. */
   static boolean reserve(Connection c, Configuration cfg, String owner, Material m, String day) throws SQLException {
-    int limit = perDay(cfg, m);
+    return reserve(c, perDay(cfg, m), owner, m, day);
+  }
+  static boolean reserve(Connection c, int limit, String owner, Material m, String day) throws SQLException {
     if (limit == Integer.MAX_VALUE) return true;
     if (limit < 1) return false;
     try (PreparedStatement s = c.prepareStatement("INSERT IGNORE INTO bank_sell_cap_daily(owner,item,day_key,amount) VALUES(?,?,?,0)")) {
