@@ -104,5 +104,19 @@ class BankBuyTests(unittest.TestCase):
             self.assertTrue(bank.enabled())
 
 
+class UniformFormatTest(unittest.TestCase):
+    def test_all_entries_same_format(self):
+        import json
+        from pathlib import Path
+        ents = json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))
+        es = [changelog.embed(x) for x in ents] + [changelog.mc_embed({"version": "x", "date": "30.10.2026", "changes": [{"type": "fix", "text": "a"}], "discord": ["b"]})]
+        for e in es:
+            self.assertRegex(e.title, r"^Update \d\d\.\d\d\.\d{4}$")
+            self.assertEqual(e.color.value, changelog.COLOR)
+            self.assertEqual(e.footer.text, changelog.FOOTER)
+            for f in e.fields:
+                self.assertRegex(f.name, r"^(⛏️ Minecraft|🤖 Discord) · ")
+
+
 if __name__ == "__main__":
     unittest.main()
