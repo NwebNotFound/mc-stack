@@ -600,8 +600,6 @@ class Bot(discord.Client):
         rows = parkour.rank(raw, course)
         name = parkour.display(raw, course)
         top = [(r, n, ms) for r, n, ms, _ in rows[:10]]
-        sig = repr(top)
-        sigs = self.__dict__.setdefault("pk_sigs", {})
         leaders = self.__dict__.setdefault("pk_leaders", {})
         leader = rows[0] if rows else None
         prev = leaders.get(course, "unset")
@@ -614,30 +612,9 @@ class Bot(discord.Client):
                 except discord.HTTPException:
                     log.exception("Rekord-Zeile fehlgeschlagen")
         leaders[course] = leader
-        if sig == sigs.get(course):
-            return
-        channel = self.get_channel(int(self.cfg["STATUS_CHANNEL_ID"]))
-        if not channel:
-            return
-        title = f"Parkour \u2013 {name}" if name else "Parkour"
-        png = await asyncio.to_thread(stats_card.render_leaderboard, title, top)
-        file = discord.File(io.BytesIO(png), filename="parkour.png")
-        e = discord.Embed(color=0xF1C40F, title=f"\U0001F3C1 Parkour-Bestenliste" + (f" \u2013 {name}" if name else ""))
-        e.set_image(url="attachment://parkour.png")
-        e.set_footer(text="/leaderboard parkour zeigt deinen Platz")
-        marker = DATA / parkour.marker_name(course)
-        msg = None
-        if marker.exists():
-            try:
-                msg = await channel.fetch_message(int(marker.read_text()))
-            except discord.NotFound:
-                pass
-        if msg:
-            await msg.edit(embed=e, attachments=[file])
-        else:
-            msg = await channel.send(embed=e, file=file)
-            marker.write_text(str(msg.id))
-        sigs[course] = sig
+        # Kein eigenes Bestenlisten-Board mehr in #server-status (nur /leaderboard parkour + Website).
+        for stale in DATA.glob("leaderboard-message*.txt"):
+            stale.unlink(missing_ok=True)
 
     # ---------- Rollen-Sync Discord -> LuckPerms ----------
     SYNC_GROUPS = {"Builder": "builder", "VIP": "vip"}
