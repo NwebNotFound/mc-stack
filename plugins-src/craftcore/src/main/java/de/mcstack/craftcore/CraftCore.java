@@ -68,7 +68,14 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private boolean transfer(UUID from,UUID to,long amount) throws Exception { return tx(c->EconomyStore.transfer(c,from.toString(),to.toString(),amount)); }
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
-    if (!ServerProfile.economyEnabled(server)) { getLogger().info("PvP-Profil: Economy-Module deaktiviert"); try { Class.forName("org.mariadb.jdbc.Driver"); } catch (ClassNotFoundException e) { getLogger().severe("MariaDB-Treiber fehlt"); } new de.mcstack.craftcore.pvp.PvpModule(this, this::connection).start(); return; }
+    if (!ServerProfile.economyEnabled(server)) {
+      getLogger().info("PvP-Profil: Economy-Module deaktiviert");
+      boolean driverLoaded;
+      try { Class.forName("org.mariadb.jdbc.Driver"); driverLoaded=true; } catch (ClassNotFoundException | LinkageError e) { driverLoaded=false; }
+      String error=ServerProfile.pvpStartupError(password,driverLoaded);
+      if(error!=null) { getLogger().severe(error); getServer().getPluginManager().disablePlugin(this); return; }
+      new de.mcstack.craftcore.pvp.PvpModule(this, this::connection).start(); return;
+    }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
     try {
       Class.forName("org.mariadb.jdbc.Driver");

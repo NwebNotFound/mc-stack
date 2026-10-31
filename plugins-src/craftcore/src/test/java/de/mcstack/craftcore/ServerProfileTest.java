@@ -13,6 +13,13 @@ class ServerProfileTest {
     assertTrue(ServerProfile.economyEnabled(null));
   }
 
+  @Test void pvpRequiresPasswordAndDriver() {
+    assertTrue(ServerProfile.pvpStartupError(null, true).contains("CRAFTCORE_DB_PASSWORD"));
+    assertTrue(ServerProfile.pvpStartupError("  ", true).contains("CRAFTCORE_DB_PASSWORD"));
+    assertTrue(ServerProfile.pvpStartupError("secret", false).contains("MariaDB"));
+    assertNull(ServerProfile.pvpStartupError("secret", true));
+  }
+
   @Test void dbUserDefaultsOrUsesTrimmedValue() {
     assertEquals("craftcore", ServerProfile.dbUser(Map.of()));
     assertEquals("craftcore", ServerProfile.dbUser(Map.of("CRAFTCORE_DB_USER", "  ")));

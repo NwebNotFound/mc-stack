@@ -16,3 +16,10 @@
 - Lobby braucht `PVP_HOST_TOKEN` aus `.env` (compose reicht ihn durch) -> Lobby neu erstellen (`docker compose up -d --no-deps lobby`).
 - pvp neu anlegen: `docker compose --profile pvp up --no-start --force-recreate --no-deps pvp`.
 - NPC: `/cc npc create PvP` mit Aktion `command pvp queue`.
+
+### PvP-Join-Pfad ohne Minecraft-Account testen (Konsole)
+Velocity/Paper laufen online-mode, ein echter Join braucht einen Minecraft-Account (macht Nils in-game). Den Plugin-Pfad (Zuweisung anlegen -> Lookup -> Join-Entscheidung) testet man so:
+1. Lobby-Konsole: `docker exec mc-stack-lobby-1 rcon-cli "pvp debug-assign <uuidA> <uuidB> <kitA> <kitB>"` -> legt ueber `PvpStore.createAssignment` (derselbe Code wie die Queue) eine pending-Zuweisung an und gibt die Match-ID aus.
+2. pvp starten (Host-Service `/start`), dann pvp-Konsole: `rcon-cli "pvpdebug join <uuidA>"` -> derselbe `store.pendingFor` + `PvpAccess.decide` wie beim PlayerJoin; erwartet `MATCH matchId=<id>`. Mit einer fremden UUID: `KICK`.
+3. Aufraeumen: `rcon-cli "pvpdebug cancel <matchId>"` (pending -> failed). Danach stoppt pvp 120 s nach Start ohne Spieler, auch ohne DB.
+Nicht abgedeckt: Velocity-Handshake/Forwarding und das Teleportieren in die Arena - nur mit echtem Account.

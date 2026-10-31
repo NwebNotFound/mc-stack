@@ -55,6 +55,19 @@ public final class LobbyPvp implements Listener, TabExecutor {
         Bukkit.getScheduler().runTaskTimer(plugin, this::remindQueue, 600L, 600L);
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug-assign")) {
+            if (sender instanceof Player) { sender.sendMessage("Nur Konsole"); return true; }
+            if (args.length != 5) { sender.sendMessage("/pvp debug-assign <uuidA> <uuidB> <kitA> <kitB>"); return true; }
+            UUID a, b;
+            try { a=UUID.fromString(args[1]); b=UUID.fromString(args[2]); }
+            catch (IllegalArgumentException e) { sender.sendMessage("Ungueltige UUID"); return true; }
+            String id=UUID.randomUUID().toString();
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                try { store.createAssignment(id,a,b,args[3],args[4]); Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("PvP-Zuweisung: "+id)); }
+                catch (Exception e) { Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("PvP-Zuweisung fehlgeschlagen: "+e.getMessage())); }
+            });
+            return true;
+        }
         if (!(sender instanceof Player player)) { sender.sendMessage("Nur fuer Spieler."); return true; }
         if (args.length == 1 && args[0].equalsIgnoreCase("leave")) {
             player.sendMessage(queue.leave(player.getUniqueId()) ? "PvP-Queue verlassen" : "Du bist nicht in der PvP-Queue");
@@ -165,10 +178,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
         });
     }
     private void prepare(String id, PvpQueue.Pair pair) {
-        try (Connection c = source.open(); PreparedStatement s = c.prepareStatement("INSERT INTO pvp_assignments (match_id,player_a,player_b,kit_a,kit_b,status,created_at,updated_at) VALUES (?,?,?,?,?,'pending',?,?)")) {
-            long now = System.currentTimeMillis();
-            s.setString(1, id); s.setString(2, pair.a().toString()); s.setString(3, pair.b().toString());
-            s.setString(4, pair.kitA()); s.setString(5, pair.kitB()); s.setLong(6, now); s.setLong(7, now); s.executeUpdate();
+        try { store.createAssignment(id, pair.a(), pair.b(), pair.kitA(), pair.kitB());
         } catch (Exception e) {
             plugin.getLogger().warning("PvP-Zuweisung fehlgeschlagen: " + e.getClass().getSimpleName());
             Bukkit.getScheduler().runTask(plugin, () -> { if (id.equals(activeMatchId)) activeMatchId = null; finishFailure(pair); }); return;

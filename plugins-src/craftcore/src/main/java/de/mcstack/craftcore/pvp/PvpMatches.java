@@ -24,7 +24,8 @@ public final class PvpMatches implements Listener {
     private final Set<String> starting=new HashSet<>();
     private final IdleStop idle=new IdleStop(IdleStop.DEFAULT_GRACE_MS);
     private final AtomicBoolean counting=new AtomicBoolean();
-    private volatile boolean hasPending=true;
+    private record PendingCheck(Boolean pending, long checkedAt) {}
+    private volatile PendingCheck pendingCheck=new PendingCheck(null,0);
     private final Object kitLock=new Object();
     private volatile long kitVersion;
     private static final class Session {
@@ -38,6 +39,7 @@ public final class PvpMatches implements Listener {
         Bukkit.getPluginManager().registerEvents(this,plugin);
         Bukkit.getScheduler().runTaskTimer(plugin,this::tick,20L,20L);
         Bukkit.getScheduler().runTaskTimer(plugin,this::idleTick,0L,100L);
+        idle.tick(System.currentTimeMillis(), !Bukkit.getOnlinePlayers().isEmpty());
         syncKits();
     }
     public void syncKits() {
@@ -51,12 +53,15 @@ public final class PvpMatches implements Listener {
     private void async(DbTask task) { Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{ try { task.run(); } catch(Exception e) { plugin.getLogger().warning("PvP-Datenbank: "+e.getMessage()); } }); }
     private void main(Runnable task) { Bukkit.getScheduler().runTask(plugin,task); }
     @EventHandler public void join(PlayerJoinEvent e) {
+        idle.tick(System.currentTimeMillis(), true);
         Player p=e.getPlayer(); reset(p); p.setGameMode(GameMode.ADVENTURE); p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
         boolean builder=PvpAccess.mayBypass(p::hasPermission);
         UUID id=p.getUniqueId();
         async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;
-            if(found.isEmpty()) { if(builder) return; lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }
+            PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
+            if(decision==PvpAccess.JoinDecision.BUILDER) return;
+            if(decision==PvpAccess.JoinDecision.KICK) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }
             PvpStore.Assignment a=found.get(); Session s=sessions.computeIfAbsent(a.matchId(),k->new Session(a)); players.put(id,s);
             if(Bukkit.getPlayer(a.a())!=null && Bukkit.getPlayer(a.b())!=null && players.get(a.a())==s && players.get(a.b())==s) begin(s);
         }); });
@@ -123,6 +128,7 @@ public final class PvpMatches implements Listener {
         Bukkit.getScheduler().runTaskLater(plugin,()->{ if(e.getEntity().isOnline() && e.getEntity().isDead()) e.getEntity().spigot().respawn(); },1L);
     }
     @EventHandler public void quit(PlayerQuitEvent e) {
+        if(Bukkit.getOnlinePlayers().size() <= 1) idle.tick(System.currentTimeMillis(), false);
         Session s=players.remove(e.getPlayer().getUniqueId()); if(s==null || s.finishing) return;
         if(s.match!=null) { s.match.disconnect(e.getPlayer().getUniqueId(),System.currentTimeMillis()); finish(s); }
     }
@@ -152,8 +158,11 @@ public final class PvpMatches implements Listener {
     private void lobby(Player p) { try { ByteArrayOutputStream bytes=new ByteArrayOutputStream(); DataOutputStream out=new DataOutputStream(bytes); out.writeUTF("Connect");out.writeUTF("lobby");p.sendPluginMessage(plugin,"BungeeCord",bytes.toByteArray()); } catch(IOException e) { plugin.getLogger().warning("Lobby-Verbindung: "+e.getMessage()); } }
     private static void reset(Player p) { p.getInventory().clear();p.getInventory().setArmorContents(null);p.getInventory().setItemInOffHand(null); for(var effect:p.getActivePotionEffects()) p.removePotionEffect(effect.getType());p.setHealth(p.getMaxHealth());p.setFoodLevel(20);p.setSaturation(20);p.setFireTicks(0); }
     private void idleTick() {
-        if(counting.compareAndSet(false,true)) async(()->{ try { hasPending=store.pendingCount()>0; } finally { counting.set(false); } });
-        World build=Bukkit.getWorld("pvp_build"); boolean busy=!Bukkit.getOnlinePlayers().isEmpty() || hasPending || (build!=null && !build.getPlayers().isEmpty());
-        if(idle.tick(System.currentTimeMillis(),busy)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
+        if(counting.compareAndSet(false,true)) async(()->{ try { pendingCheck=new PendingCheck(store.pendingCount()>0,System.nanoTime()); } catch(SQLException | RuntimeException e) { pendingCheck=new PendingCheck(null,0); throw e; } finally { counting.set(false); } });
+        long now=System.currentTimeMillis(); boolean playersOnline=!Bukkit.getOnlinePlayers().isEmpty();
+        PendingCheck check=pendingCheck;
+        long age=check.pending()==null ? Long.MAX_VALUE : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-check.checkedAt());
+        boolean elapsed=idle.tick(now,playersOnline);
+        if(elapsed && !IdleStop.busy(playersOnline,check.pending(),age)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
     }
 }
