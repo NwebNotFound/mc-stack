@@ -9,6 +9,10 @@ public final class ServerProfile {
 
   public static boolean economyEnabled(String server) { return !isPvp(server); }
 
+  public static boolean commandAllowed(boolean economyEnabled, String commandName) {
+    return economyEnabled || "pvp".equalsIgnoreCase(commandName) || "pvpdebug".equalsIgnoreCase(commandName);
+  }
+
   public static String pvpStartupError(String password, boolean driverLoaded) {
     if (password == null || password.isBlank()) return "CRAFTCORE_DB_PASSWORD fehlt oder ist leer";
     if (!driverLoaded) return "MariaDB-Treiber org.mariadb.jdbc.Driver fehlt";

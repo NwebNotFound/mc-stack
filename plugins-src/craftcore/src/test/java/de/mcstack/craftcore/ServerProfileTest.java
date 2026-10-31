@@ -13,6 +13,18 @@ class ServerProfileTest {
     assertTrue(ServerProfile.economyEnabled(null));
   }
 
+  @Test void commandsAreRestrictedWhenEconomyIsDisabled() {
+    assertTrue(ServerProfile.commandAllowed(false, "pvp"));
+    assertTrue(ServerProfile.commandAllowed(false, "PvPDEBUG"));
+    for (String command : new String[]{"balance", "geld", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "claim", "home", "sethome", "team", "unknown"}) {
+      assertFalse(ServerProfile.commandAllowed(false, command), command);
+      assertTrue(ServerProfile.commandAllowed(true, command), command);
+    }
+    assertFalse(ServerProfile.commandAllowed(false, null));
+    assertTrue(ServerProfile.commandAllowed(true, "pvp"));
+    assertTrue(ServerProfile.commandAllowed(true, "pvpdebug"));
+  }
+
   @Test void pvpRequiresPasswordAndDriver() {
     assertTrue(ServerProfile.pvpStartupError(null, true).contains("CRAFTCORE_DB_PASSWORD"));
     assertTrue(ServerProfile.pvpStartupError("  ", true).contains("CRAFTCORE_DB_PASSWORD"));
