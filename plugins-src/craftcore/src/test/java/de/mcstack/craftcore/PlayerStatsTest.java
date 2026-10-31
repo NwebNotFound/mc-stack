@@ -44,10 +44,13 @@ class PlayerStatsTest {
   }
  }
  @Test void vanillaBackfillIncludesCraftedUsedAndCustom() {
-  Object[] parsed=PlayerStats.parseStats(UUID.randomUUID(),"{\"stats\":{\"minecraft:crafted\":{\"minecraft:stone\":2},\"minecraft:used\":{\"minecraft:stone\":3},\"minecraft:custom\":{\"minecraft:jump\":4}}}",true);
+  Object[] parsed=PlayerStats.parseStats(UUID.randomUUID(),"{\"stats\":{\"minecraft:crafted\":{\"minecraft:stone\":2},\"minecraft:used\":{\"minecraft:stone\":3,\"minecraft:diamond_sword\":5},\"minecraft:custom\":{\"minecraft:jump\":4}}}",true,"minecraft:stone"::equals);
   @SuppressWarnings("unchecked") List<PlayerStats.Detail> details=(List<PlayerStats.Detail>)parsed[2];
   assertTrue(details.contains(new PlayerStats.Detail("craft_item","STONE",2)));
   assertTrue(details.contains(new PlayerStats.Detail("use_item","STONE",3)));
+  assertTrue(details.contains(new PlayerStats.Detail("blocks_placed","STONE",3)));
+  assertTrue(details.contains(new PlayerStats.Detail("use_item","DIAMOND_SWORD",5)));
+  assertFalse(details.contains(new PlayerStats.Detail("blocks_placed","DIAMOND_SWORD",5)));
   assertTrue(details.contains(new PlayerStats.Detail("custom","JUMP",4)));
  }
  @Test void mariaDbDetailsAreTransactional() throws Exception {

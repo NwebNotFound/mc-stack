@@ -17,6 +17,7 @@ class WebsiteStatsMariaDbTest {
       PlayerStats.migrate(c);
       s.execute("CREATE VIEW v_player_stats AS SELECT p.uuid,p.name mc_name,a.balance/100.0 money,t.playtime_s,t.kills,t.deaths,t.blocks_mined,t.updated_at FROM known_players p LEFT JOIN accounts a ON a.uuid=p.uuid LEFT JOIN player_stats t ON t.uuid=p.uuid");
       WebsiteStats.migrate(c);
+      WebsiteStats.migrate(c);
       s.execute("INSERT INTO market_catalog VALUES('STONE',1.50,0.50,1.00,1)");
       s.execute("INSERT INTO market_locks(item,lock_buy,lock_sell) VALUES('STONE',TRUE,FALSE)");
       s.execute("INSERT INTO market_effective VALUES('STONE',1,1,1)");
@@ -30,6 +31,22 @@ class WebsiteStatsMariaDbTest {
       s.execute("INSERT INTO accounts VALUES('p',1000)");
       s.execute("INSERT INTO player_stats VALUES('p',100,4,2,8,CURRENT_TIMESTAMP)");
       s.execute("INSERT INTO player_stats_details VALUES('p','distance_cm','WALK_ONE_CM',250)");
+      s.execute("INSERT INTO player_stats_details VALUES('p','deaths_entity','ZOMBIE',2),('p','craft_item','STONE',3),('p','crafted','STONE',3),('p','blocks_placed','DIRT',4),('p','custom','JUMP',123)");
+      DeathEvents.insert(c,new DeathEvents.Death("event-fall","p",1,"FALL",null,null,null,"survival"));
+      DeathEvents.insert(c,new DeathEvents.Death("event-mob","p",2,"ENTITY_ATTACK","zombie","ZOMBIE",null,"survival"));
+      DeathEvents.insert(c,new DeathEvents.Death("event-collision","p",3,"ZOMBIE",null,null,null,"survival"));
+      try(ResultSet r=s.executeQuery("SELECT details FROM v_player_stats_ext WHERE uuid='p'")) {
+        assertTrue(r.next());
+        var json=com.google.gson.JsonParser.parseString(r.getString(1)).getAsJsonObject();
+        assertEquals(java.util.Set.of("distance_cm","deaths_entity","deaths_by","blocks_placed","crafted","jump"),json.keySet());
+        assertEquals(123,json.get("jump").getAsInt());
+        assertEquals(250,json.getAsJsonObject("distance_cm").get("walk_one_cm").getAsInt());
+        assertEquals(2,json.getAsJsonObject("deaths_entity").get("zombie").getAsInt());
+        assertEquals(java.util.Set.of("fall"),json.getAsJsonObject("deaths_by").keySet());
+        assertTrue(java.util.Collections.disjoint(json.getAsJsonObject("deaths_entity").keySet(),json.getAsJsonObject("deaths_by").keySet()));
+        assertEquals(4,json.getAsJsonObject("blocks_placed").get("dirt").getAsInt());
+        assertEquals(3,json.getAsJsonObject("crafted").get("stone").getAsInt());
+      }
       s.execute("INSERT INTO player_playtime_world VALUES('p','survival',100,CURRENT_TIMESTAMP)");
       Instant time=Instant.parse("2026-10-26T12:00:00Z");
       WebsiteStats.maintain(c,time);
