@@ -25,6 +25,7 @@ class BuybackCapsTest {
     }
     assertEquals(500, BuybackCaps.capCents(cfg, Material.DIAMOND, 500));
     try (Connection c = DriverManager.getConnection("jdbc:h2:mem:cap1_" + UUID.randomUUID() + ";MODE=MySQL")) {
+      BuybackCaps.ensureSchema(c);
       assertTrue(BuybackCaps.reserve(c, cfg, "u:p", Material.BEACON, "2026-10-30"));
       assertFalse(BuybackCaps.reserve(c, cfg, "u:p", Material.BEACON, "2026-10-30"));
       assertTrue(BuybackCaps.reserve(c, cfg, "u:p", Material.BEACON, "2026-10-31"));

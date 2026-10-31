@@ -132,3 +132,9 @@ Nur bestehende Funktionen, keine Aussage ueber die angeforderte neue UX: `/cclau
 - `/cc deaths backfill` auf Survival liest Offline-Stats einmalig; unbekannte Differenz `unknown`, Online-Spieler nach Quit erneut ausfuehren.
 - Statistik- und Inventar-Snapshots alle 60 s und bei Quit mit `updated_at`; Details `craft_item`, `use_item` und `custom` werden geschrieben.
 - Docker-Gradle-Build und Tests; kein Neustart, Merge oder Staging nach `data`.
+
+## Verkaufs-GUI 31.10.2026
+- `/verkaufen` (`/sell`) und Marktbutton: 54 Slots, Live-Preise, Summe und Tageslimit.
+- Bankverkauf pro Stueck mit Journal; bei Limit/Fehler sowie Schliessen, Disconnect und Stop Rueckgabe oder Drop.
+- Docker `gradle build --no-daemon` mit Serverbibliotheken: erfolgreich; GUI-Logiktests fuer Preis, Limit und Rueckgabe.
+- Kein Neustart, Merge oder Staging nach `data`; Ingame-Verhalten nicht getestet.

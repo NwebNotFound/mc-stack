@@ -112,7 +112,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];
@@ -341,6 +341,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "ah": Auction.instance.command(p,args); break;
         case "trade": trade.command(p,args); break;
         case "npc": npcs.command(p,args); break;
+        case "verkaufen": Market.instance.openSell(p); break;
         case "bank": case "market": Market.instance.command(p,command.getName(),args); break;
         case "claim": case "unclaim": case "spawn": case "home": case "sethome": Features.instance.command(p,command.getName(),args); break;
       }

@@ -62,6 +62,9 @@ commands:
   bank:
     aliases: [money]
     description: Bank und Warenhandel
+  verkaufen:
+    description: Gegenstaende an die Bank verkaufen
+    aliases: [sell]
   market:
     description: Marktpreise und Trend
 
