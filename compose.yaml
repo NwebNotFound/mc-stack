@@ -71,6 +71,8 @@ services:
       <<: *paper-environment
       MEMORY: 1G
       CRAFTCORE_SERVER: Lobby
+      PVP_HOST_URL: http://host.docker.internal:25599
+      PVP_HOST_TOKEN: "${PVP_HOST_TOKEN:-}"
       MOTD: MC Stack Lobby
       MODE: adventure
       DIFFICULTY: easy
@@ -105,6 +107,10 @@ services:
       USE_AIKAR_FLAGS: "true"
       CRAFTCORE_SERVER: pvp
       CRAFTCORE_DB_USER: craft_pvp
+      # Zugang nur ueber Lobby-Zuweisung (pvp_assignments) oder craftcore.build.pvp; CraftCore-Join-Gate statt Whitelist
+      ENABLE_WHITELIST: "FALSE"
+      ENFORCE_WHITELIST: "FALSE"
+      PVP: "true"
       CRAFTCORE_DB_PASSWORD: "${CRAFTCORE_PVP_DB_PASSWORD:-}"
       MOTD: MC Stack PvP
       LEVEL_TYPE: minecraft:flat

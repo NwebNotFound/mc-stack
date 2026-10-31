@@ -68,7 +68,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private boolean transfer(UUID from,UUID to,long amount) throws Exception { return tx(c->EconomyStore.transfer(c,from.toString(),to.toString(),amount)); }
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
-    if (!ServerProfile.economyEnabled(server)) { getLogger().info("PvP-Profil: Economy-Module deaktiviert"); new de.mcstack.craftcore.pvp.PvpModule(this).start(); return; }
+    if (!ServerProfile.economyEnabled(server)) { getLogger().info("PvP-Profil: Economy-Module deaktiviert"); new de.mcstack.craftcore.pvp.PvpModule(this, this::connection).start(); return; }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
     try {
       Class.forName("org.mariadb.jdbc.Driver");
@@ -94,6 +94,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Features(this).start();
       launchPads=new LaunchPads(this); launchPads.start();
       portals=new Portals(this); portals.start();
+      if ("lobby".equalsIgnoreCase(server)) new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection).start();
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();

@@ -6,7 +6,8 @@ depend: [Vault]
 softdepend: [LuckPerms, Citizens]
 commands:
   pvp:
-    description: PvP Build-Verwaltung
+    description: PvP-Warteschlange und Build-Verwaltung
+    usage: /pvp queue|leave|build|arena|kit
   rank:
     description: Rang setzen
     usage: /rank set <spieler> <rang>
