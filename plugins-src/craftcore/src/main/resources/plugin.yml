@@ -5,6 +5,9 @@ api-version: '26.3'
 depend: [Vault]
 softdepend: [LuckPerms, Citizens]
 commands:
+  vw:
+    description: VIP-Welten verwalten
+    usage: /vw create|rename|list|start|stop|join
   pvp:
     description: PvP-Warteschlange und Build-Verwaltung
     usage: /pvp queue|leave|build|arena|kit
