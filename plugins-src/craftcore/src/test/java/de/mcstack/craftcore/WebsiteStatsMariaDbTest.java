@@ -43,12 +43,22 @@ class WebsiteStatsMariaDbTest {
       s.execute("UPDATE known_players SET uuid='"+id+"' WHERE uuid='p'");
       s.execute("UPDATE accounts SET uuid='"+id+"' WHERE uuid='p'");
       s.execute("UPDATE members SET uuid='"+id+"' WHERE uuid='p'");
-      s.execute("SET time_zone='+05:00'");
+      s.execute("SET SESSION time_zone='+01:00'");
+      try(ResultSet r=s.executeQuery("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='player_presence' AND COLUMN_NAME='last_seen'")) { assertTrue(r.next()); assertEquals("datetime",r.getString(1)); }
+      Instant before;
+      try(ResultSet r=s.executeQuery("SELECT DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-%dT%H:%i:%sZ')")) { assertTrue(r.next()); before=Instant.parse(r.getString(1)); }
       Presence.record(c,id,"lobby",true); Presence.record(c,id,"pvp",true);
       Presence.resetBackend(c,"lobby");
       try(ResultSet r=s.executeQuery("SELECT online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertTrue(r.getBoolean(1)); }
       Presence.record(c,id,"lobby",false);
-      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertEquals("Builders",r.getString(1)); assertEquals("&9",r.getString(2)); assertTrue(Math.abs(java.time.Duration.between(Instant.parse(r.getString(3)),Instant.now()).getSeconds())<10); assertEquals(1,r.getInt(4)); }
+      Instant after;
+      try(ResultSet r=s.executeQuery("SELECT DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-%dT%H:%i:%sZ')")) { assertTrue(r.next()); after=Instant.parse(r.getString(1)); }
+      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertEquals("Builders",r.getString(1)); assertEquals("&9",r.getString(2)); String seen=r.getString(3); assertTrue(seen.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z")); Instant written=Instant.parse(seen); assertFalse(written.isBefore(before)); assertFalse(written.isAfter(after)); assertEquals(1,r.getInt(4)); }
+      try(ResultSet r=s.executeQuery("SELECT v.last_seen,DATE_FORMAT(MAX(p.last_seen),'%Y-%m-%dT%H:%i:%sZ') FROM v_player_stats v JOIN player_presence p ON p.uuid=v.uuid WHERE v.uuid='"+id+"' GROUP BY v.last_seen")) { assertTrue(r.next()); assertEquals(r.getString(2),r.getString(1)); }
+      // A known UTC DATETIME must survive the view without session-zone conversion.
+      Instant expected=Instant.parse("2026-01-15T12:34:56Z");
+      s.execute("UPDATE player_presence SET last_seen='2026-01-15 12:34:56' WHERE uuid='"+id+"'");
+      try(ResultSet r=s.executeQuery("SELECT last_seen FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); String seen=r.getString(1); assertTrue(seen.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z")); assertEquals(expected,Instant.parse(seen)); }
       try(ResultSet r=s.executeQuery("SELECT DATA_TYPE,COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='v_player_stats' AND COLUMN_NAME='online'")) { assertTrue(r.next()); assertEquals("tinyint",r.getString(1)); assertEquals("tinyint(1)",r.getString(2)); }
       Presence.resetBackend(c,"pvp");
       try(ResultSet r=s.executeQuery("SELECT online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertFalse(r.getBoolean(1)); }
