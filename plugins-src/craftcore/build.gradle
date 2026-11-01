@@ -15,7 +15,11 @@ tasks.register('verifyVaultApi') {
         if (digest != vaultSha256) throw new GradleException('VaultAPI-1.7.jar SHA-256 mismatch')
     }
 }
-tasks.withType(JavaCompile).configureEach { dependsOn tasks.named('verifyVaultApi') }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    dependsOn tasks.named('verifyVaultApi')
+}
+tasks.withType(ProcessResources).configureEach { filteringCharset = 'UTF-8' }
 dependencies {
     compileOnly('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }
     testImplementation('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }
@@ -37,3 +41,22 @@ dependencies {
 }
 test { useJUnitPlatform() }
 jar { duplicatesStrategy = DuplicatesStrategy.EXCLUDE; from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }; exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA' }
+
+processTestResources { from(project.file('../../scripts/backfill-player-presence.sql')) }
+
+// Scan plugin sources and resources during the existing check lifecycle.
+tasks.register('checkMojibake') {
+    def pluginSources = fileTree(dir: project.file('..'), includes: ['**/*.java', '**/*.yml', '**/*.yaml'], excludes: ['**/build/**', '**/.gradle/**'])
+    inputs.files(pluginSources)
+    doLast {
+        def markers = ["\u00c3", "\u00e2\u20ac"]
+        def violations = []
+        pluginSources.files.sort().each { source ->
+            source.readLines('UTF-8').eachWithIndex { line, index ->
+                if (markers.any { line.contains(it) }) violations << "${project.file('..').toPath().relativize(source.toPath())}:${index + 1}"
+            }
+        }
+        if (!violations.isEmpty()) throw new GradleException("Mojibake found in plugin sources:\n" + violations.join('\n'))
+    }
+}
+tasks.named('check') { dependsOn tasks.named('checkMojibake') }

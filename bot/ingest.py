@@ -92,8 +92,131 @@ def build_stats(cols, rows):
             except (TypeError, ValueError):
                 continue
             s[RENAME.get(f, f)] = v
+        s.update(presence_fields(r))
         out[str(uuid)] = s
     return out
+
+
+def _text(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode("utf-8", "replace")
+    v = str(v).strip()
+    return v or None
+
+
+PLACEHOLDERS = ("0", "null", "none")
+
+
+def _clean(v):
+    """0, '0', '', None, 'null' -> None (Platzhalter), sonst getrimmter Text.
+    Bewusster Trade-off: ein Team, das wirklich 'None' oder 'null' heisst, wird ebenfalls null."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v == 0:
+        return None
+    t = _text(v)
+    return None if t is None or t.lower() in PLACEHOLDERS else t
+
+
+def _iso_utc(v):
+    """UTC-Zeitstempel (datetime, Unix-s/ms, String) -> ISO 8601 mit Z, sonst None."""
+    import datetime as _dt
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v <= 0:
+        return None
+    if isinstance(v, str) and v.strip() in ("", "0", "0000-00-00 00:00:00", "0000-00-00T00:00:00Z"):
+        return None
+    try:
+        if isinstance(v, _dt.datetime):
+            d = v if v.tzinfo is None else v.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            x = float(v)
+            d = _dt.datetime.fromtimestamp(x / 1000 if x > 1e11 else x, _dt.timezone.utc).replace(tzinfo=None)
+        elif isinstance(v, str) and v.strip():
+            t = v.strip().replace(" ", "T")
+            if t.endswith("Z"):
+                t = t[:-1] + "+00:00"
+            d = _dt.datetime.fromisoformat(t)
+            if d.tzinfo is not None:
+                d = d.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        else:
+            return None
+    except (ValueError, OverflowError, OSError):
+        return None
+    if d.year <= 1970:
+        return None
+    return d.replace(microsecond=0).isoformat() + "Z"
+
+
+def _bool(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = int.from_bytes(v, "little") if v else 0
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("1", "true", "yes", "on"):
+            return True
+        if t in ("0", "false", "no", "off"):
+            return False
+        return None
+    try:
+        return bool(int(v))
+    except (TypeError, ValueError):
+        return None
+
+
+MC_COLORS = {
+    "0": "#000000", "1": "#0000AA", "2": "#00AA00", "3": "#00AAAA",
+    "4": "#AA0000", "5": "#AA00AA", "6": "#FFAA00", "7": "#AAAAAA",
+    "8": "#555555", "9": "#5555FF", "a": "#55FF55", "b": "#55FFFF",
+    "c": "#FF5555", "d": "#FF55FF", "e": "#FFFF55", "f": "#FFFFFF",
+}
+
+
+def _hex(v):
+    import re
+    t = _text(v)
+    if t and re.fullmatch(r"#[0-9A-Fa-f]{6}", t):
+        return t.upper()
+    return None
+
+
+def team_color_code(v):
+    """Roher &-Code (auch §-Code -> &), sonst None."""
+    t = _text(v)
+    if t and len(t) == 2 and t[0] in "&\u00a7" and t[1].lower() in MC_COLORS:
+        return "&" + t[1].lower()
+    return None
+
+
+HEX_TO_CODE = {v: "&" + k for k, v in MC_COLORS.items()}
+
+
+def team_colors(r):
+    """Alle Quellformen (team_color als Hex/&-Code, team_color_hex, team_color_code) ->
+    team_color == team_color_hex (#RRGGBB oder None), team_color_code (&x oder None)."""
+    raw, hcol, ccol = (_clean(r.get(k)) for k in ("team_color", "team_color_hex", "team_color_code"))
+    code = team_color_code(ccol) or team_color_code(raw)
+    h = _hex(hcol) or _hex(raw) or (MC_COLORS[code[1]] if code else None)
+    if not code and h:
+        code = HEX_TO_CODE.get(h)
+    return {"team_color": h, "team_color_hex": h, "team_color_code": code}
+
+
+def presence_fields(r):
+    """team/team_color/last_seen/online aus v_player_stats; Platzhalter (0/''/None) -> None.
+    online: Spalte aus der View (player_presence); fehlt sie, None (unbekannt)."""
+    online = _bool(r.get("online")) if "online" in r else None
+    return {
+        "team": _clean(r.get("team")),
+        **team_colors(r),
+        "last_seen": _iso_utc(r.get("last_seen")),
+        "online": online,
+    }
 
 
 LB_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
@@ -527,7 +650,7 @@ PARKOUR_COURSE_MAX = 32  # Website-Limit fuer Kurs-IDs
 import parkour
 
 
-def build_parkour(cols, rows, meta=None):
+def build_parkour(cols, rows, meta=None, hidden=None):
     """Bestzeit pro Spieler und Kurs aus parkour_times: [{course, mc_uuid, mc_name, time_ms, set_at}] (set_at ISO-UTC)."""
     best = {}
     for row in rows or ():
@@ -535,7 +658,7 @@ def build_parkour(cols, rows, meta=None):
         course = parkour.slug(r.get("course"))
         uuid = str(r.get("uuid") or "").strip().lower()
         ms = _num(r.get("best_ms"))
-        if not course or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
+        if not course or course in (hidden or ()) or len(course) > PARKOUR_COURSE_MAX or not uuid or ms is None or ms <= 0:
             continue
         v = r.get("updated_at")
         try:
@@ -713,7 +836,8 @@ async def push_once(bot, session=None):
     pk = await asyncio.to_thread(fetch_rows, "parkour_times")
     if pk:
         pc = await asyncio.to_thread(fetch_rows, "v_parkour_courses")
-        payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None)
+        payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None,
+                                           hidden=parkour.hidden_slugs(*pc) if pc else None)
     h = payload_hash(payload)
     own = session is None
     session = session or aiohttp.ClientSession()

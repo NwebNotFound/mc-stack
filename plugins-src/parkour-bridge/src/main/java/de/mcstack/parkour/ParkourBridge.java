@@ -32,8 +32,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  private String password;
  private boolean configReady;
  private record Candidate(ParkourSession session, String course, long ms) {}
- private record AdminCourse(int id,String name,String slug,String display) {}
- private volatile List<AdminCourse> adminCourses=List.of();
+ private volatile List<CourseArgs.Course> adminCourses=List.of();
  private volatile Map<String,List<String>> adminPlayers=Map.of();
  private final java.util.concurrent.atomic.AtomicBoolean loadingAdminCompletions=new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -75,7 +74,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   s.execute(ParkourSql.CREATE); s.execute(ParkourSql.ADD_COURSE); s.execute(ParkourSql.ADD_COURSE_NAME);
   List<String> pk=new ArrayList<>(); try(ResultSet r=s.executeQuery(ParkourSql.PK_COLUMNS)) { while(r.next()) pk.add(r.getString(1)); }
   for(String step:ParkourSql.migration(pk)) { getLogger().info("parkour_times: Primaerschluessel wird auf (uuid, course) umgestellt"); s.execute(step); }
-  for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
+  for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.ADD_HIDDEN,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
   try { syncCourses(c); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht synchronisiert werden",ex); }
  }
  private void syncCourses(Connection c) throws SQLException {
@@ -87,6 +86,10 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  List<String> courseIds() {
   try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug FROM parkour_courses ORDER BY slug")) { List<String> ids=new ArrayList<>(); while(r.next()) ids.add(r.getString(1)); return ids; } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return List.of(); }
+ }
+ Map<String,String> courseNames() {
+  try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug, course_name FROM v_parkour_courses")) { Map<String,String> names=new LinkedHashMap<>(); while(r.next()) names.put(r.getString(1),r.getString(2)); return names; } }
+  catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return Map.of(); }
  }
  boolean updateCourse(String slug,String field,String value) throws SQLException {
   if(!List.of("display_name","icon").contains(field)) throw new IllegalArgumentException(field);
@@ -207,10 +210,11 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   saveConfig();
  }
  private void renderAll(Map<String,List<ParkourSql.Entry>> byCourse,Map<String,String> names) {
-  StringJoiner boards=new StringJoiner("\n\n"); byCourse.forEach((slug,entries)->boards.add(ParkourSql.board(ParkourSql.displayName(slug,names.get(slug)),entries)));
+  Map<String,String> pkNames=new HashMap<>(); try { for(CourseArgs.Course c:courses()) if(c.slug()!=null) pkNames.put(c.slug(),c.pkName()); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht geladen werden",ex); }
+  StringJoiner boards=new StringJoiner("\n\n"); byCourse.forEach((slug,entries)->boards.add(ParkourSql.board(ParkourSql.title(slug,names.get(slug),pkNames.get(slug)),entries)));
   render("board",byCourse.isEmpty()?ParkourSql.allBoards(Map.of()):boards.toString());
   var sec=getConfig().getConfigurationSection("boards");
-  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(ParkourSql.displayName(course,names.get(course)),byCourse.getOrDefault(course,List.of()))); }
+  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(ParkourSql.title(course,names.get(course),name),byCourse.getOrDefault(course,List.of()))); }
  }
  private void render(String key,String text) {
   Location loc=getConfig().getLocation(key+".location"); if(loc==null || loc.getWorld()==null) return;
@@ -219,32 +223,18 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   if(display==null) { display=loc.getWorld().spawn(loc,TextDisplay.class,t->{ t.setBillboard(Display.Billboard.CENTER); t.setPersistent(true); t.addScoreboardTag("ParkourBridge"); t.setSeeThrough(false); }); getConfig().set(key+".entity",display.getUniqueId().toString()); saveConfig(); }
   display.addScoreboardTag("ParkourBridge"); display.text(Component.text(text));
  }
- private String actualCourse(String requested) throws SQLException {
-  try(PreparedStatement s=ParkoursDatabase.getConnection().prepareStatement("SELECT pk_name FROM parkours WHERE lower(pk_name)=lower(?)")) { s.setString(1,requested); try(ResultSet r=s.executeQuery()) { return r.next()?r.getString(1):null; } }
+ private List<CourseArgs.Course> courses() throws SQLException {
+  Map<String,String> names=courseNames(); List<CourseArgs.Course> out=new ArrayList<>();
+  try(PreparedStatement s=ParkoursDatabase.getConnection().prepareStatement("SELECT id, pk_name FROM parkours ORDER BY pk_name"); ResultSet r=s.executeQuery()) {
+   while(r.next()) { String pk=r.getString(2); if(pk==null) continue; String slug=ParkourSql.course(pk); out.add(new CourseArgs.Course(r.getInt(1),pk,slug,slug==null?null:names.get(slug))); }
+  }
+  return out;
  }
+ private String actualCourse(String requested) throws SQLException { return CourseArgs.resolveCourse(requested,courses()); }
  private void setBoard(Player p,String key) {
   Location previous=getConfig().getLocation(key+".location"); if(previous!=null && previous.getWorld()!=null) previous.getChunk().load();
   String old=getConfig().getString(key+".entity"); if(old!=null) try { Entity entity=Bukkit.getEntity(UUID.fromString(old)); if(entity instanceof TextDisplay) entity.remove(); } catch(IllegalArgumentException ignored) {}
   getConfig().set(key+".entity",null); getConfig().set(key+".location",p.getLocation()); saveConfig(); refresh();
- }
- /** Main thread only: Lobby Parkour's shared SQLite connection is not thread-safe. */
- private List<Map.Entry<Integer,String>> lobbyCourses() throws SQLException {
-  List<Map.Entry<Integer,String>> result=new ArrayList<>();
-  try(Statement s=ParkoursDatabase.getConnection().createStatement(); ResultSet r=s.executeQuery("SELECT id,pk_name FROM parkours ORDER BY pk_name")) { while(r.next()) result.add(Map.entry(r.getInt(1),r.getString(2))); }
-  return result;
- }
- private List<AdminCourse> readAdminCourses(Connection c,List<Map.Entry<Integer,String>> lobby) throws SQLException {
-  Map<String,String> displays=new HashMap<>();
-  try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug,display_name FROM parkour_courses")) { while(r.next()) displays.put(r.getString(1).toLowerCase(Locale.ROOT),r.getString(2)); }
-  List<AdminCourse> courses=new ArrayList<>();
-  for(var e:lobby) { String name=e.getValue(),slug=ParkourSql.course(name); if(slug!=null) courses.add(new AdminCourse(e.getKey(),name,slug,displays.get(slug))); }
-  return courses;
- }
- private AdminCourse resolveCourse(List<AdminCourse> courses,String requested) throws SQLException {
-  if(requested==null) return null;
-  List<AdminCourse> matches=courses.stream().filter(c->c.name().equalsIgnoreCase(requested) || c.slug().equalsIgnoreCase(requested) || (c.display()!=null && c.display().equalsIgnoreCase(requested))).toList();
-  if(matches.size()>1) throw new SQLException("Mehrdeutiger Kursname: "+requested);
-  return matches.isEmpty()?null:matches.get(0);
  }
  private String placeholders(int count) { return String.join(",",Collections.nCopies(count,"?")); }
  private int bindVariants(PreparedStatement statement,Set<String> variants) throws SQLException { int i=1; for(String variant:variants) statement.setString(i++,variant); return i; }
@@ -252,14 +242,15 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  private volatile long adminCompletionsLoadedAt;
  private void loadAdminCompletions() {
   if(worker.isShutdown() || !loadingAdminCompletions.compareAndSet(false,true)) return;
-  List<Map.Entry<Integer,String>> lobby;
-  try { lobby=lobbyCourses(); } catch(SQLException ex) { loadingAdminCompletions.set(false); getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); return; }
+  // courses() reads Lobby Parkour's shared SQLite connection, so it stays on the main thread.
+  List<CourseArgs.Course> loaded;
+  try { loaded=courses(); } catch(SQLException ex) { loadingAdminCompletions.set(false); getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); return; }
   worker.execute(()->{ try(Connection c=db()) {
-   List<AdminCourse> courses=readAdminCourses(c,lobby); Map<String,List<String>> players=new HashMap<>();
+   Map<String,List<String>> players=new HashMap<>();
    try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT DISTINCT course,name FROM parkour_times ORDER BY name")) {
     while(r.next()) { String slug=ParkourSql.course(r.getString(1)); if(slug!=null) players.computeIfAbsent(slug,k->new ArrayList<>()).add(r.getString(2)); }
    }
-   adminCourses=List.copyOf(courses); adminPlayers=Map.copyOf(players); adminCompletionsLoadedAt=System.currentTimeMillis();
+   adminCourses=List.copyOf(loaded); adminPlayers=Map.copyOf(players); adminCompletionsLoadedAt=System.currentTimeMillis();
   } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Vervollstaendigung konnte nicht geladen werden",ex); } finally { loadingAdminCompletions.set(false); } });
  }
  private void adminCommand(CommandSender sender,String[] args) {
@@ -277,22 +268,19 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   // getOfflinePlayerIfCached never blocks the main thread with a Mojang lookup.
   OfflinePlayer cached=last!=null && !action.equals("times")?Bukkit.getOfflinePlayerIfCached(last):null;
   UUID fallback=cached==null?null:cached.getUniqueId();
-  List<Map.Entry<Integer,String>> lobby;
-  try { lobby=lobbyCourses(); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); sender.sendMessage("Parkour-Kurse konnten nicht gelesen werden."); return; }
+  List<CourseArgs.Course> loaded;
+  try { loaded=courses(); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); sender.sendMessage("Parkour-Kurse konnten nicht gelesen werden."); return; }
   worker.execute(()->{
    try(Connection c=db()) {
-    List<AdminCourse> courses=readAdminCourses(c,lobby);
-    AdminCourse course=resolveCourse(courses,full); String player=null;
-    if(!action.equals("times") && end>2 && course==null) {
-     String part=ParkourAdmin.course(args,1,end-1); course=resolveCourse(courses,part); player=last;
-    }
+    ParkourAdmin.Target target=ParkourAdmin.select(args,end,!action.equals("times"),loaded);
+    CourseArgs.Course course=target.course(); String player=target.player();
     if(course==null) { reply(sender,"Kurs nicht gefunden: "+full); return; }
     if(action.equals("times")) { listAdminTimes(sender,c,course); return; }
     if(action.equals("removetime") && player==null) { reply(sender,"Verwendung: /parkour removetime <Kurs> <Spieler>"); return; }
-    if(action.equals("reset") && !confirm) { reply(sender,"Bestaetigung: /parkour reset "+course.name()+(player==null?"":" "+player)+" confirm"); return; }
+    if(action.equals("reset") && !confirm) { reply(sender,"Bestaetigung: /parkour reset "+course.pkName()+(player==null?"":" "+player)+" confirm"); return; }
     String uuid=null;
     if(player!=null) {
-     Set<String> variants=ParkourAdmin.variants(course.name());
+     Set<String> variants=ParkourAdmin.variants(course.pkName());
      try(PreparedStatement q=c.prepareStatement("SELECT uuid FROM parkour_times WHERE course IN ("+placeholders(variants.size())+") AND LOWER(name)=LOWER(?) ORDER BY updated_at DESC LIMIT 1")) {
       int i=bindVariants(q,variants); q.setString(i,player); try(ResultSet r=q.executeQuery()) { uuid=r.next()?r.getString(1):fallback==null?null:fallback.toString(); }
      }
@@ -302,17 +290,17 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
    } catch(Exception ex) { getLogger().log(Level.WARNING,"Parkour-Verwaltung fehlgeschlagen",ex); reply(sender,"Parkour-Verwaltung fehlgeschlagen: "+ex.getMessage()); }
   });
  }
- private void listAdminTimes(CommandSender sender,Connection c,AdminCourse course) throws SQLException {
-  Set<String> variants=ParkourAdmin.variants(course.name()); List<String> lines=new ArrayList<>();
+ private void listAdminTimes(CommandSender sender,Connection c,CourseArgs.Course course) throws SQLException {
+  Set<String> variants=ParkourAdmin.variants(course.pkName()); List<String> lines=new ArrayList<>();
   try(PreparedStatement q=c.prepareStatement("SELECT uuid,name,best_ms FROM parkour_times WHERE course IN ("+placeholders(variants.size())+") AND best_ms>0 ORDER BY best_ms ASC, updated_at ASC, uuid ASC")) {
    bindVariants(q,variants); Set<String> seen=new HashSet<>(); try(ResultSet r=q.executeQuery()) { while(r.next()) if(seen.add(r.getString(1))) lines.add((lines.size()+1)+". "+r.getString(2)+"  "+ParkourAdmin.format(r.getLong(3))); }
   }
-  reply(sender,"Bestzeiten fuer "+course.name()+":\n"+(lines.isEmpty()?"Noch keine Bestzeiten":String.join("\n",lines)));
+  reply(sender,"Bestzeiten fuer "+course.pkName()+":\n"+(lines.isEmpty()?"Noch keine Bestzeiten":String.join("\n",lines)));
  }
- private void deleteAdminTimes(CommandSender sender,AdminCourse course,String uuid) {
+ private void deleteAdminTimes(CommandSender sender,CourseArgs.Course course,String uuid) {
   int craft=-1; String error=null;
   try(Connection c=db()) {
-   Set<String> variants=course==null?Set.of():ParkourAdmin.variants(course.name());
+   Set<String> variants=course==null?Set.of():ParkourAdmin.variants(course.pkName());
    String sql="DELETE FROM parkour_times"+(course==null?"":" WHERE course IN ("+placeholders(variants.size())+")"+(uuid==null?"":" AND uuid=?"));
    try(PreparedStatement q=c.prepareStatement(sql)) { int i=bindVariants(q,variants); if(uuid!=null) q.setString(i,uuid); craft=q.executeUpdate(); }
   } catch(SQLException ex) { error="CraftCore: "+ex.getMessage(); getLogger().log(Level.WARNING,"CraftCore-Zeiten konnten nicht geloescht werden",ex); }
@@ -320,7 +308,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   // Lobby Parkour's shared SQLite connection is used on the main thread, so only touch it there.
   if(isEnabled()) getServer().getScheduler().runTask(this,()->deleteLobbyTimes(sender,course,uuid,craftCount,craftError));
  }
- private void deleteLobbyTimes(CommandSender sender,AdminCourse course,String uuid,int craft,String error) {
+ private void deleteLobbyTimes(CommandSender sender,CourseArgs.Course course,String uuid,int craft,String error) {
   int lobby=-1;
   try {
    // Lobby Parkour may cache best times in memory until restart; direct SQLite deletes cannot invalidate that cache.
@@ -357,26 +345,16 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
    return choices.stream().filter(x->x.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
   }
   String action=args[0].toLowerCase(Locale.ROOT);
-  if(action.equals("resetall") && sender.hasPermission("craftcore.parkour.admin")) return args.length==2 && "confirm".startsWith(args[1].toLowerCase(Locale.ROOT))?List.of("confirm"):List.of();
-  if(!(sender.hasPermission("craftcore.parkour.admin") && List.of("times","reset","removetime").contains(action)) && !(sender.isOp() && action.equals("setboard"))) return List.of();
-  if(System.currentTimeMillis()-adminCompletionsLoadedAt>30_000) loadAdminCompletions();
-  String prefix=ParkourAdmin.course(args,1,args.length); if(prefix==null) prefix="";
-  String lower=prefix.toLowerCase(Locale.ROOT); String raw=String.join(" ",Arrays.copyOfRange(args,1,args.length)).toLowerCase(Locale.ROOT); List<String> result=new ArrayList<>();
-  for(AdminCourse c:adminCourses) {
-   String name=c.name();
-   if(name.toLowerCase(Locale.ROOT).startsWith(lower)) {
-    String prior=String.join(" ",Arrays.copyOfRange(args,1,args.length-1));
-    int offset=prior.isEmpty()?0:prior.length()+1; if(offset<=name.length()) result.add(name.substring(offset));
-   }
-   if((action.equals("reset") || action.equals("removetime")) && raw.startsWith(name.toLowerCase(Locale.ROOT)+" ")) {
-    String playerPrefix=raw.substring(name.length()+1);
-    if(!playerPrefix.contains(" ")) {
-     if(action.equals("reset") && "confirm".startsWith(playerPrefix)) result.add("confirm");
-     for(String player:adminPlayers.getOrDefault(c.slug(),List.of())) if(player.toLowerCase(Locale.ROOT).startsWith(playerPrefix)) result.add(player);
-    }
-   }
+  boolean admin=sender.hasPermission("craftcore.parkour.admin") && List.of("times","reset","removetime","resetall").contains(action);
+  boolean setboard=sender.isOp() && action.equals("setboard");
+  if(!admin && !setboard) return List.of();
+  if(setboard) {
+   if(args.length!=2) return List.of();
+   try { return CourseArgs.completeCourses(args[1],courses()); }
+   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht geladen werden",ex); return List.of(); }
   }
-  return result.stream().distinct().toList();
+  if(System.currentTimeMillis()-adminCompletionsLoadedAt>30_000) loadAdminCompletions();
+  return ParkourAdmin.complete(args,adminCourses,adminPlayers);
  }
 
 }

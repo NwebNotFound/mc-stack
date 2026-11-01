@@ -19,12 +19,19 @@ final class ParkourSql {
  static final String LEGACY_COURSE = "lobby";
  static final String ADD_COURSE = "ALTER TABLE parkour_times ADD COLUMN IF NOT EXISTS course VARCHAR(64) NOT NULL DEFAULT '" + LEGACY_COURSE + "' AFTER uuid";
  static final String ADD_COURSE_NAME = "ALTER TABLE parkour_times ADD COLUMN IF NOT EXISTS course_name VARCHAR(64) NULL AFTER course";
- static final String CREATE_COURSES = "CREATE TABLE IF NOT EXISTS parkour_courses (slug VARCHAR(64) NOT NULL PRIMARY KEY, display_name VARCHAR(64) NULL, icon VARCHAR(48) NOT NULL DEFAULT 'paper')";
+ static final String CREATE_COURSES = "CREATE TABLE IF NOT EXISTS parkour_courses (slug VARCHAR(64) NOT NULL PRIMARY KEY, display_name VARCHAR(64) NULL, icon VARCHAR(48) NOT NULL DEFAULT 'paper', hidden BOOLEAN NOT NULL DEFAULT FALSE)";
  static final String ADD_DISPLAY = "ALTER TABLE parkour_courses ADD COLUMN IF NOT EXISTS display_name VARCHAR(64) NULL";
  static final String ADD_ICON = "ALTER TABLE parkour_courses ADD COLUMN IF NOT EXISTS icon VARCHAR(48) NOT NULL DEFAULT 'paper'";
+ static final String ADD_HIDDEN = "ALTER TABLE parkour_courses ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE";
  static final String SEED_COURSES = "INSERT INTO parkour_courses (slug) SELECT DISTINCT t.course FROM parkour_times t WHERE t.course IS NOT NULL AND t.course <> '' AND NOT EXISTS (SELECT 1 FROM parkour_courses c WHERE c.slug=t.course)";
  static final String CAVE_NAME = "UPDATE parkour_courses SET display_name='Cave Rush' WHERE slug='cave_rush' AND (display_name IS NULL OR TRIM(display_name)='')";
- static final String VIEW_COURSES = "CREATE OR REPLACE VIEW v_parkour_courses AS SELECT slug, COALESCE(NULLIF(TRIM(display_name),''),slug) AS course_name, COALESCE(NULLIF(TRIM(icon),''),'paper') AS course_icon FROM parkour_courses";
+ static final String VIEW_COURSES = "CREATE OR REPLACE VIEW v_parkour_courses AS SELECT slug, COALESCE(NULLIF(TRIM(display_name),''),slug) AS course_name, COALESCE(NULLIF(TRIM(icon),''),'paper') AS course_icon, hidden FROM parkour_courses";
+ /** Tafel-Titel: Anzeigename, sonst Lobby-Parkour-Name, sonst Slug. */
+ static String title(String slug,String display,String pkName) {
+  if(display!=null && !display.isBlank() && !display.trim().equals(slug)) return display.trim();
+  if(pkName!=null && !pkName.isBlank()) return pkName.trim();
+  return slug;
+ }
  static String displayName(String slug,String name) { return name==null || name.isBlank()?slug:name; }
  static String icon(String input) {
   if(input==null) return null; String value=input.toLowerCase(Locale.ROOT);

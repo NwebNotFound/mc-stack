@@ -22,6 +22,9 @@ public final class PvpMatches implements Listener {
     private final Map<String, Session> sessions=new HashMap<>();
     private final Map<UUID, Session> players=new HashMap<>();
     private final Set<String> starting=new HashSet<>();
+    private final ArenaEditor editor;
+    private final World build;
+    private long lastEditorIdleLog;
     private final IdleStop idle=new IdleStop(IdleStop.DEFAULT_GRACE_MS);
     private final AtomicBoolean counting=new AtomicBoolean();
     private record PendingCheck(Boolean pending, long checkedAt) {}
@@ -33,7 +36,7 @@ public final class PvpMatches implements Listener {
         PvpMatch match; World world; PvpLogic.Arena arena; String arenaName; boolean active, finishing, claimed;
         Session(PvpStore.Assignment a) { assignment=a; waitingSince=System.currentTimeMillis(); }
     }
-    public PvpMatches(JavaPlugin plugin,PvpStore store,File arenas,File kitsFile) { this.plugin=plugin;this.store=store;this.arenas=arenas;this.kitsFile=kitsFile; }
+    public PvpMatches(JavaPlugin plugin,PvpStore store,File arenas,File kitsFile,ArenaEditor editor,World build) { this.plugin=plugin;this.store=store;this.arenas=arenas;this.kitsFile=kitsFile;this.editor=editor;this.build=build; }
     public void start() {
         Bukkit.getMessenger().registerOutgoingPluginChannel(plugin,"BungeeCord");
         Bukkit.getPluginManager().registerEvents(this,plugin);
@@ -59,8 +62,9 @@ public final class PvpMatches implements Listener {
         UUID id=p.getUniqueId();
         async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;
+            player.setGameMode(PvpAccess.joinMode(builder,found.isPresent()));
             PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
-            if(decision==PvpAccess.JoinDecision.BUILDER) return;
+            if(decision==PvpAccess.JoinDecision.BUILDER) { if(PvpAccess.sendToBuildWorld(decision)) player.teleport(build.getSpawnLocation()); return; }
             if(decision==PvpAccess.JoinDecision.KICK) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }
             PvpStore.Assignment a=found.get(); Session s=sessions.computeIfAbsent(a.matchId(),k->new Session(a)); players.put(id,s);
             if(Bukkit.getPlayer(a.a())!=null && Bukkit.getPlayer(a.b())!=null && players.get(a.a())==s && players.get(a.b())==s) begin(s);
@@ -162,7 +166,11 @@ public final class PvpMatches implements Listener {
         long now=System.currentTimeMillis(); boolean playersOnline=!Bukkit.getOnlinePlayers().isEmpty();
         PendingCheck check=pendingCheck;
         long age=check.pending()==null ? Long.MAX_VALUE : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-check.checkedAt());
-        boolean elapsed=idle.tick(now,playersOnline);
-        if(elapsed && !IdleStop.busy(playersOnline,check.pending(),age)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
+        boolean buildOccupied=!build.getPlayers().isEmpty();
+        boolean elapsed=idle.tick(now,IdleStop.busy(playersOnline,null,Long.MAX_VALUE,buildOccupied));
+        if(buildOccupied && (lastEditorIdleLog==0 || now-lastEditorIdleLog>=60_000)) {
+            plugin.getLogger().info("PvP-Autostopp ausgesetzt: Spieler in "+build.getName()+" vorhanden."); lastEditorIdleLog=now;
+        }
+        if(elapsed && !IdleStop.busy(playersOnline,check.pending(),age,buildOccupied)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
     }
 }

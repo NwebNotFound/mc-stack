@@ -5,12 +5,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class IdleStopTest {
     @Test void onlyFreshSuccessfulPendingChecksKeepServerBusy() {
-        assertTrue(IdleStop.busy(true, null, Long.MAX_VALUE));
-        assertFalse(IdleStop.busy(false, null, 0));
-        assertFalse(IdleStop.busy(false, false, 0));
-        assertTrue(IdleStop.busy(false, true, 29_999));
-        assertFalse(IdleStop.busy(false, true, 30_000));
-        assertFalse(IdleStop.busy(false, true, -1));
+        assertTrue(IdleStop.busy(true, null, Long.MAX_VALUE, false));
+        assertFalse(IdleStop.busy(false, null, 0, false));
+        assertFalse(IdleStop.busy(false, false, 0, false));
+        assertTrue(IdleStop.busy(false, true, 29_999, false));
+        assertFalse(IdleStop.busy(false, true, 30_000, false));
+        assertFalse(IdleStop.busy(false, true, -1, false));
+    }
+    @Test void buildOccupantsKeepServerBusy() {
+        assertTrue(IdleStop.busy(false, null, 0, true));
+        assertFalse(IdleStop.busy(false, null, 0, false));
     }
     @Test void graceAndBusyReset() {
         IdleStop timer = new IdleStop(IdleStop.DEFAULT_GRACE_MS);

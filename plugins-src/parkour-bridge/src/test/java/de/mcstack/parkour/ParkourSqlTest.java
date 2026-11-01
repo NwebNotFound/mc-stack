@@ -17,12 +17,24 @@ class ParkourSqlTest {
   try(var c=java.sql.DriverManager.getConnection("jdbc:h2:mem:courses;MODE=MariaDB;DB_CLOSE_DELAY=-1"); var s=c.createStatement()) {
    s.execute("CREATE TABLE parkour_times (course VARCHAR(64))"); s.execute("INSERT INTO parkour_times VALUES ('cave_rush'),('other')");
    for(int i=0;i<2;i++) {
-    for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
-    if(i==0) s.execute("UPDATE parkour_courses SET display_name='Custom', icon='stone' WHERE slug='other'");
+    for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.ADD_HIDDEN,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
+    if(i==0) s.execute("UPDATE parkour_courses SET display_name='Custom', icon='stone', hidden=TRUE WHERE slug='other'");
    }
    try(var r=s.executeQuery("SELECT * FROM v_parkour_courses ORDER BY slug")) {
-    assertEquals(3,r.getMetaData().getColumnCount()); assertEquals("SLUG",r.getMetaData().getColumnLabel(1)); assertEquals("COURSE_NAME",r.getMetaData().getColumnLabel(2)); assertEquals("COURSE_ICON",r.getMetaData().getColumnLabel(3));
-    assertTrue(r.next()); assertEquals("Cave Rush",r.getString(2)); assertEquals("paper",r.getString(3)); assertTrue(r.next()); assertEquals("Custom",r.getString(2)); assertEquals("stone",r.getString(3)); assertFalse(r.next());
+    assertEquals(4,r.getMetaData().getColumnCount()); assertEquals("SLUG",r.getMetaData().getColumnLabel(1)); assertEquals("COURSE_NAME",r.getMetaData().getColumnLabel(2)); assertEquals("COURSE_ICON",r.getMetaData().getColumnLabel(3)); assertEquals("HIDDEN",r.getMetaData().getColumnLabel(4));
+    assertTrue(r.next()); assertEquals("Cave Rush",r.getString(2)); assertEquals("paper",r.getString(3)); assertFalse(r.getBoolean(4)); assertTrue(r.next()); assertEquals("Custom",r.getString(2)); assertEquals("stone",r.getString(3)); assertTrue(r.getBoolean(4)); assertFalse(r.next());
+   }
+  }
+ }
+ @Test void addHiddenDefaultsExistingAndNewCoursesToFalse() throws Exception {
+  try(var c=java.sql.DriverManager.getConnection("jdbc:h2:mem:hidden;MODE=MariaDB;DB_CLOSE_DELAY=-1"); var s=c.createStatement()) {
+   s.execute("CREATE TABLE parkour_courses (slug VARCHAR(64) NOT NULL PRIMARY KEY)");
+   s.execute("INSERT INTO parkour_courses VALUES ('existing')");
+   s.execute(ParkourSql.ADD_HIDDEN); s.execute(ParkourSql.ADD_HIDDEN);
+   s.execute("INSERT INTO parkour_courses (slug) VALUES ('new')");
+   try(var r=s.executeQuery("SELECT hidden FROM parkour_courses ORDER BY slug")) {
+    assertTrue(r.next()); assertFalse(r.getBoolean(1)); assertFalse(r.wasNull());
+    assertTrue(r.next()); assertFalse(r.getBoolean(1)); assertFalse(r.wasNull()); assertFalse(r.next());
    }
   }
  }
@@ -76,5 +88,11 @@ class ParkourSqlTest {
   assertEquals(-52.0, ParkourSql.floor(Arrays.asList(-32.0, -48.0, -43.0, null), 4));
   assertEquals(-33.0, ParkourSql.floor(List.of(-32.0), 0));
   assertNull(ParkourSql.floor(List.of(), 4));
+ }
+ @org.junit.jupiter.api.Test void titlePrefersDisplayThenPkNameThenSlug() {
+  org.junit.jupiter.api.Assertions.assertEquals("Sky Run",ParkourSql.title("house_climb","Sky Run","House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("House Climb",ParkourSql.title("house_climb","house_climb","House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("House Climb",ParkourSql.title("house_climb",null,"House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("house_climb",ParkourSql.title("house_climb"," ",null));
  }
 }

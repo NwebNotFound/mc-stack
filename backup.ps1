@@ -20,7 +20,7 @@ try {
     if($worlds.Count -eq 0){throw "Keine Welten fuer $server gefunden."}
     foreach($world in $worlds){Copy-Item -LiteralPath $world.FullName -Destination $dest -Recurse}
   }
-  $dumpCommand='exec mariadb-dump -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" --single-transaction --no-tablespaces --routines --triggers "$MARIADB_DATABASE"'
+  $dumpCommand='MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb-dump -u "$MARIADB_USER" --single-transaction --no-tablespaces --routines --triggers "$MARIADB_DATABASE"'
   $dump=Join-Path $backup 'craftcore.sql'
   python -c "import subprocess,sys; f=open(sys.argv[1], 'wb'); r=subprocess.run(['docker','compose','exec','-T','craftcore-db','sh','-c',sys.argv[2]],stdout=f); f.close(); sys.exit(r.returncode)" $dump $dumpCommand
   if($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $dump).Length -lt 100){throw 'MariaDB-Dump fehlgeschlagen.'}

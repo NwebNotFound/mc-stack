@@ -58,3 +58,6 @@ lp track ranks append builder
 lp track ranks append admin
 # Nils: admin rank; OP stays as emergency access (do NOT deop).
 lp user NwebNotFound parent set admin
+lp group builder permission set minecraft.command.gamemode true server=lobby
+lp group builder permission set minecraft.command.gamemode true server=pvp
+lp group builder permission set worldedit.* true server=pvp
