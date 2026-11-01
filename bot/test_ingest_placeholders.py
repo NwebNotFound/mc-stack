@@ -4,8 +4,8 @@ import ingest
 COLS = ["uuid", "mc_name", "team", "team_color", "team_color_hex", "team_color_code", "last_seen", "online"]
 
 
-def one(row, cols=COLS, names=None):
-    return next(iter(ingest.build_stats(cols, [row], names).values()))
+def one(row, cols=COLS):
+    return next(iter(ingest.build_stats(cols, [row]).values()))
 
 
 def test_zero_placeholders_become_null():
@@ -29,8 +29,10 @@ def test_real_values_kept():
     assert s["online"] is True
 
 
-def test_online_from_snapshot_when_column_missing():
-    cols = COLS[:-1]
-    assert one(["u", "Joni81", None, None, None, None, None], cols, {"joni81"})["online"] is True
-    assert one(["u", "Kai", None, None, None, None, None], cols, {"joni81"})["online"] is False
-    assert one(["u", "Kai", None, None, None, None, None], cols)["online"] is None
+def test_online_none_when_column_missing():
+    assert one(["u", "Kai", None, None, None, None, None], COLS[:-1])["online"] is None
+
+
+def test_team_literally_named_null_becomes_null():
+    for t in ("None", "null", "NULL"):
+        assert one(["u", "A", t, None, None, None, None, 0])["team"] is None

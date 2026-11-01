@@ -73,7 +73,7 @@ def build_links(rows, has_role):
     return out
 
 
-def build_stats(cols, rows, online_names=None):
+def build_stats(cols, rows):
     """cols: Spaltennamen aus v_player_stats; nur bekannte Felder, playtime_s -> playtime."""
     out = {}
     for row in rows[:200]:
@@ -92,7 +92,7 @@ def build_stats(cols, rows, online_names=None):
             except (TypeError, ValueError):
                 continue
             s[RENAME.get(f, f)] = v
-        s.update(presence_fields(r, online_names))
+        s.update(presence_fields(r))
         out[str(uuid)] = s
     return out
 
@@ -110,7 +110,8 @@ PLACEHOLDERS = ("0", "null", "none")
 
 
 def _clean(v):
-    """0, '0', '', None, 'null' -> None (Platzhalter), sonst getrimmter Text."""
+    """0, '0', '', None, 'null' -> None (Platzhalter), sonst getrimmter Text.
+    Bewusster Trade-off: ein Team, das wirklich 'None' oder 'null' heisst, wird ebenfalls null."""
     if isinstance(v, bool):
         return None
     if isinstance(v, (int, float)) and v == 0:
@@ -206,13 +207,10 @@ def team_colors(r):
     return {"team_color": h, "team_color_hex": h, "team_color_code": code}
 
 
-def presence_fields(r, online_names=None):
+def presence_fields(r):
     """team/team_color/last_seen/online aus v_player_stats; Platzhalter (0/''/None) -> None.
-    online: Spalte aus der View; fehlt sie, aus online_names (Server-Snapshot), sonst None."""
+    online: Spalte aus der View (player_presence); fehlt sie, None (unbekannt)."""
     online = _bool(r.get("online")) if "online" in r else None
-    if online is None and online_names is not None:
-        name = _text(r.get("mc_name") or r.get("name"))
-        online = name.lower() in online_names if name else None
     return {
         "team": _clean(r.get("team")),
         **team_colors(r),
