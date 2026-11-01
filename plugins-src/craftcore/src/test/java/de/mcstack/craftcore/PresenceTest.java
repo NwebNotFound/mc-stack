@@ -27,13 +27,26 @@ class PresenceTest {
       assertEquals(false,calls.get(3));
     } finally { TimeZone.setDefault(original); }
   }
-  @Test void trackerResetsAndWritesJoinAndQuit() throws Exception {
-    List<String> calls=new ArrayList<>(); UUID id=UUID.randomUUID();
+  @Test void trackerOrdersAndDrainsWithoutBlockingJoin() throws Exception {
+    List<String> calls=Collections.synchronizedList(new ArrayList<>()); UUID id=UUID.randomUUID();
+    var entered=new java.util.concurrent.CountDownLatch(1);
+    var release=new java.util.concurrent.CountDownLatch(1);
+    var errors=new ArrayList<Exception>();
     Presence.Tracker tracker=new Presence.Tracker(new Presence.Store() {
       public void reset() { calls.add("reset"); }
-      public void write(UUID uuid,boolean online) { calls.add(uuid+":"+online); }
-    });
-    tracker.start(); tracker.join(id); tracker.quit(id); tracker.stop();
+      public void write(UUID uuid,boolean online) throws Exception {
+        if(online) { entered.countDown(); assertTrue(release.await(3,java.util.concurrent.TimeUnit.SECONDS)); }
+        calls.add(uuid+":"+online);
+      }
+    },errors::add);
+    tracker.start(); tracker.join(id);
+    assertTrue(entered.await(3,java.util.concurrent.TimeUnit.SECONDS));
+    tracker.quit(id);
+    assertFalse(tracker.stop(10,java.util.concurrent.TimeUnit.MILLISECONDS));
+    tracker.join(UUID.randomUUID());
+    release.countDown();
+    assertTrue(tracker.stop(3,java.util.concurrent.TimeUnit.SECONDS));
     assertEquals(List.of("reset",id+":true",id+":false","reset"),calls);
+    assertTrue(errors.isEmpty());
   }
 }

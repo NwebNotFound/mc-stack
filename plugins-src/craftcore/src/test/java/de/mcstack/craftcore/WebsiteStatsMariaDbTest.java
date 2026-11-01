@@ -23,8 +23,8 @@ class WebsiteStatsMariaDbTest {
       String script=java.nio.file.Files.readString(java.nio.file.Path.of("../../scripts/v-player-stats.sql"));
       String view=script.substring(script.indexOf("CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_player_stats AS"),script.indexOf("GRANT SELECT ON craftcore.v_player_stats"));
       s.execute(view.trim());
-      WebsiteStats.migrate(c);
-      WebsiteStats.migrate(c);
+      WebsiteStats.migrate(c,WebsiteStats.entityIdsSql(java.util.stream.Stream.of("UNKNOWN","ZOMBIE","CREEPER")));
+      WebsiteStats.migrate(c,WebsiteStats.entityIdsSql(java.util.stream.Stream.of("UNKNOWN","ZOMBIE","CREEPER")));
       s.execute("INSERT INTO market_catalog VALUES('STONE',1.50,0.50,1.00,1)");
       s.execute("INSERT INTO market_locks(item,lock_buy,lock_sell) VALUES('STONE',TRUE,FALSE)");
       s.execute("INSERT INTO market_effective VALUES('STONE',1,1,1)");
@@ -71,18 +71,21 @@ class WebsiteStatsMariaDbTest {
       s.execute("UPDATE accounts SET uuid='p' WHERE uuid='"+id+"'");
       s.execute("INSERT INTO player_stats VALUES('p',100,4,2,8,CURRENT_TIMESTAMP)");
       s.execute("INSERT INTO player_stats_details VALUES('p','distance_cm','WALK_ONE_CM',250)");
-      s.execute("INSERT INTO player_stats_details VALUES('p','deaths_entity','ZOMBIE',2),('p','craft_item','STONE',3),('p','crafted','STONE',3),('p','blocks_placed','DIRT',4),('p','custom','JUMP',123)");
+      s.execute("INSERT INTO player_stats_details VALUES('p','deaths_entity','ZOMBIE',2),('p','craft_item','STONE',3),('p','crafted','STONE',3),('p','blocks_placed','DIRT',4),('p','custom','JUMP',123),('p','blocks_mined','STONE',7),('p','kills_entity','ZOMBIE',5)");
       DeathEvents.insert(c,new DeathEvents.Death("event-fall","p",1,"FALL",null,null,null,"survival"));
       DeathEvents.insert(c,new DeathEvents.Death("event-mob","p",2,"ENTITY_ATTACK","zombie","ZOMBIE",null,"survival"));
       DeathEvents.insert(c,new DeathEvents.Death("event-collision","p",3,"ZOMBIE",null,null,null,"survival"));
+      DeathEvents.insert(c,new DeathEvents.Death("event-unknown","p",4,"UNKNOWN",null,null,null,"survival"));
       try(ResultSet r=s.executeQuery("SELECT details FROM v_player_stats_ext WHERE uuid='p'")) {
         assertTrue(r.next());
         var json=com.google.gson.JsonParser.parseString(r.getString(1)).getAsJsonObject();
-        assertEquals(java.util.Set.of("distance_cm","deaths_entity","deaths_by","blocks_placed","crafted","jump"),json.keySet());
+        assertEquals(java.util.Set.of("distance_cm","deaths_entity","deaths_by","blocks_placed","crafted","blocks_mined","kills_entity","jump"),json.keySet());
+        assertEquals(7,json.getAsJsonObject("blocks_mined").get("stone").getAsInt());
+        assertEquals(5,json.getAsJsonObject("kills_entity").get("zombie").getAsInt());
         assertEquals(123,json.get("jump").getAsInt());
         assertEquals(250,json.getAsJsonObject("distance_cm").get("walk_one_cm").getAsInt());
         assertEquals(2,json.getAsJsonObject("deaths_entity").get("zombie").getAsInt());
-        assertEquals(java.util.Set.of("fall"),json.getAsJsonObject("deaths_by").keySet());
+        assertEquals(java.util.Set.of("fall","unknown"),json.getAsJsonObject("deaths_by").keySet());
         assertTrue(java.util.Collections.disjoint(json.getAsJsonObject("deaths_entity").keySet(),json.getAsJsonObject("deaths_by").keySet()));
         assertEquals(4,json.getAsJsonObject("blocks_placed").get("dirt").getAsInt());
         assertEquals(3,json.getAsJsonObject("crafted").get("stone").getAsInt());

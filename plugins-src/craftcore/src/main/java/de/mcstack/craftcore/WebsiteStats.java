@@ -21,15 +21,20 @@ final class WebsiteStats {
   /** 24h-Aenderung; vergleicht nur mit Kursen ab dem Preis-Stichtag (price_meta), davor NULL (= neu). */
   static final String CHANGE_24H_SQL = "CASE WHEN pm.effective_from_epoch IS NOT NULL AND FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 < pm.effective_from_epoch THEN NULL ELSE COALESCE((c.sell_price-h.avg_price)/NULLIF(h.avg_price,0)*100,0) END";
   // Keep cause keys distinct from entity IDs even if a damage cause shares an entity name.
-  static final String ENTITY_IDS_SQL = Arrays.stream(EntityType.values()).map(e->"'"+e.name().toLowerCase(Locale.ROOT)+"'").collect(Collectors.joining(","));
-  static final String DETAILS_SQL = "JSON_MERGE_PATCH(COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='custom'),JSON_OBJECT()),JSON_OBJECT("+
+  static String entityIdsSql(java.util.stream.Stream<String> ids) { return ids.filter(id -> !id.equalsIgnoreCase("UNKNOWN")).map(id -> "'"+id.toLowerCase(Locale.ROOT)+"'").collect(Collectors.joining(",")); }
+  static String detailsSql(String entityIdsSql) { return "JSON_MERGE_PATCH(COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='custom'),JSON_OBJECT()),JSON_OBJECT("+
+      "'blocks_mined',COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='blocks_mined'),JSON_OBJECT()),"+
+      "'kills_entity',COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='kills_entity'),JSON_OBJECT()),"+
       "'distance_cm',COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='distance_cm'),JSON_OBJECT()),"+
       "'deaths_entity',COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='deaths_entity'),JSON_OBJECT()),"+
-      "'deaths_by',COALESCE((SELECT JSON_OBJECTAGG(x.cause,x.n) FROM (SELECT uuid,LOWER(cause_type) cause,COUNT(*) n FROM player_deaths WHERE entity_type IS NULL AND LOWER(cause_type) NOT IN ("+ENTITY_IDS_SQL+") GROUP BY uuid,LOWER(cause_type)) x WHERE x.uuid=p.uuid AND NOT EXISTS (SELECT 1 FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='deaths_entity' AND LOWER(d.stat_key)=x.cause)),JSON_OBJECT()),"+
+      "'deaths_by',COALESCE((SELECT JSON_OBJECTAGG(x.cause,x.n) FROM (SELECT uuid,LOWER(cause_type) cause,COUNT(*) n FROM player_deaths WHERE entity_type IS NULL AND LOWER(cause_type) NOT IN ("+entityIdsSql+") GROUP BY uuid,LOWER(cause_type)) x WHERE x.uuid=p.uuid AND NOT EXISTS (SELECT 1 FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='deaths_entity' AND LOWER(d.stat_key)=x.cause)),JSON_OBJECT()),"+
       "'blocks_placed',COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='blocks_placed'),JSON_OBJECT()),"+
-      "'crafted',COALESCE((SELECT JSON_OBJECTAGG(x.stat_key,x.n) FROM (SELECT uuid,LOWER(stat_key) stat_key,MAX(stat_value) n FROM player_stats_details WHERE category IN ('crafted','craft_item') GROUP BY uuid,LOWER(stat_key)) x WHERE x.uuid=p.uuid),JSON_OBJECT())))";
-  static final String PLAYER_STATS_EXT_SQL = "SELECT p.uuid,p.mc_name,COALESCE(p.money,0) AS money,COALESCE(p.playtime_s,0) AS playtime_s,COALESCE(p.kills,0) AS kills,COALESCE(p.deaths,0) AS deaths,COALESCE(p.blocks_mined,0) AS blocks_mined,p.updated_at,COALESCE((SELECT SUM(d.stat_value)/100.0 FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='distance_cm'),0) AS distance_m,CAST(COALESCE(p.kills,0)/GREATEST(COALESCE(p.deaths,0),1) AS DECIMAL(20,4)) AS kd,COALESCE((SELECT SUM(w.playtime_s) FROM player_playtime_world w WHERE w.uuid=p.uuid),0) AS playtime,"+DETAILS_SQL+" AS details FROM v_player_stats p";
+      "'crafted',COALESCE((SELECT JSON_OBJECTAGG(x.stat_key,x.n) FROM (SELECT uuid,LOWER(stat_key) stat_key,MAX(stat_value) n FROM player_stats_details WHERE category IN ('crafted','craft_item') GROUP BY uuid,LOWER(stat_key)) x WHERE x.uuid=p.uuid),JSON_OBJECT())))"; }
+  static String playerStatsExtSql(String entityIdsSql) { return "SELECT p.uuid,p.mc_name,COALESCE(p.money,0) AS money,COALESCE(p.playtime_s,0) AS playtime_s,COALESCE(p.kills,0) AS kills,COALESCE(p.deaths,0) AS deaths,COALESCE(p.blocks_mined,0) AS blocks_mined,p.updated_at,COALESCE((SELECT SUM(d.stat_value)/100.0 FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='distance_cm'),0) AS distance_m,CAST(COALESCE(p.kills,0)/GREATEST(COALESCE(p.deaths,0),1) AS DECIMAL(20,4)) AS kd,COALESCE((SELECT SUM(w.playtime_s) FROM player_playtime_world w WHERE w.uuid=p.uuid),0) AS playtime,"+detailsSql(entityIdsSql)+" AS details FROM v_player_stats p"; }
   static void migrate(Connection c) throws SQLException {
+    migrate(c,entityIdsSql(Arrays.stream(EntityType.values()).map(EntityType::name)));
+  }
+  static void migrate(Connection c,String entityIdsSql) throws SQLException {
     DeathEvents.migrate(c);
     try (Statement s=c.createStatement()) {
       s.execute("CREATE TABLE IF NOT EXISTS market_events (id BIGINT AUTO_INCREMENT PRIMARY KEY,item VARCHAR(64) NOT NULL,qty INT NOT NULL,unit_price DECIMAL(20,4) NOT NULL,total_cp DECIMAL(20,2) NOT NULL,source VARCHAR(8) NOT NULL,ts BIGINT NOT NULL,INDEX market_event_time(ts,item))");
@@ -37,7 +42,7 @@ final class WebsiteStats {
       s.execute("CREATE TABLE IF NOT EXISTS market_catalog (item VARCHAR(64) PRIMARY KEY,buy_price DECIMAL(20,2) NOT NULL,sell_price DECIMAL(20,2) NOT NULL,base_price DECIMAL(20,4) NOT NULL,updated_at BIGINT NOT NULL)");
       s.execute("CREATE TABLE IF NOT EXISTS leaderboard_snapshots (week_ts BIGINT NOT NULL,day_key DATE NOT NULL,board VARCHAR(20) NOT NULL,uuid CHAR(36) NOT NULL,value DECIMAL(24,4) NOT NULL,PRIMARY KEY(week_ts,day_key,board,uuid))");
       s.execute("CREATE OR REPLACE VIEW v_player_stats_detail AS SELECT uuid,category,stat_key AS `key`,stat_value AS value FROM player_stats_details");
-      s.execute("CREATE OR REPLACE VIEW v_player_stats_ext AS "+PLAYER_STATS_EXT_SQL);
+      s.execute("CREATE OR REPLACE VIEW v_player_stats_ext AS "+playerStatsExtSql(entityIdsSql));
       s.execute("CREATE OR REPLACE VIEW v_leaderboard_values AS "+LEADERBOARD_VALUES_SQL);
       s.execute("CREATE OR REPLACE VIEW v_leaderboards AS "+LEADERBOARDS_SQL);
       PriceMeta.ensureSchema(s);
