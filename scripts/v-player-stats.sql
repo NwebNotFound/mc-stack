@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS craftcore.player_presence (
   uuid CHAR(36) NOT NULL,
   server VARCHAR(64) NOT NULL,
-  last_seen DATETIME(6) NOT NULL,
+  last_seen DATETIME(6) NULL,
   online BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (uuid, server)
 );

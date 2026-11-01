@@ -32,3 +32,7 @@ Nicht abgedeckt: Velocity-Handshake/Forwarding und das Teleportieren in die Aren
 Apply `scripts/v-player-stats.sql` as a MariaDB administrator after the existing CraftCore stats and team migrations. Then run `tools/pvp-db-user.ps1` and `tools/vip-db-user.ps1` before deploying or restarting PvP and VIP backends. This creates the shared presence table and grants each restricted backend access to it. Each backend needs a unique `CRAFTCORE_SERVER` value.
 
 The database user helpers require `MARIADB_ADMIN_USER`, `MARIADB_ADMIN_PASSWORD`, and the respective `CRAFTCORE_PVP_DB_PASSWORD` or `CRAFTCORE_VIP_DB_PASSWORD` in `.env`. They send credentials and SQL over stdin, create a private temporary option file inside the database container, and remove it afterwards. Run `python tools/check-db-credentials.py` to check scripts for common command-line credential patterns.
+
+### One-off presence backfill
+
+After the presence and player stats tables exist, an administrator may run `scripts/backfill-player-presence.sql` once using a secure option file or the existing database helper. It inserts missing lobby and survival rows from `player_playtime_world`; existing presence rows, including online state and last seen, are preserved on repeat runs. New rows are offline. Their `last_seen` is NULL (unknown). The script first permits NULL in the existing `last_seen` column. This script is manual and is not run at startup or deploy.

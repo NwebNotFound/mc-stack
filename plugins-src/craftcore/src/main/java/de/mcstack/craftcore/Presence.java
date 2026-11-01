@@ -14,7 +14,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 
 /** Shared, per-backend presence. DATETIME values are written explicitly in UTC. */
 final class Presence implements Listener {
-  static final String DDL = "CREATE TABLE IF NOT EXISTS player_presence (uuid CHAR(36) NOT NULL, server VARCHAR(64) NOT NULL, last_seen DATETIME(6) NOT NULL, online BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY (uuid,server))";
+  static final String DDL = "CREATE TABLE IF NOT EXISTS player_presence (uuid CHAR(36) NOT NULL, server VARCHAR(64) NOT NULL, last_seen DATETIME(6) NULL, online BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY (uuid,server))";
   static final String RECORD_SQL = "INSERT INTO player_presence(uuid,server,last_seen,online) VALUES(?,?,UTC_TIMESTAMP(6),?) ON DUPLICATE KEY UPDATE last_seen=VALUES(last_seen),online=VALUES(online)";
   interface Store { void write(UUID uuid, boolean online) throws Exception; void reset() throws Exception; }
   static final class Tracker {
@@ -55,7 +55,8 @@ final class Presence implements Listener {
       }
       return drained;
     }
-  }  private final CraftCore core;
+  }
+  private final CraftCore core;
   private final String server;
   private final Tracker tracker;
   private boolean migrateOnStart;
