@@ -166,11 +166,11 @@ public final class PvpMatches implements Listener {
         long now=System.currentTimeMillis(); boolean playersOnline=!Bukkit.getOnlinePlayers().isEmpty();
         PendingCheck check=pendingCheck;
         long age=check.pending()==null ? Long.MAX_VALUE : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-check.checkedAt());
-        boolean draftsPending=editor.hasDrafts(), buildOccupied=!build.getPlayers().isEmpty();
-        boolean elapsed=idle.tick(now,IdleStop.busy(playersOnline,null,Long.MAX_VALUE,draftsPending,buildOccupied));
-        if((draftsPending || buildOccupied) && (lastEditorIdleLog==0 || now-lastEditorIdleLog>=60_000)) {
-            plugin.getLogger().info("PvP-Autostopp ausgesetzt: Arena-Entwürfe oder Spieler in pvp_build vorhanden."); lastEditorIdleLog=now;
+        boolean buildOccupied=!build.getPlayers().isEmpty();
+        boolean elapsed=idle.tick(now,IdleStop.busy(playersOnline,null,Long.MAX_VALUE,buildOccupied));
+        if(buildOccupied && (lastEditorIdleLog==0 || now-lastEditorIdleLog>=60_000)) {
+            plugin.getLogger().info("PvP-Autostopp ausgesetzt: Spieler in "+build.getName()+" vorhanden."); lastEditorIdleLog=now;
         }
-        if(elapsed && !IdleStop.busy(playersOnline,check.pending(),age,draftsPending,buildOccupied)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
+        if(elapsed && !IdleStop.busy(playersOnline,check.pending(),age,buildOccupied)) { plugin.getLogger().info("PvP leer seit 120 s, stoppe Server"); Bukkit.shutdown(); }
     }
 }

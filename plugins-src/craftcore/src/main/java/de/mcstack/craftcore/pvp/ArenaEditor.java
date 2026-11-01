@@ -28,14 +28,18 @@ public final class ArenaEditor {
         Position position();
         PvpLogic.Region worldEditSelection();
     }
+    public static final class BuildWorldException extends IllegalArgumentException {
+        BuildWorldException(String buildWorld, String currentWorld) { super("Nur in "+buildWorld+" verfügbar – du bist gerade in "+currentWorld+". Nutze /pvp build."); }
+    }
     private final Storage storage;
+    private final String buildWorld;
     private final Map<String,Draft> drafts;
     private final Map<String,Position[]> selections = new HashMap<>();
-    public ArenaEditor(Storage storage) { this.storage=storage; this.drafts=new TreeMap<>(storage.loadDrafts()); }
+    public ArenaEditor(Storage storage, String buildWorld) { this.storage=storage; this.buildWorld=buildWorld; this.drafts=new TreeMap<>(storage.loadDrafts()); }
     public boolean hasDrafts() { return !drafts.isEmpty(); }
     public List<String> names() { Set<String> names=new TreeSet<>(storage.savedNames()); names.addAll(drafts.keySet()); return new ArrayList<>(names); }
     private Draft draft(String name) { Draft d=drafts.get(name); if(d==null && storage.savedNames().contains(name)) d=storage.loadSaved(name); return d; }
-    private static void requireBuild(Position p) { if(!p.world().equals("pvp_build")) throw new IllegalArgumentException("Nur in pvp_build verfügbar – du bist gerade in "+p.world()+". Nutze /pvp build."); }
+    private void requireBuild(Position p) { if(!p.world().equals(buildWorld)) throw new BuildWorldException(buildWorld,p.world()); }
     public String execute(Context context, String[] args) throws IOException {
         if(args.length==0) return COMMANDS;
         String op=args[0].toLowerCase(Locale.ROOT);
@@ -68,7 +72,7 @@ public final class ArenaEditor {
         if(op.equals("region") && args.length==2) {
             requireBuild(context.position()); Position[] s=selections.get(context.id());
             PvpLogic.Region region=s!=null && s[0]!=null && s[1]!=null ? PvpLogic.Region.between(s[0].block(),s[1].block()) : context.worldEditSelection();
-            if(region==null) throw new IllegalArgumentException("Setze Pos1 und Pos2 mit /pvp arena pos1 und /pvp arena pos2 oder wähle eine WorldEdit-Region in pvp_build aus.");
+            if(region==null) throw new IllegalArgumentException("Setze Pos1 und Pos2 mit /pvp arena pos1 und /pvp arena pos2 oder wähle eine WorldEdit-Region in "+buildWorld+" aus.");
             d.region=region; storage.writeDraft(name,d); drafts.put(name,d); return "Region für "+name+" gesetzt ("+format(region.min())+" bis "+format(region.max())+").";
         }
         if(op.equals("setspawn") && args.length==3) {
@@ -79,7 +83,7 @@ public final class ArenaEditor {
         }
         if(op.equals("save") && args.length==2) {
             requireBuild(context.position());
-            if(d.region==null || !d.spawns.containsKey(1) || !d.spawns.containsKey(2) || !d.spawns.values().stream().allMatch(p->p.world().equals("pvp_build") && d.region.contains(p.block()))) throw new IllegalArgumentException("Region und gültige Spawns 1 und 2 innerhalb der Region erforderlich.");
+            if(d.region==null || !d.spawns.containsKey(1) || !d.spawns.containsKey(2) || !d.spawns.values().stream().allMatch(p->p.world().equals(buildWorld) && d.region.contains(p.block()))) throw new IllegalArgumentException("Region und gültige Spawns 1 und 2 innerhalb der Region erforderlich.");
             storage.saveArena(name,d); storage.deleteDraft(name); drafts.remove(name); return "Arena "+name+" gespeichert.";
         }
         throw new IllegalArgumentException("Ungültiger Arena-Befehl. "+COMMANDS);

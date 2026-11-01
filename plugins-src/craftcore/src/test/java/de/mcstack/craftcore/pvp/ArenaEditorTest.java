@@ -19,26 +19,26 @@ class ArenaEditorTest {
         public void saveArena(String n,ArenaEditor.Draft d) { saved.put(n,copy(d)); }
     }
     static class Context implements ArenaEditor.Context {
-        ArenaEditor.Position p=new ArenaEditor.Position("pvp_build",1,2,3,0,0);
+        ArenaEditor.Position p=new ArenaEditor.Position("custom_build",1,2,3,0,0);
         PvpLogic.Region selection;
         public String id() { return "player"; }
         public ArenaEditor.Position position() { return p; }
         public PvpLogic.Region worldEditSelection() { return selection; }
     }
     @Test void fullFlowAndRestart() throws Exception {
-        var store=new Store(); var ctx=new Context(); var editor=new ArenaEditor(store);
+        var store=new Store(); var ctx=new Context(); var editor=new ArenaEditor(store,"custom_build");
         editor.execute(ctx,new String[]{"create","colosseum"});
         assertTrue(editor.execute(ctx,new String[]{"pos1","colosseum"}).contains("Position 1"));
-        ctx.p=new ArenaEditor.Position("pvp_build",5,6,7,0,0);
+        ctx.p=new ArenaEditor.Position("custom_build",5,6,7,0,0);
         editor.execute(ctx,new String[]{"pos2"}); editor.execute(ctx,new String[]{"region","colosseum"});
         editor.execute(ctx,new String[]{"setspawn","colosseum","1"});
-        editor=new ArenaEditor(store);
+        editor=new ArenaEditor(store,"custom_build");
         assertTrue(editor.execute(ctx,new String[]{"info","colosseum"}).contains("Spawns: [1]"));
         editor.execute(ctx,new String[]{"setspawn","colosseum","2"});
         assertTrue(editor.execute(ctx,new String[]{"save","colosseum"}).contains("gespeichert"));
         assertFalse(store.drafts.containsKey("colosseum")); assertTrue(store.saved.containsKey("colosseum"));
         assertTrue(editor.execute(ctx,new String[]{"info","colosseum"}).contains("gespeichert: ja"));
-        assertThrows(IllegalArgumentException.class,()->new ArenaEditor(store).execute(ctx,new String[]{"remove","colosseum"}));
+        assertThrows(IllegalArgumentException.class,()->new ArenaEditor(store,"custom_build").execute(ctx,new String[]{"remove","colosseum"}));
         assertTrue(store.saved.containsKey("colosseum"));
     }
     @Test void seededYamlDraftLoadsAndIsDeletedAfterSave(@TempDir Path root) throws Exception {
@@ -56,28 +56,32 @@ class ArenaEditorTest {
                   z: -18
                 spawns: {}
                 """);
-        var storage=new PvpModule.EditorStorage(arenas.toFile(),drafts.toFile(),(x,y,z)->"minecraft:air");
-        var editor=new ArenaEditor(storage); var ctx=new Context();
+        var storage=new PvpModule.EditorStorage(arenas.toFile(),drafts.toFile(),"custom_build",(x,y,z)->"minecraft:air");
+        var editor=new ArenaEditor(storage,"custom_build"); var ctx=new Context();
         assertTrue(editor.hasDrafts());
+        assertFalse(IdleStop.busy(false,null,0,false));
         assertTrue(editor.execute(ctx,new String[]{"info","colosseum"}).contains("Spawns: keine"));
-        assertThrows(IllegalArgumentException.class,()->new ArenaEditor(storage).execute(ctx,new String[]{"save","colosseum"}));
+        assertThrows(IllegalArgumentException.class,()->new ArenaEditor(storage,"custom_build").execute(ctx,new String[]{"save","colosseum"}));
         assertTrue(Files.exists(seed));
-        ctx.p=new ArenaEditor.Position("pvp_build",-10,1,0,0,0);
+        ctx.p=new ArenaEditor.Position("custom_build",-10,1,0,0,0);
         editor.execute(ctx,new String[]{"setspawn","colosseum","1"});
-        ctx.p=new ArenaEditor.Position("pvp_build",10,1,0,0,0);
+        ctx.p=new ArenaEditor.Position("custom_build",10,1,0,0,0);
         editor.execute(ctx,new String[]{"setspawn","colosseum","2"});
-        editor=new ArenaEditor(storage);
+        editor=new ArenaEditor(storage,"custom_build");
         assertTrue(editor.execute(ctx,new String[]{"save","colosseum"}).contains("gespeichert"));
         assertTrue(Files.exists(arenas.resolve("colosseum.yml")));
         assertFalse(Files.exists(seed));
         assertFalse(editor.hasDrafts());
     }
     @Test void worldEditAndMessages() throws Exception {
-        var store=new Store(); var ctx=new Context(); var editor=new ArenaEditor(store);
+        var store=new Store(); var ctx=new Context(); var editor=new ArenaEditor(store,"custom_build");
         editor.execute(ctx,new String[]{"create","arena"});
         ctx.p=new ArenaEditor.Position("world",0,0,0,0,0);
-        assertEquals("Nur in pvp_build verfügbar – du bist gerade in world. Nutze /pvp build.",assertThrows(IllegalArgumentException.class,()->editor.execute(ctx,new String[]{"region","arena"})).getMessage());
-        ctx.p=new ArenaEditor.Position("pvp_build",0,0,0,0,0);
+        assertEquals("Nur in custom_build verfügbar – du bist gerade in world. Nutze /pvp build.",assertThrows(IllegalArgumentException.class,()->editor.execute(ctx,new String[]{"region","arena"})).getMessage());
+        var message=PvpModule.buildWorldMessage("Nur in custom_build verfügbar – du bist gerade in world. Nutze /pvp build.");
+        assertEquals("PvP: Nur in custom_build verfügbar – du bist gerade in world. Nutze /pvp build.",net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(message));
+        assertEquals(net.kyori.adventure.text.event.ClickEvent.runCommand("/pvp build"),message.children().get(0).clickEvent());
+        ctx.p=new ArenaEditor.Position("custom_build",0,0,0,0,0);
         assertTrue(assertThrows(IllegalArgumentException.class,()->editor.execute(ctx,new String[]{"region","arena"})).getMessage().contains("WorldEdit"));
         ctx.selection=PvpLogic.Region.between(new PvpLogic.Point(0,0,0),new PvpLogic.Point(10,10,10));
         editor.execute(ctx,new String[]{"region","arena"}); assertEquals(ctx.selection,store.drafts.get("arena").region);

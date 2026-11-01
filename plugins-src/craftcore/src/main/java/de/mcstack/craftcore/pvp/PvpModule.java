@@ -2,6 +2,8 @@ package de.mcstack.craftcore.pvp;
 
 import java.io.*;
 import java.util.*;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
 import org.bukkit.*;
 import org.bukkit.command.*;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -25,7 +27,7 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
         kits=YamlConfiguration.loadConfiguration(kitsFile);
         build=Bukkit.createWorld(new WorldCreator("pvp_build").generator(new ChunkGenerator() {}));
         if(build==null) throw new IllegalStateException("pvp_build konnte nicht geladen werden");
-        editor=new ArenaEditor(new EditorStorage(arenas,draftsDir,(x,y,z)->build.getBlockAt(x,y,z).getBlockData().getAsString()));
+        editor=new ArenaEditor(new EditorStorage(arenas,draftsDir,build.getName(),(x,y,z)->build.getBlockAt(x,y,z).getBlockData().getAsString()),build.getName());
         PluginCommand cmd=Objects.requireNonNull(plugin.getCommand("pvp")); cmd.setExecutor(this); cmd.setTabCompleter(this);
         PvpStore store=new PvpStore(connectionSource);
         Objects.requireNonNull(plugin.getCommand("pvpdebug")).setExecutor(new PvpDebug(plugin,store));
@@ -58,7 +60,8 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     static final class EditorStorage implements ArenaEditor.Storage {
         private final File arenas, draftsDir;
         private final BlockSource blocks;
-        EditorStorage(File arenas, File draftsDir, BlockSource blocks) { this.arenas=arenas; this.draftsDir=draftsDir; this.blocks=blocks; }
+        private final String buildWorld;
+        EditorStorage(File arenas, File draftsDir, String buildWorld, BlockSource blocks) { this.arenas=arenas; this.draftsDir=draftsDir; this.buildWorld=buildWorld; this.blocks=blocks; }
         private File file(String name) { return new File(arenas,name+".yml"); }
         public Set<String> savedNames() { Set<String> names=new TreeSet<>(); String[] files=arenas.list((dir,n)->n.endsWith(".yml")); if(files!=null) for(String f:files) names.add(f.substring(0,f.length()-4)); return names; }
         public Map<String,ArenaEditor.Draft> loadDrafts() {
@@ -68,11 +71,11 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
         private ArenaEditor.Draft readDraft(YamlConfiguration y) {
             ArenaEditor.Draft d=new ArenaEditor.Draft();
             if(y.contains("min.x") && y.contains("max.x")) d.region=PvpLogic.Region.between(new PvpLogic.Point(y.getInt("min.x"),y.getInt("min.y"),y.getInt("min.z")),new PvpLogic.Point(y.getInt("max.x"),y.getInt("max.y"),y.getInt("max.z")));
-            var section=y.getConfigurationSection("spawns"); if(section!=null) for(String key:section.getKeys(false)) { try { int n=Integer.parseInt(key); String k="spawns."+key+"."; d.spawns.put(n,new ArenaEditor.Position(y.getString(k+"world","pvp_build"),y.getDouble(k+"x"),y.getDouble(k+"y"),y.getDouble(k+"z"),(float)y.getDouble(k+"yaw"),(float)y.getDouble(k+"pitch"))); } catch(NumberFormatException ignored) {} } return d;
+            var section=y.getConfigurationSection("spawns"); if(section!=null) for(String key:section.getKeys(false)) { try { int n=Integer.parseInt(key); String k="spawns."+key+"."; d.spawns.put(n,new ArenaEditor.Position(y.getString(k+"world",buildWorld),y.getDouble(k+"x"),y.getDouble(k+"y"),y.getDouble(k+"z"),(float)y.getDouble(k+"yaw"),(float)y.getDouble(k+"pitch"))); } catch(NumberFormatException ignored) {} } return d;
         }
         public ArenaEditor.Draft loadSaved(String name) {
             PvpLogic.Arena a=PvpLogic.Arena.read(YamlConfiguration.loadConfiguration(file(name))); ArenaEditor.Draft d=new ArenaEditor.Draft(); d.region=a.region();
-            a.spawns().forEach((n,s)->d.spawns.put(n,new ArenaEditor.Position("pvp_build",s.x()+d.region.min().x(),s.y()+d.region.min().y(),s.z()+d.region.min().z(),s.yaw(),s.pitch()))); return d;
+            a.spawns().forEach((n,s)->d.spawns.put(n,new ArenaEditor.Position(buildWorld,s.x()+d.region.min().x(),s.y()+d.region.min().y(),s.z()+d.region.min().z(),s.yaw(),s.pitch()))); return d;
         }
         public void writeDraft(String name,ArenaEditor.Draft d) throws IOException {
             YamlConfiguration y=new YamlConfiguration(); if(d.region!=null) { var min=d.region.min(); var max=d.region.max(); y.set("min.x",min.x()); y.set("min.y",min.y()); y.set("min.z",min.z()); y.set("max.x",max.x()); y.set("max.y",max.y()); y.set("max.z",max.z()); }
@@ -109,7 +112,12 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
                 else throw new IllegalArgumentException("Ungueltiger Kit-Befehl."); kits.save(kitsFile);matches.syncKits();p.sendMessage("Kit aktualisiert: "+a[2]);return true;
             }
             p.sendMessage("/pvp build|leave|arena|kit");
-        } catch(IllegalArgumentException | IOException e) {p.sendMessage("PvP: "+e.getMessage());} return true;
+        } catch(ArenaEditor.BuildWorldException e) {p.sendMessage(buildWorldMessage(e.getMessage()));}
+        catch(IllegalArgumentException | IOException e) {p.sendMessage("PvP: "+e.getMessage());} return true;
+    }
+    static Component buildWorldMessage(String message) {
+        String link="Nutze /pvp build"; int start=message.lastIndexOf(link);
+        return Component.text("PvP: "+message.substring(0,start)).append(Component.text(link).clickEvent(ClickEvent.runCommand("/pvp build"))).append(Component.text(message.substring(start+link.length())));
     }
     private List<String> kitNames() {var s=kits.getConfigurationSection("kits");return s==null?List.of():new ArrayList<>(s.getKeys(false));}
     @Override public List<String> onTabComplete(CommandSender sender,Command cmd,String alias,String[] a) {
