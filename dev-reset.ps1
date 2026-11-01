@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 function Get-ServerMode {
     $sql = "SELECT mode FROM server_status WHERE id=1;"
-    $result = $sql | & docker compose exec -T craftcore-db sh -c 'exec mariadb -N -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"' 2>&1
+    $result = $sql | & docker compose exec -T craftcore-db sh -c 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb -N -u "$MARIADB_USER" "$MARIADB_DATABASE"' 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Servermodus aus der Datenbank nicht lesbar; keine Aktion.' }
     $mode = ($result -join '').Trim()
     if ($mode -cnotin @('dev','online','wartung')) { throw 'Ungueltiger Servermodus; keine Aktion.' }
@@ -67,7 +67,7 @@ try {
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $temp -Recurse }
         }
         if (-not (Test-Path -LiteralPath (Join-Path $temp 'world'))) { throw 'Survival-Hauptwelt fehlt; Reset abgebrochen.' }
-        $dumpCommand = 'exec mariadb-dump -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" --single-transaction --no-tablespaces "$MARIADB_DATABASE" claims homes graves'
+        $dumpCommand = 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb-dump -u "$MARIADB_USER" --single-transaction --no-tablespaces "$MARIADB_DATABASE" claims homes graves'
         $dump = Invoke-Docker @('compose','exec','-T','craftcore-db','sh','-c',$dumpCommand)
         [IO.File]::WriteAllLines((Join-Path $temp 'craftcore-claims-homes-graves.sql'), [string[]]$dump, (New-Object Text.UTF8Encoding $false))
         Compress-Archive -Path (Join-Path $temp '*') -DestinationPath $zip -CompressionLevel Optimal
@@ -88,7 +88,7 @@ try {
         } finally { $archive.Dispose() }
         Remove-Item -LiteralPath $temp -Recurse -Force
         $sql = "START TRANSACTION; DELETE FROM claims WHERE server='Survival' AND world IN ('world','world_nether','world_the_end'); DELETE FROM homes WHERE server='Survival' AND world IN ('world','world_nether','world_the_end'); DELETE FROM graves WHERE server='Survival' AND world IN ('world','world_nether','world_the_end'); COMMIT;"
-        $dbCommand = 'exec mariadb -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"'
+        $dbCommand = 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb -u "$MARIADB_USER" "$MARIADB_DATABASE"'
         $dbOutput = $sql | & docker compose exec -T craftcore-db sh -c $dbCommand 2>&1
         if ($LASTEXITCODE -ne 0) { throw "SQL-Reset fehlgeschlagen: $($dbOutput -join ' ')" }
         $destructive = $true
