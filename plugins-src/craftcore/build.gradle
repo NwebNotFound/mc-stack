@@ -15,7 +15,11 @@ tasks.register('verifyVaultApi') {
         if (digest != vaultSha256) throw new GradleException('VaultAPI-1.7.jar SHA-256 mismatch')
     }
 }
-tasks.withType(JavaCompile).configureEach { dependsOn tasks.named('verifyVaultApi') }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    dependsOn tasks.named('verifyVaultApi')
+}
+tasks.withType(ProcessResources).configureEach { filteringCharset = 'UTF-8' }
 dependencies {
     compileOnly('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }
     testImplementation('net.citizensnpcs:citizens-main:2.0.44-SNAPSHOT') { transitive = false }

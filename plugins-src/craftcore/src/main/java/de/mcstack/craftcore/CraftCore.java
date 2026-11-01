@@ -37,6 +37,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private TeamInvites teamInvites;
   private Motivation motivation;
   private RankDisplays rankDisplays;
+  static final String PLAYER_ONLY_MESSAGE = "Nur für Spieler.";
   static final String TEAM_COLOR_MIGRATION = "ALTER TABLE teams ADD COLUMN IF NOT EXISTS color VARCHAR(4) NOT NULL DEFAULT '&f'";
   void refreshRanks() { if(rankDisplays!=null) rankDisplays.refreshAll(); }
   private Presence presence;
@@ -170,7 +171,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       case "fractionalDigits": return 2; case "format": return Money.format(Money.cents((double)args[0]));
       case "currencyNamePlural": case "currencyNameSingular": return "CP";
       case "getBanks": return Collections.emptyList();
-      case "createBank": case "deleteBank": case "bankBalance": case "bankHas": case "bankWithdraw": case "bankDeposit": case "isBankOwner": case "isBankMember": return new EconomyResponse(0,0,EconomyResponse.ResponseType.NOT_IMPLEMENTED,"Bankkonten nicht unterstÃƒÂ¼tzt");
+      case "createBank": case "deleteBank": case "bankBalance": case "bankHas": case "bankWithdraw": case "bankDeposit": case "isBankOwner": case "isBankMember": return new EconomyResponse(0,0,EconomyResponse.ResponseType.NOT_IMPLEMENTED,"Bankkonten nicht unterstützt");
       case "hasAccount": return true;
       case "createPlayerAccount": balance(resolve(args[0]).getUniqueId()); return true;
       case "getBalance": return balance(resolve(args[0]).getUniqueId())/100.0;
@@ -178,7 +179,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       case "withdrawPlayer": case "depositPlayer": {
         UUID id=resolve(args[0]).getUniqueId(); double amount=(double)args[args.length-1];
         try { long n=Money.cents(amount); if(n<0)throw new IllegalArgumentException(); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
-        catch(IllegalArgumentException | ArithmeticException e) { return new EconomyResponse(0,0,EconomyResponse.ResponseType.FAILURE,"UngÃƒÂ¼ltiger Betrag"); }
+        catch(IllegalArgumentException | ArithmeticException e) { return new EconomyResponse(0,0,EconomyResponse.ResponseType.FAILURE,"Ungültiger Betrag"); }
       }
       case "toString": return "CraftCore Economy"; case "hashCode": return System.identityHashCode(this); case "equals": return args[0]==economy;
       default: throw new UnsupportedOperationException(method);
@@ -384,7 +385,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       }, sender::sendMessage);
       return true;
     }
-    if(!(sender instanceof Player p)) { sender.sendMessage("Nur fÃƒÂ¼r Spieler."); return true; }
+    if(!(sender instanceof Player p)) { sender.sendMessage(PLAYER_ONLY_MESSAGE); return true; }
     try {
       if(args.length==0 && Set.of("pay","team","claim","home","trade","vip").contains(command.getName())) { if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); return true; }
       switch(command.getName()) {
@@ -396,7 +397,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
           if(args.length!=2){UserMenu.help(p,"pay"); break;}
           String targetId=tx(c->one(c,"SELECT uuid FROM known_players WHERE name=?",args[0])); if(targetId==null){p.sendMessage("Spieler ist im Netzwerk nicht bekannt."); break;}
           UUID recipient=UUID.fromString(targetId); Player other=Bukkit.getPlayer(recipient);
-          long n=Money.cents(args[1]); if(transfer(p.getUniqueId(),recipient,n)){ p.sendMessage("Gesendet an "+args[0]+": "+Money.format(n)); if(other!=null) other.sendMessage(p.getName()+" sendet dir "+Money.format(n)); } else p.sendMessage("UngÃƒÂ¼ltiger Betrag, eigenes Konto oder nicht genug CP."); break;
+          long n=Money.cents(args[1]); if(transfer(p.getUniqueId(),recipient,n)){ p.sendMessage("Gesendet an "+args[0]+": "+Money.format(n)); if(other!=null) other.sendMessage(p.getName()+" sendet dir "+Money.format(n)); } else p.sendMessage("Ungültiger Betrag, eigenes Konto oder nicht genug CP."); break;
         }
         case "team": team(p,args); break;
         case "shop": if(moduleAvailable(Shop.instance,p::sendMessage)) Shop.instance.command(p,args); break;
@@ -407,8 +408,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "bank": case "market": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.command(p,command.getName(),args); break;
         case "claim": case "unclaim": case "spawn": case "home": case "sethome": if(moduleAvailable(Features.instance,p::sendMessage)) Features.instance.command(p,command.getName(),args); break;
       }
-    } catch(NumberFormatException | ArithmeticException e) { p.sendMessage("UngÃƒÂ¼ltiger Betrag (maximal zwei Nachkommastellen)."); }
-    catch(Exception e) { getLogger().warning("CraftCore Fehler: "+e); p.sendMessage("Aktion fehlgeschlagen. Bitte spÃƒÂ¤ter erneut versuchen."); }
+    } catch(NumberFormatException | ArithmeticException e) { p.sendMessage("Ungültiger Betrag (maximal zwei Nachkommastellen)."); }
+    catch(Exception e) { getLogger().warning("CraftCore Fehler: "+e); p.sendMessage("Aktion fehlgeschlagen. Bitte später erneut versuchen."); }
     return true;
   }
   private void team(Player p,String[] a) throws Exception {
@@ -421,19 +422,19 @@ public final class CraftCore extends JavaPlugin implements Listener {
       String tid=one(c,"SELECT team_id FROM members WHERE uuid=?",id.toString()); String role=one(c,"SELECT role FROM members WHERE uuid=?",id.toString());
       switch(op) {
         case "create":
-          if(a.length!=2 || !a[1].matches("[A-Za-z0-9_]{1,16}"))return "Name: 1Ã¢â‚¬â€œ16 Buchstaben, Zahlen oder _.";
+          if(a.length!=2 || !a[1].matches("[A-Za-z0-9_]{1,16}"))return "Name: 1–16 Buchstaben, Zahlen oder _.";
           if(tid!=null)return "Du bist bereits in einem Team.";
           if(one(c,"SELECT id FROM teams WHERE name=?",a[1])!=null)return "Teamname bereits vergeben.";
           exec(c,"INSERT INTO teams(name) VALUES (?)",a[1]); String created=one(c,"SELECT id FROM teams WHERE name=?",a[1]); exec(c,"INSERT INTO members VALUES (?,?,?)",id.toString(),created,"OWNER"); return "Team erstellt: "+a[1];
         case "leave":
-          if(tid==null)return "Du bist in keinem Team."; if(role.equals("OWNER")){ exec(c,"UPDATE claims SET team_id=NULL WHERE team_id=?",tid); exec(c,"DELETE FROM teams WHERE id=?",tid); return "Team aufgelÃƒÂ¶st."; } exec(c,"DELETE FROM members WHERE uuid=?",id.toString()); return "Team verlassen.";
+          if(tid==null)return "Du bist in keinem Team."; if(role.equals("OWNER")){ exec(c,"UPDATE claims SET team_id=NULL WHERE team_id=?",tid); exec(c,"DELETE FROM teams WHERE id=?",tid); return "Team aufgelöst."; } exec(c,"DELETE FROM members WHERE uuid=?",id.toString()); return "Team verlassen.";
         case "kick": case "promote": case "demote":
           if(tid==null || role.equals("MEMBER"))return "Keine Berechtigung.";
           String oid=other.getUniqueId().toString(); String ot=one(c,"SELECT team_id FROM members WHERE uuid=?",oid); String orole=one(c,"SELECT role FROM members WHERE uuid=?",oid);
-          if(!tid.equals(ot) || oid.equals(id.toString()) || "OWNER".equals(orole))return "UngÃƒÂ¼ltiges Teammitglied.";
-          if(op.equals("kick")){ if(role.equals("ADMIN") && !orole.equals("MEMBER"))return "Admins kÃƒÂ¶nnen nur Mitglieder entfernen."; exec(c,"DELETE FROM members WHERE uuid=?",oid); return "Mitglied entfernt."; }
-          if(!role.equals("OWNER"))return "Nur der Owner darf Rollen ÃƒÂ¤ndern.";
-          exec(c,"UPDATE members SET role=? WHERE uuid=?",op.equals("promote")?"ADMIN":"MEMBER",oid); return "Rolle geÃƒÂ¤ndert.";
+          if(!tid.equals(ot) || oid.equals(id.toString()) || "OWNER".equals(orole))return "Ungültiges Teammitglied.";
+          if(op.equals("kick")){ if(role.equals("ADMIN") && !orole.equals("MEMBER"))return "Admins können nur Mitglieder entfernen."; exec(c,"DELETE FROM members WHERE uuid=?",oid); return "Mitglied entfernt."; }
+          if(!role.equals("OWNER"))return "Nur der Owner darf Rollen ändern.";
+          exec(c,"UPDATE members SET role=? WHERE uuid=?",op.equals("promote")?"ADMIN":"MEMBER",oid); return "Rolle geändert.";
         case "color":
           if(tid==null || !"OWNER".equals(role)) return "Nur der Owner darf die Teamfarbe aendern.";
           if(a.length!=2 || RankDisplay.teamColor(a[1]).isEmpty()) return "Ungueltige Farbe. Verfuegbar: "+String.join(", ",RankDisplay.TEAM_COLORS.keySet());
