@@ -73,7 +73,7 @@ def build_links(rows, has_role):
     return out
 
 
-def build_stats(cols, rows):
+def build_stats(cols, rows, online_names=None):
     """cols: Spaltennamen aus v_player_stats; nur bekannte Felder, playtime_s -> playtime."""
     out = {}
     for row in rows[:200]:
@@ -92,7 +92,7 @@ def build_stats(cols, rows):
             except (TypeError, ValueError):
                 continue
             s[RENAME.get(f, f)] = v
-        s.update(presence_fields(r))
+        s.update(presence_fields(r, online_names))
         out[str(uuid)] = s
     return out
 
@@ -106,10 +106,27 @@ def _text(v):
     return v or None
 
 
+PLACEHOLDERS = ("0", "null", "none")
+
+
+def _clean(v):
+    """0, '0', '', None, 'null' -> None (Platzhalter), sonst getrimmter Text."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v == 0:
+        return None
+    t = _text(v)
+    return None if t is None or t.lower() in PLACEHOLDERS else t
+
+
 def _iso_utc(v):
     """UTC-Zeitstempel (datetime, Unix-s/ms, String) -> ISO 8601 mit Z, sonst None."""
     import datetime as _dt
-    if v is None:
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v <= 0:
+        return None
+    if isinstance(v, str) and v.strip() in ("", "0", "0000-00-00 00:00:00", "0000-00-00T00:00:00Z"):
         return None
     try:
         if isinstance(v, _dt.datetime):
@@ -127,6 +144,8 @@ def _iso_utc(v):
         else:
             return None
     except (ValueError, OverflowError, OSError):
+        return None
+    if d.year <= 1970:
         return None
     return d.replace(microsecond=0).isoformat() + "Z"
 
@@ -179,7 +198,7 @@ HEX_TO_CODE = {v: "&" + k for k, v in MC_COLORS.items()}
 def team_colors(r):
     """Alle Quellformen (team_color als Hex/&-Code, team_color_hex, team_color_code) ->
     team_color == team_color_hex (#RRGGBB oder None), team_color_code (&x oder None)."""
-    raw, hcol, ccol = r.get("team_color"), r.get("team_color_hex"), r.get("team_color_code")
+    raw, hcol, ccol = (_clean(r.get(k)) for k in ("team_color", "team_color_hex", "team_color_code"))
     code = team_color_code(ccol) or team_color_code(raw)
     h = _hex(hcol) or _hex(raw) or (MC_COLORS[code[1]] if code else None)
     if not code and h:
@@ -187,13 +206,18 @@ def team_colors(r):
     return {"team_color": h, "team_color_hex": h, "team_color_code": code}
 
 
-def presence_fields(r):
-    """team/team_color/last_seen/online aus v_player_stats; fehlende Spalten -> None."""
+def presence_fields(r, online_names=None):
+    """team/team_color/last_seen/online aus v_player_stats; Platzhalter (0/''/None) -> None.
+    online: Spalte aus der View; fehlt sie, aus online_names (Server-Snapshot), sonst None."""
+    online = _bool(r.get("online")) if "online" in r else None
+    if online is None and online_names is not None:
+        name = _text(r.get("mc_name") or r.get("name"))
+        online = name.lower() in online_names if name else None
     return {
-        "team": _text(r.get("team")),
+        "team": _clean(r.get("team")),
         **team_colors(r),
         "last_seen": _iso_utc(r.get("last_seen")),
-        "online": _bool(r.get("online")),
+        "online": online,
     }
 
 
