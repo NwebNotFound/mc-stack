@@ -207,10 +207,11 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   saveConfig();
  }
  private void renderAll(Map<String,List<ParkourSql.Entry>> byCourse,Map<String,String> names) {
-  StringJoiner boards=new StringJoiner("\n\n"); byCourse.forEach((slug,entries)->boards.add(ParkourSql.board(ParkourSql.displayName(slug,names.get(slug)),entries)));
+  Map<String,String> pkNames=new HashMap<>(); try { for(CourseArgs.Course c:courses()) if(c.slug()!=null) pkNames.put(c.slug(),c.pkName()); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht geladen werden",ex); }
+  StringJoiner boards=new StringJoiner("\n\n"); byCourse.forEach((slug,entries)->boards.add(ParkourSql.board(ParkourSql.title(slug,names.get(slug),pkNames.get(slug)),entries)));
   render("board",byCourse.isEmpty()?ParkourSql.allBoards(Map.of()):boards.toString());
   var sec=getConfig().getConfigurationSection("boards");
-  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(ParkourSql.displayName(course,names.get(course)),byCourse.getOrDefault(course,List.of()))); }
+  if(sec!=null) for(String key:sec.getKeys(false)) { String path="boards."+key; String name=getConfig().getString(path+".course",key); String course=ParkourSql.course(name); render(path,ParkourSql.board(ParkourSql.title(course,names.get(course),name),byCourse.getOrDefault(course,List.of()))); }
  }
  private void render(String key,String text) {
   Location loc=getConfig().getLocation(key+".location"); if(loc==null || loc.getWorld()==null) return;
