@@ -14,7 +14,7 @@ def test_missing_columns_give_null():
 def test_present_columns():
     cols = COLS + ["team", "team_color", "last_seen", "online"]
     s = ingest.build_stats(cols, [("u1", "A", 1, "Rot", "#ff0000", dt.datetime(2026, 11, 1, 0, 5, 3), 1)])["u1"]
-    assert s["team"] == "Rot" and s["team_color"] == "#ff0000"
+    assert s["team"] == "Rot" and s["team_color"] == "#FF0000"
     assert s["last_seen"] == "2026-11-01T00:05:03Z"
     assert s["online"] is True
 
