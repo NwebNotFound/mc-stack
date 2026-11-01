@@ -16,3 +16,9 @@ jobs:
           gradle-version: '9.8.2'
       - run: gradle clean build --no-daemon
         working-directory: plugins-src/craftcore
+  db-credentials:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check scripts for DB credentials on the command line
+        run: python3 tools/check-db-credentials.py

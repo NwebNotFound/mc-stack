@@ -37,6 +37,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private final PvpStore store;
     private final PvpHostClient host = new PvpHostClient();
     private final PvpQueue queue = new PvpQueue();
+    private final PvpPing ping = new PvpPing();
     private final Map<UUID, String> lastKit = new HashMap<>();
     private final AtomicBoolean buildStarting = new AtomicBoolean();
     // Accessed only on the server thread, including while a pair is starting.
@@ -238,17 +239,22 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private void startBuild(UUID id) {
         try {
             if (!host.status().equals("online") && !host.start()) { Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden")); return; }
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+            long timeout = 180, begin = System.nanoTime(), deadline = begin + TimeUnit.SECONDS.toNanos(timeout);
             while (System.nanoTime() < deadline) {
-                if (host.status().equals("online")) {
+                // Container "online" heisst nicht, dass Paper schon Verbindungen annimmt: erst nach echtem Ping verbinden.
+                if (host.status().equals("online") && ping.ping()) {
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         Player player = Bukkit.getPlayer(id);
-                        if (player != null) try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht gestartet werden"); }
+                        if (player == null) return;
+                        player.sendActionBar(Component.text("PvP-Server bereit, verbinde ..."));
+                        try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht erreicht werden"); }
                     }); return;
                 }
+                long elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - begin);
+                Bukkit.getScheduler().runTask(plugin, () -> { Player p = Bukkit.getPlayer(id); if (p != null) p.sendActionBar(Component.text(PvpPing.progress(elapsed, timeout))); });
                 try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
-            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server konnte nicht gestartet werden"));
+            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server antwortet nicht (Timeout " + timeout + "s), bitte spaeter erneut /pvp build"));
         } finally { buildStarting.set(false); }
     }
     private void connectPlayer(Player player) throws java.io.IOException {

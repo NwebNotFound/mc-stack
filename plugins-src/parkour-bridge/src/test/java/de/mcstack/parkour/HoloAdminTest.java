@@ -16,7 +16,7 @@ class HoloAdminTest {
  MockedStatic<Bukkit> bukkit;
  @BeforeEach void setup() {
   bukkit=mockStatic(Bukkit.class); plugin=mock(ParkourBridge.class); player=mock(Player.class); world=mock(World.class); chunk=mock(Chunk.class); display=mock(TextDisplay.class); command=mock(Command.class); config=new YamlConfiguration(); uuid=UUID.randomUUID();
-  Location loc=new Location(world,1,2,3); when(world.getName()).thenReturn("world"); when(world.getChunkAt(any(Location.class))).thenReturn(chunk); when(player.getLocation()).thenReturn(loc); when(player.getEyeLocation()).thenReturn(loc); when(player.getWorld()).thenReturn(world); when(player.getUniqueId()).thenReturn(UUID.randomUUID()); when(player.hasPermission("craftcore.holo.admin")).thenReturn(true); when(plugin.getConfig()).thenReturn(config); when(plugin.saveConfigChecked()).thenReturn(true); config.set("boards.test.location",loc); config.set("boards.test.entity",uuid.toString()); bukkit.when(()->Bukkit.getEntity(uuid)).thenReturn(display); bukkit.when(Bukkit::getWorlds).thenReturn(List.of(world)); when(world.getLoadedChunks()).thenReturn(new Chunk[]{chunk}); when(chunk.getEntities()).thenReturn(new Entity[0]); admin=new HoloAdmin(plugin);
+  Location loc=new Location(world,1,2,3); when(world.getName()).thenReturn("world"); when(world.getChunkAt(any(Location.class))).thenReturn(chunk); when(player.getLocation()).thenReturn(loc); when(player.getEyeLocation()).thenReturn(loc); when(player.getWorld()).thenReturn(world); when(player.getUniqueId()).thenReturn(UUID.randomUUID()); when(player.hasPermission("craftcore.holo.admin")).thenReturn(true); when(plugin.getConfig()).thenReturn(config); when(plugin.saveConfigChecked()).thenReturn(true); config.set("boards.test.location",loc); config.set("boards.test.entity",uuid.toString()); bukkit.when(()->Bukkit.getEntity(uuid)).thenReturn(display); bukkit.when(Bukkit::getWorlds).thenReturn(List.of(world)); when(world.getLoadedChunks()).thenReturn(new Chunk[]{chunk}); when(chunk.getEntities()).thenReturn(new Entity[0]); admin=new HoloAdmin(plugin,name->name.equals("lantern")?Material.LANTERN:null,material->new HoloAdmin.MaterialIcon(material==Material.LANTERN,material==Material.LANTERN?"lantern":null));
  }
  @AfterEach void close() { bukkit.close(); }
  @Test void listAndCompletionRespectPermission() {
@@ -42,5 +42,28 @@ class HoloAdminTest {
  }
  @Test void moveTeleportsAndUpdatesLocation() {
   Location dest=new Location(world,5,6,7); when(player.getLocation()).thenReturn(dest); when(display.teleport(dest)).thenReturn(true); admin.onCommand(player,command,"cc",new String[]{"holo","move",HoloAdmin.id("boards.test")}); verify(display).teleport(dest); assertEquals(dest,config.getLocation("boards.test.location")); verify(plugin).saveConfig();
+ }
+ @Test void parkourIconResolvesMultiwordAndQuotedCourse() throws Exception {
+  when(plugin.courseNames()).thenReturn(Map.of("cave_rush","Cave Rush")); when(plugin.updateCourse(anyString(),anyString(),anyString())).thenReturn(true);
+  admin.onCommand(player,command,"cc",new String[]{"parkour","icon","Cave","Rush","lantern"});
+  admin.onCommand(player,command,"cc",new String[]{"parkour","icon","\"Cave","Rush\"","lantern"});
+  verify(plugin,times(2)).updateCourse("cave_rush","icon","lantern");
+ }
+ @Test void parkourRenameUsesLongestName() throws Exception {
+  when(plugin.courseNames()).thenReturn(Map.of("cave","Cave","cave_rush","Cave Rush")); when(plugin.updateCourse(anyString(),anyString(),anyString())).thenReturn(true);
+  admin.onCommand(player,command,"cc",new String[]{"parkour","rename","Cave","Rush","New","Name"});
+  verify(plugin).updateCourse("cave_rush","display_name","New Name");
+ }
+ @Test void iconFallsBackToHeldItemForFullName() throws Exception {
+  when(plugin.courseNames()).thenReturn(Map.of("cave_rush","Cave Rush")); when(plugin.updateCourse(anyString(),anyString(),anyString())).thenReturn(true);
+  var inventory=mock(org.bukkit.inventory.PlayerInventory.class); var item=mock(org.bukkit.inventory.ItemStack.class);
+  when(player.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(item); when(item.getType()).thenReturn(Material.LANTERN);
+  admin.onCommand(player,command,"cc",new String[]{"parkour","icon","Cave","Rush"});
+  verify(plugin).updateCourse("cave_rush","icon","lantern");
+ }
+ @Test void unknownIconReportsJoinedName() {
+  when(plugin.courseNames()).thenReturn(Map.of("cave_rush","Cave Rush"));
+  admin.onCommand(player,command,"cc",new String[]{"parkour","icon","Missing","Course","lantern"});
+  verify(player).sendMessage("Kurs nicht gefunden: Missing Course");
  }
 }
