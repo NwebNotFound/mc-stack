@@ -40,4 +40,22 @@ final class CourseArgs {
   }
   return new ArrayList<>(result);
  }
+ record Course(int id,String pkName,String slug,String display) {}
+ /** Findet den Lobby-Parkour-Namen per ID, pk_name, Slug oder Anzeigename (Gross/Klein, _/Leerzeichen egal). */
+ static String resolveCourse(String requested,List<Course> courses) {
+  if(requested==null || requested.isBlank()) return null;
+  String want=normalize(requested);
+  for(Course c:courses) if(String.valueOf(c.id()).equals(want)) return c.pkName();
+  for(Course c:courses) if(c.pkName()!=null && normalize(c.pkName()).equals(want)) return c.pkName();
+  for(Course c:courses) if(c.slug()!=null && normalize(c.slug()).equals(want)) return c.pkName();
+  for(Course c:courses) if(c.display()!=null && normalize(c.display()).equals(want)) return c.pkName();
+  return null;
+ }
+ /** Tab-Vorschlaege: Slugs (ohne Leerzeichen), passend zum Praefix. */
+ static List<String> completeCourses(String prefix,List<Course> courses) {
+  String p=prefix==null?"":prefix.replace("\"","").toLowerCase(Locale.ROOT);
+  Set<String> out=new TreeSet<>();
+  for(Course c:courses) if(c.slug()!=null && c.slug().startsWith(p)) out.add(c.slug());
+  return new ArrayList<>(out);
+ }
 }
