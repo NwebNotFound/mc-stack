@@ -55,6 +55,7 @@ class VipStoreTest {
             store.create(owner, "world", "normal");
             assertEquals(1, clock.reads);
             assertEquals(1, store.count(owner));
+            assertEquals("normal", store.list(owner).get(0).type());
             String id = store.list(owner).get(0).id();
             store.rename(owner, id, "renamed");
             store.status(id, "starting", "vipworld-1");

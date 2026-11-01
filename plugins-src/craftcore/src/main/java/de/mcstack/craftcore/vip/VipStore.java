@@ -6,10 +6,10 @@ import java.util.*;
 
 public final class VipStore {
     @FunctionalInterface public interface ConnectionSource { Connection open() throws SQLException; }
-    public record World(String id, String name, String status, String slot) {}
+    public record World(String id, String name, String status, String slot, String type) {}
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
     static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) VALUES (?,?,?,?,'stopped',?)";
-    static final String LIST_WORLDS = "SELECT id,name,status,slot FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
+    static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
     static final String RENAME_WORLD = "UPDATE vip_worlds SET name=? WHERE id=? AND owner=? AND status<>'deleted'";
     static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=?";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
@@ -36,7 +36,7 @@ public final class VipStore {
     }
     public List<World> list(UUID owner) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_WORLDS)) {
-            s.setString(1,owner.toString()); try (ResultSet r=s.executeQuery()) { List<World> worlds=new ArrayList<>(); while(r.next()) worlds.add(new World(r.getString(1),r.getString(2),r.getString(3),r.getString(4))); return worlds; }
+            s.setString(1,owner.toString()); try (ResultSet r=s.executeQuery()) { List<World> worlds=new ArrayList<>(); while(r.next()) worlds.add(new World(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5))); return worlds; }
         }
     }
     public Optional<World> find(UUID owner, String name) throws SQLException { return list(owner).stream().filter(w->w.name().equalsIgnoreCase(name)).findFirst(); }

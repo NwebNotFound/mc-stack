@@ -1,6 +1,9 @@
 package de.mcstack.craftcore;
 
 import java.util.*;
+import de.mcstack.craftcore.vip.VipMenuModel;
+import de.mcstack.craftcore.vip.VipPerks;
+import de.mcstack.craftcore.vip.VipStore;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -51,7 +54,7 @@ final class UserMenu implements Listener, CommandExecutor, TabCompleter {
   void open(Player p,String menu) {
     List<Entry> entries=new ArrayList<>();
     switch(menu) {
-      case "menu" -> {entries.add(new Entry("Statistik",Material.CLOCK,"stats","Spielzeit, Meilensteine und Abzeichen")); entries.add(new Entry("Bank",Material.EMERALD,"bank","Waren und Preise")); entries.add(new Entry("Shop",Material.CHEST,"shop","Spielershops")); entries.add(new Entry("Auktionshaus",Material.GOLDEN_HORSE_ARMOR,"ah","Angebote")); entries.add(new Entry("Homes",Material.RED_BED,"home","Deine Homes")); entries.add(new Entry("Team-Teleport",Material.PLAYER_HEAD,"tpteam","Zu einem Teammitglied teleportieren"));}
+      case "menu" -> {entries.add(new Entry("VIP-Welten",Material.NETHER_STAR,"vip","Deine VIP-Welten")); entries.add(new Entry("Statistik",Material.CLOCK,"stats","Spielzeit, Meilensteine und Abzeichen")); entries.add(new Entry("Bank",Material.EMERALD,"bank","Waren und Preise")); entries.add(new Entry("Shop",Material.CHEST,"shop","Spielershops")); entries.add(new Entry("Auktionshaus",Material.GOLDEN_HORSE_ARMOR,"ah","Angebote")); entries.add(new Entry("Homes",Material.RED_BED,"home","Deine Homes")); entries.add(new Entry("Team-Teleport",Material.PLAYER_HEAD,"tpteam","Zu einem Teammitglied teleportieren"));}
       case "pay" -> entries.add(new Entry("CP senden",Material.GOLD_INGOT,"pay ","Spieler und Betrag im Chat ergaenzen",true));
       case "trade" -> {entries.add(new Entry("Handel anfragen",Material.CRAFTING_TABLE,"trade ","Spieler im Chat ergaenzen",true));entries.add(new Entry("Anfrage annehmen",Material.LIME_WOOL,"trade accept","Anfrage in Reichweite annehmen"));}
       case "team" -> {entries.add(new Entry("Teaminfo",Material.BOOK,"team info","Dein Team")); for(String op:List.of("create","invite","join","kick","promote","demote")) entries.add(new Entry(op,Material.PLAYER_HEAD,"team "+op+" ","Eingabe im Chat ergaenzen",true)); entries.add(new Entry("Team verlassen",Material.OAK_DOOR,"team leave","Team verlassen oder aufloesen"));}
@@ -60,15 +63,55 @@ final class UserMenu implements Listener, CommandExecutor, TabCompleter {
         if(!SpawnRoute.isSurvival(System.getenv().getOrDefault("CRAFTCORE_SERVER",""))) entries.add(new Entry("Nur auf Survival",Material.BARRIER,"","Homes sind nur auf Survival verfuegbar"));
         else try {int slots=plugin.tx(c->HomeSlots.lock(c,System.getenv().getOrDefault("CRAFTCORE_SERVER","Server"),p.getUniqueId().toString())); List<String> homes=plugin.tx(c->{List<String> out=new ArrayList<>();try(var q=c.prepareStatement("SELECT name FROM homes WHERE server=? AND uuid=? ORDER BY name LIMIT 45")){q.setString(1,System.getenv().getOrDefault("CRAFTCORE_SERVER","Server"));q.setString(2,p.getUniqueId().toString());try(var r=q.executeQuery()){while(r.next())out.add(r.getString(1));}}return out;}); for(String name:homes)entries.add(new Entry(name,Material.RED_BED,"home "+name,"Zum Home teleportieren"));entries.add(new Entry("Home setzen",Material.COMPASS,"sethome ","Name im Chat ergaenzen oder /sethome nutzen",true)); if(slots<5){long price=HomeSlots.price(plugin,slots);if(price<=0)throw new IllegalArgumentException("Ungueltiger Home-Preis");entries.add(new Entry("Slot "+(slots+1)+" kaufen",Material.GOLD_INGOT,"@homebuy "+slots+" "+price,"Preis: "+Money.format(price)+" | Klick zum Kaufen"));}else entries.add(new Entry("Home-Slots: "+slots,Material.BOOK,"","Maximum erreicht"));} catch(Exception ex){plugin.getLogger().warning("Homes-Menue: "+ex);entries.add(new Entry("Homes nicht verfuegbar",Material.BARRIER,"","Bitte spaeter erneut versuchen"));}
       }
-      case "vip" -> entries.add(new Entry("Noch nicht verfuegbar",Material.BARRIER,"","VIP-Server sind noch nicht eingerichtet"));
+      case "vip" -> {
+        if (!"lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER","")))
+          entries.add(new Entry("Nur in der Lobby",Material.BARRIER,"","Das VIP-Menü ist nur in der Lobby verfügbar."));
+        else { openVip(p); return; }
+      }
       default -> {return;}
     }
+    show(p,menu,entries);
+  }
+  private void show(Player p,String menu,List<Entry> entries) {
     int size=Math.max(9,Math.min(54,((entries.size()+8)/9)*9));Holder h=new Holder(entries);Inventory inv=Bukkit.createInventory(h,size,Component.text("Craft - "+menu,NamedTextColor.GOLD));h.inventory=inv;
-    for(int i=0;i<entries.size() && i<size;i++){Entry e=entries.get(i);ItemStack item=new ItemStack(e.material());ItemMeta m=item.getItemMeta();m.displayName(Component.text(e.name(),NamedTextColor.AQUA));m.lore(List.of(Component.text(e.description(),NamedTextColor.GRAY)));item.setItemMeta(m);inv.setItem(i,item);}p.openInventory(inv);
+    for(int i=0;i<entries.size() && i<size;i++){Entry e=entries.get(i);ItemStack item=new ItemStack(e.material());ItemMeta m=item.getItemMeta();m.displayName(Component.text(e.name(),NamedTextColor.AQUA));m.lore(Arrays.stream(e.description().split(" \\| ")).map(line->Component.text(line,NamedTextColor.GRAY)).toList());item.setItemMeta(m);inv.setItem(i,item);}p.openInventory(inv);
+  }
+  private void openVip(Player player) {
+    UUID id=player.getUniqueId();
+    int slots=VipPerks.slots(id);
+    Inventory previous=player.getOpenInventory().getTopInventory();
+    Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
+      List<Entry> entries=new ArrayList<>();
+      try {
+        List<VipStore.World> worlds=new VipStore(plugin::connection).list(id);
+        // Leave room for the limit indicator and help book in the inventory.
+        for (var slot:VipMenuModel.slots(Math.min(slots,52),Math.min(worlds.size(),52))) {
+          switch (slot.kind()) {
+            case OCCUPIED -> {
+              var world=worlds.get(slot.worldIndex());
+              entries.add(new Entry(world.name(),Material.GRASS_BLOCK,"vw start "+world.name(),
+                  "Slot belegt | Typ: "+world.type()+" | Status: "+world.status()));
+            }
+            case FREE -> entries.add(new Entry("Freier Slot",Material.LIME_DYE,"vw create ",
+                "Welt erstellen: /vw create <name> [normal|flat|void]",true));
+            case LOCKED -> entries.add(new Entry("Gesperrter Slot",Material.BARRIER,"",slot.reason()));
+          }
+        }
+        entries.add(new Entry("VIP-Welten: Hilfe",Material.BOOK,"",
+            "VIP/MVP benötigt: 1 / 3 Slots | /vw create <name> [normal|flat|void] | /vw list | /vw start|stop|join <welt>"));
+      } catch (Exception ex) {
+        plugin.getLogger().warning("VIP-Menü: "+ex.getClass().getSimpleName());
+        entries.add(new Entry("VIP-Welten nicht verfügbar",Material.BARRIER,"","Bitte später erneut versuchen."));
+      }
+      Bukkit.getScheduler().runTask(plugin,()->{
+        Player current=Bukkit.getPlayer(id);
+        if (current==player && current.getOpenInventory().getTopInventory().equals(previous)) show(current,"vip",entries);
+      });
+    });
   }
   public boolean onCommand(CommandSender sender,Command command,String label,String[] args){if(!(sender instanceof Player p)){sender.sendMessage("[Craft] Nur im Spiel verfuegbar.");return true;}if(command.getName().equals("menu"))open(p,"menu");else help(p,args.length==0?"":args[0]);return true;}
   public List<String> onTabComplete(CommandSender s,Command c,String alias,String[] args){return c.getName().equals("help")&&args.length==1?complete(args[0],"handel","teleport","team","welt"):List.of();}
-  @EventHandler public void click(InventoryClickEvent e){if(!(e.getView().getTopInventory().getHolder() instanceof Holder h))return;e.setCancelled(true);int slot=e.getRawSlot();if(slot>=0&&slot<h.entries.size()&&e.getWhoClicked() instanceof Player p){Entry entry=h.entries.get(slot);if(entry.command().isEmpty())return;p.closeInventory();if(entry.command().startsWith("@homebuy ")){try{String[] parts=entry.command().split(" ");int expected=Integer.parseInt(parts[1]);long price=Long.parseLong(parts[2]);if(price!=HomeSlots.price(plugin,expected)){p.sendMessage("Preis hat sich geaendert. Bitte Menue erneut oeffnen.");return;}String result=plugin.tx(c->HomeSlots.buy(c,System.getenv().getOrDefault("CRAFTCORE_SERVER","Server"),p.getUniqueId().toString(),expected,price));p.sendMessage(result);open(p,"home");}catch(Exception ex){plugin.getLogger().warning("Home-Kauf: "+ex);p.sendMessage("Home-Kauf fehlgeschlagen.");}return;}if(entry.suggest())button(p,"Eingabe ergaenzen: /"+entry.command(),"/"+entry.command(),false);else p.performCommand(entry.command());}}
+  @EventHandler public void click(InventoryClickEvent e){if(!(e.getView().getTopInventory().getHolder() instanceof Holder h))return;e.setCancelled(true);int slot=e.getRawSlot();if(slot>=0&&slot<h.entries.size()&&e.getWhoClicked() instanceof Player p){Entry entry=h.entries.get(slot);if(entry.command().isEmpty())return;p.closeInventory();if(entry.command().startsWith("@homebuy ")){try{String[] parts=entry.command().split(" ");int expected=Integer.parseInt(parts[1]);long price=Long.parseLong(parts[2]);if(price!=HomeSlots.price(plugin,expected)){p.sendMessage("Preis hat sich geaendert. Bitte Menue erneut oeffnen.");return;}String result=plugin.tx(c->HomeSlots.buy(c,System.getenv().getOrDefault("CRAFTCORE_SERVER","Server"),p.getUniqueId().toString(),expected,price));p.sendMessage(result);open(p,"home");}catch(Exception ex){plugin.getLogger().warning("Home-Kauf: "+ex);p.sendMessage("Home-Kauf fehlgeschlagen.");}return;}if(entry.suggest())button(p,"Eingabe ergänzen: /"+entry.command(),"/"+entry.command(),false);else p.performCommand(entry.command());}}
   @EventHandler public void drag(InventoryDragEvent e){if(e.getView().getTopInventory().getHolder() instanceof Holder)e.setCancelled(true);}
   static String nearest(String input, Collection<String> choices) {
     String best=null; int score=3; String word=input.toLowerCase(Locale.ROOT);
