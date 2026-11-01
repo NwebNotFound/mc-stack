@@ -10,6 +10,7 @@ public final class ArenaEditor {
         public PvpLogic.Point block() { return new PvpLogic.Point((int)Math.floor(x), (int)Math.floor(y), (int)Math.floor(z)); }
         public String coords() { var p=block(); return p.x()+" "+p.y()+" "+p.z(); }
     }
+    // Draft YAML: optional min/max coordinates and spawns.<number> with world, x, y, z, yaw, pitch.
     public static final class Draft {
         public PvpLogic.Region region;
         public final Map<Integer, Position> spawns = new TreeMap<>();
@@ -31,6 +32,7 @@ public final class ArenaEditor {
     private final Map<String,Draft> drafts;
     private final Map<String,Position[]> selections = new HashMap<>();
     public ArenaEditor(Storage storage) { this.storage=storage; this.drafts=new TreeMap<>(storage.loadDrafts()); }
+    public boolean hasDrafts() { return !drafts.isEmpty(); }
     public List<String> names() { Set<String> names=new TreeSet<>(storage.savedNames()); names.addAll(drafts.keySet()); return new ArrayList<>(names); }
     private Draft draft(String name) { Draft d=drafts.get(name); if(d==null && storage.savedNames().contains(name)) d=storage.loadSaved(name); return d; }
     private static void requireBuild(Position p) { if(!p.world().equals("pvp_build")) throw new IllegalArgumentException("Nur in pvp_build verfügbar – du bist gerade in "+p.world()+". Nutze /pvp build."); }

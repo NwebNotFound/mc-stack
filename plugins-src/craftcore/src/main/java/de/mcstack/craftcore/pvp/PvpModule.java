@@ -3,7 +3,6 @@ package de.mcstack.craftcore.pvp;
 import java.io.*;
 import java.util.*;
 import org.bukkit.*;
-import org.bukkit.block.Block;
 import org.bukkit.command.*;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -22,17 +21,16 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     public PvpModule(JavaPlugin plugin, PvpStore.ConnectionSource connectionSource) { this.plugin=plugin; this.connectionSource=connectionSource; File root=new File(plugin.getDataFolder(),"pvp"); arenas=new File(root,"arenas"); draftsDir=new File(root,"drafts"); kitsFile=new File(root,"kits.yml"); }
     public void start() {
         if(!arenas.mkdirs() && !arenas.isDirectory()) throw new IllegalStateException("Arena-Verzeichnis nicht verfuegbar");
-        if(!draftsDir.mkdirs() && !draftsDir.isDirectory()) throw new IllegalStateException("Entwurfsverzeichnis nicht verf?gbar");
+        if(!draftsDir.mkdirs() && !draftsDir.isDirectory()) throw new IllegalStateException("Entwurfsverzeichnis nicht verfügbar");
         kits=YamlConfiguration.loadConfiguration(kitsFile);
         build=Bukkit.createWorld(new WorldCreator("pvp_build").generator(new ChunkGenerator() {}));
         if(build==null) throw new IllegalStateException("pvp_build konnte nicht geladen werden");
-        editor=new ArenaEditor(new EditorStorage());
+        editor=new ArenaEditor(new EditorStorage(arenas,draftsDir,(x,y,z)->build.getBlockAt(x,y,z).getBlockData().getAsString()));
         PluginCommand cmd=Objects.requireNonNull(plugin.getCommand("pvp")); cmd.setExecutor(this); cmd.setTabCompleter(this);
         PvpStore store=new PvpStore(connectionSource);
         Objects.requireNonNull(plugin.getCommand("pvpdebug")).setExecutor(new PvpDebug(plugin,store));
-        matches=new PvpMatches(plugin,store,arenas,kitsFile); matches.start();
+        matches=new PvpMatches(plugin,store,arenas,kitsFile,editor,build); matches.start();
     }
-    private File file(String name) { return new File(arenas,name+".yml"); }
     private static ArenaEditor.Position position(Location l) { return new ArenaEditor.Position(l.getWorld().getName(),l.getX(),l.getY(),l.getZ(),l.getYaw(),l.getPitch()); }
     private PvpLogic.Region worldEditSelection(Player player) {
         var pluginInstance=Bukkit.getPluginManager().getPlugin("WorldEdit");
@@ -56,7 +54,12 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     private static PvpLogic.Point vector(Object v) throws ReflectiveOperationException {
         Class<?> c=v.getClass(); return new PvpLogic.Point((int)c.getMethod("getBlockX").invoke(v),(int)c.getMethod("getBlockY").invoke(v),(int)c.getMethod("getBlockZ").invoke(v));
     }
-    private final class EditorStorage implements ArenaEditor.Storage {
+    @FunctionalInterface interface BlockSource { String get(int x, int y, int z); }
+    static final class EditorStorage implements ArenaEditor.Storage {
+        private final File arenas, draftsDir;
+        private final BlockSource blocks;
+        EditorStorage(File arenas, File draftsDir, BlockSource blocks) { this.arenas=arenas; this.draftsDir=draftsDir; this.blocks=blocks; }
+        private File file(String name) { return new File(arenas,name+".yml"); }
         public Set<String> savedNames() { Set<String> names=new TreeSet<>(); String[] files=arenas.list((dir,n)->n.endsWith(".yml")); if(files!=null) for(String f:files) names.add(f.substring(0,f.length()-4)); return names; }
         public Map<String,ArenaEditor.Draft> loadDrafts() {
             Map<String,ArenaEditor.Draft> result=new TreeMap<>(); File[] files=draftsDir.listFiles((dir,n)->n.endsWith(".yml"));
@@ -75,11 +78,11 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
             YamlConfiguration y=new YamlConfiguration(); if(d.region!=null) { var min=d.region.min(); var max=d.region.max(); y.set("min.x",min.x()); y.set("min.y",min.y()); y.set("min.z",min.z()); y.set("max.x",max.x()); y.set("max.y",max.y()); y.set("max.z",max.z()); }
             d.spawns.forEach((n,p)->{String k="spawns."+n+"."; y.set(k+"world",p.world()); y.set(k+"x",p.x()); y.set(k+"y",p.y()); y.set(k+"z",p.z()); y.set(k+"yaw",p.yaw()); y.set(k+"pitch",p.pitch());}); y.save(new File(draftsDir,name+".yml"));
         }
-        public void deleteDraft(String name) throws IOException { File f=new File(draftsDir,name+".yml"); if(f.exists() && !f.delete()) throw new IOException("Entwurf konnte nicht gel?scht werden."); }
+        public void deleteDraft(String name) throws IOException { File f=new File(draftsDir,name+".yml"); if(f.exists() && !f.delete()) throw new IOException("Entwurf konnte nicht gelöscht werden."); }
         public void saveArena(String name,ArenaEditor.Draft d) throws IOException {
             Map<Integer,PvpLogic.Spawn> spawns=new TreeMap<>(); d.spawns.forEach((n,p)->spawns.put(n,new PvpLogic.Spawn(p.x()-d.region.min().x(),p.y()-d.region.min().y(),p.z()-d.region.min().z(),p.yaw(),p.pitch())));
-            YamlConfiguration y=new YamlConfiguration(); new PvpLogic.Arena(d.region,spawns).write(y); List<String> blocks=new ArrayList<>(); var min=d.region.min(); var max=d.region.max();
-            for(int x=min.x();x<=max.x();x++) for(int z=min.z();z<=max.z();z++) for(int yy=min.y();yy<=max.y();yy++) { Block b=build.getBlockAt(x,yy,z); blocks.add(b.getBlockData().getAsString()); } y.set("blocks",blocks); y.save(file(name));
+            YamlConfiguration y=new YamlConfiguration(); new PvpLogic.Arena(d.region,spawns).write(y); List<String> blockData=new ArrayList<>(); var min=d.region.min(); var max=d.region.max();
+            for(int x=min.x();x<=max.x();x++) for(int z=min.z();z<=max.z();z++) for(int yy=min.y();yy<=max.y();yy++) { blockData.add(blocks.get(x,yy,z)); } y.set("blocks",blockData); y.save(file(name));
         }
     }
     @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] a) {

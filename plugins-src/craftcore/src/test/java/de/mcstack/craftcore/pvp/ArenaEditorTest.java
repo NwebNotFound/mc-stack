@@ -1,6 +1,9 @@
 package de.mcstack.craftcore.pvp;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -37,6 +40,37 @@ class ArenaEditorTest {
         assertTrue(editor.execute(ctx,new String[]{"info","colosseum"}).contains("gespeichert: ja"));
         assertThrows(IllegalArgumentException.class,()->new ArenaEditor(store).execute(ctx,new String[]{"remove","colosseum"}));
         assertTrue(store.saved.containsKey("colosseum"));
+    }
+    @Test void seededYamlDraftLoadsAndIsDeletedAfterSave(@TempDir Path root) throws Exception {
+        Path arenas=Files.createDirectory(root.resolve("arenas"));
+        Path drafts=Files.createDirectory(root.resolve("drafts"));
+        Path seed=drafts.resolve("colosseum.yml");
+        Files.writeString(seed, """
+                min:
+                  x: -18
+                  y: 0
+                  z: 18
+                max:
+                  x: 18
+                  y: 15
+                  z: -18
+                spawns: {}
+                """);
+        var storage=new PvpModule.EditorStorage(arenas.toFile(),drafts.toFile(),(x,y,z)->"minecraft:air");
+        var editor=new ArenaEditor(storage); var ctx=new Context();
+        assertTrue(editor.hasDrafts());
+        assertTrue(editor.execute(ctx,new String[]{"info","colosseum"}).contains("Spawns: keine"));
+        assertThrows(IllegalArgumentException.class,()->new ArenaEditor(storage).execute(ctx,new String[]{"save","colosseum"}));
+        assertTrue(Files.exists(seed));
+        ctx.p=new ArenaEditor.Position("pvp_build",-10,1,0,0,0);
+        editor.execute(ctx,new String[]{"setspawn","colosseum","1"});
+        ctx.p=new ArenaEditor.Position("pvp_build",10,1,0,0,0);
+        editor.execute(ctx,new String[]{"setspawn","colosseum","2"});
+        editor=new ArenaEditor(storage);
+        assertTrue(editor.execute(ctx,new String[]{"save","colosseum"}).contains("gespeichert"));
+        assertTrue(Files.exists(arenas.resolve("colosseum.yml")));
+        assertFalse(Files.exists(seed));
+        assertFalse(editor.hasDrafts());
     }
     @Test void worldEditAndMessages() throws Exception {
         var store=new Store(); var ctx=new Context(); var editor=new ArenaEditor(store);
