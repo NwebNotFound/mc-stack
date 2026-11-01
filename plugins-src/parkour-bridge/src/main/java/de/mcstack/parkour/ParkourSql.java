@@ -26,6 +26,12 @@ final class ParkourSql {
  static final String SEED_COURSES = "INSERT INTO parkour_courses (slug) SELECT DISTINCT t.course FROM parkour_times t WHERE t.course IS NOT NULL AND t.course <> '' AND NOT EXISTS (SELECT 1 FROM parkour_courses c WHERE c.slug=t.course)";
  static final String CAVE_NAME = "UPDATE parkour_courses SET display_name='Cave Rush' WHERE slug='cave_rush' AND (display_name IS NULL OR TRIM(display_name)='')";
  static final String VIEW_COURSES = "CREATE OR REPLACE VIEW v_parkour_courses AS SELECT slug, COALESCE(NULLIF(TRIM(display_name),''),slug) AS course_name, COALESCE(NULLIF(TRIM(icon),''),'paper') AS course_icon, hidden FROM parkour_courses";
+ /** Tafel-Titel: Anzeigename, sonst Lobby-Parkour-Name, sonst Slug. */
+ static String title(String slug,String display,String pkName) {
+  if(display!=null && !display.isBlank() && !display.trim().equals(slug)) return display.trim();
+  if(pkName!=null && !pkName.isBlank()) return pkName.trim();
+  return slug;
+ }
  static String displayName(String slug,String name) { return name==null || name.isBlank()?slug:name; }
  static String icon(String input) {
   if(input==null) return null; String value=input.toLowerCase(Locale.ROOT);

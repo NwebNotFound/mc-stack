@@ -89,4 +89,10 @@ class ParkourSqlTest {
   assertEquals(-33.0, ParkourSql.floor(List.of(-32.0), 0));
   assertNull(ParkourSql.floor(List.of(), 4));
  }
+ @org.junit.jupiter.api.Test void titlePrefersDisplayThenPkNameThenSlug() {
+  org.junit.jupiter.api.Assertions.assertEquals("Sky Run",ParkourSql.title("house_climb","Sky Run","House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("House Climb",ParkourSql.title("house_climb","house_climb","House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("House Climb",ParkourSql.title("house_climb",null,"House Climb"));
+  org.junit.jupiter.api.Assertions.assertEquals("house_climb",ParkourSql.title("house_climb"," ",null));
+ }
 }
