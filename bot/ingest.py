@@ -203,7 +203,7 @@ def presence_fields(r):
     return {
         "team": _text(r.get("team")),
         **team_colors(r),
-        "last_seen": r.get("last_seen") if isinstance(r.get("last_seen"), str) else _iso_utc(r.get("last_seen")),
+        "last_seen": _iso_utc(r.get("last_seen")),
         "online": _bool(r.get("online")),
     }
 

@@ -48,7 +48,7 @@ def test_view_fields_reach_serialized_export():
         "team_color_code": "&a", "last_seen": "2026-11-01T00:05:03Z", "online": False,
     }
     assert ingest.build_stats(cols, [("u2", "B", 0, None, None, None, None, None, None)])["u2"]["last_seen"] is None
-    assert ingest.build_stats(cols, [("u3", "C", 0, None, None, None, None, "verbatim", 1)])["u3"]["last_seen"] == "verbatim"
+    assert ingest.build_stats(cols, [("u3", "C", 0, None, None, None, None, "verbatim", 1)])["u3"]["last_seen"] is None
 
 
 def test_push_exports_view_presence_fields():
@@ -76,3 +76,11 @@ def test_push_exports_view_presence_fields():
         asyncio.run(ingest.push_once(Bot(), session=object()))
     player = sent[0]["players_stats"]["u1"]
     assert [player[k] for k in cols[3:]] == list(row[3:-1]) + [True]
+
+def test_last_seen_string_always_normalized():
+    f = lambda v: ingest.presence_fields({"last_seen": v})["last_seen"]
+    assert f("kaputt") is None
+    assert f("") is None
+    assert f("2026-11-01 00:31:55") == "2026-11-01T00:31:55Z"
+    assert f("2026-11-01T01:31:55+01:00") == "2026-11-01T00:31:55Z"
+    assert f("2026-11-01T00:31:55Z") == "2026-11-01T00:31:55Z"
