@@ -10,6 +10,9 @@ public final class PvpAccess {
         return hasAssignment ? JoinDecision.MATCH : bypass ? JoinDecision.BUILDER : JoinDecision.KICK;
     }
 
+    /** Builders without an assignment come from /pvp build in the lobby and should land in pvp_build directly. */
+    public static boolean sendToBuildWorld(JoinDecision decision) { return decision == JoinDecision.BUILDER; }
+
     public static boolean mayBypass(Predicate<String> hasPermission) {
         return hasPermission.test("craftcore.build.pvp") || hasPermission.test("group.builder") || hasPermission.test("group.admin");
     }
