@@ -92,8 +92,71 @@ def build_stats(cols, rows):
             except (TypeError, ValueError):
                 continue
             s[RENAME.get(f, f)] = v
+        s.update(presence_fields(r))
         out[str(uuid)] = s
     return out
+
+
+def _text(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode("utf-8", "replace")
+    v = str(v).strip()
+    return v or None
+
+
+def _iso_utc(v):
+    """UTC-Zeitstempel (datetime, Unix-s/ms, String) -> ISO 8601 mit Z, sonst None."""
+    import datetime as _dt
+    if v is None:
+        return None
+    try:
+        if isinstance(v, _dt.datetime):
+            d = v if v.tzinfo is None else v.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            x = float(v)
+            d = _dt.datetime.fromtimestamp(x / 1000 if x > 1e11 else x, _dt.timezone.utc).replace(tzinfo=None)
+        elif isinstance(v, str) and v.strip():
+            t = v.strip().replace(" ", "T")
+            if t.endswith("Z"):
+                t = t[:-1] + "+00:00"
+            d = _dt.datetime.fromisoformat(t)
+            if d.tzinfo is not None:
+                d = d.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        else:
+            return None
+    except (ValueError, OverflowError, OSError):
+        return None
+    return d.replace(microsecond=0).isoformat() + "Z"
+
+
+def _bool(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = int.from_bytes(v, "little") if v else 0
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("1", "true", "yes", "on"):
+            return True
+        if t in ("0", "false", "no", "off"):
+            return False
+        return None
+    try:
+        return bool(int(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def presence_fields(r):
+    """team/team_color/last_seen/online aus v_player_stats; fehlende Spalten -> None."""
+    return {
+        "team": _text(r.get("team")),
+        "team_color": _text(r.get("team_color")),
+        "last_seen": _iso_utc(r.get("last_seen")),
+        "online": _bool(r.get("online")),
+    }
 
 
 LB_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
