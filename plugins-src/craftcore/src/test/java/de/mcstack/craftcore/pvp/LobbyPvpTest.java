@@ -47,6 +47,23 @@ class LobbyPvpTest {
         assertFalse(LobbyPvp.remindWaiting(waiting, a, b, 0));
         assertEquals(new PvpQueue.Pair(a, "sword", b, "axe"), queue.poll().orElseThrow());
     }
+    @Test void matchStartCallsHostUnlessAlreadyOnlineAndFailsWhenStartIsRejected() {
+        assertTrue(LobbyPvp.mustStart("sleeping"));
+        assertTrue(LobbyPvp.mustStart("offline"));
+        assertTrue(LobbyPvp.mustStart("starting"));
+        assertFalse(LobbyPvp.mustStart("online"));
+        assertTrue(LobbyPvp.startRejected("sleeping", false));
+        assertTrue(LobbyPvp.startRejected("offline", false));
+        assertFalse(LobbyPvp.startRejected("sleeping", true));
+        assertFalse(LobbyPvp.startRejected("online", false));
+    }
+    @Test void firstQueuedPlayerWarmsTheServer() {
+        assertTrue(LobbyPvp.warmOnJoin(1, "sleeping"));
+        assertTrue(LobbyPvp.warmOnJoin(1, "offline"));
+        assertFalse(LobbyPvp.warmOnJoin(1, "online"));
+        assertFalse(LobbyPvp.warmOnJoin(2, "sleeping"));
+        assertFalse(LobbyPvp.warmOnJoin(0, "sleeping"));
+    }
     @Test void playersStillOnLobbyFailTheTransfer() {
         assertTrue(LobbyPvp.stillOnLobby(true, true));
         assertTrue(LobbyPvp.stillOnLobby(true, false));

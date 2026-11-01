@@ -40,6 +40,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private final PvpPing ping = new PvpPing();
     private final Map<UUID, String> lastKit = new HashMap<>();
     private final AtomicBoolean buildStarting = new AtomicBoolean();
+    private final AtomicBoolean warming = new AtomicBoolean();
     // Accessed only on the server thread, including while a pair is starting.
     private final Set<UUID> matching = new HashSet<>();
     private String activeMatchId;
@@ -59,6 +60,12 @@ public final class LobbyPvp implements Listener, TabExecutor {
     }
     /** A player still registered on this lobby did not leave after the connect attempt. */
     static boolean stillOnLobby(boolean aPresent, boolean bPresent) { return aPresent || bPresent; }
+    /** The container must be started unless the host already reports it online. */
+    static boolean mustStart(String status) { return !"online".equals(status); }
+    /** A required start that the host rejected fails the match. */
+    static boolean startRejected(String status, boolean startAccepted) { return mustStart(status) && !startAccepted; }
+    /** The first queued player warms the container when it is not already online. */
+    static boolean warmOnJoin(int queueSize, String status) { return queueSize == 1 && mustStart(status); }
     /** Drop the lobby slot when the assignment ended, the 30 minute hold expired, or both players are back. */
     static boolean releaseMatch(String status, boolean timedOut, boolean playersBack) {
         return timedOut || playersBack || "failed".equals(status) || "done".equals(status);
@@ -173,7 +180,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
         if (slot == 53 && (menu.page + 1) * 45 < menu.kits.size()) { open(player, menu.kits, menu.page + 1); return; }
         UUID id = player.getUniqueId();
         if (slot == 49 && queue.contains(id)) {
-            queue.leave(id); player.sendMessage("PvP-Queue verlassen"); open(player, menu.kits, menu.page); return;
+            queue.leave(id); syncQueueHold(); player.sendMessage("PvP-Queue verlassen"); open(player, menu.kits, menu.page); return;
         }
         int index = menu.page * 45 + slot;
         String kit;
@@ -186,7 +193,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
             kit = menu.kits.get(index).name();
         }
         if (matching.contains(id)) { player.sendMessage("PvP-Match wird bereits vorbereitet"); return; }
-        lastKit.put(id, kit); queue.join(id, kit);
+        lastKit.put(id, kit); queue.join(id, kit); warmIfFirst(id);
         int position = queue.position(id);
         UUID matchA = activePair == null ? null : activePair.a(), matchB = activePair == null ? null : activePair.b();
         player.sendMessage(remindWaiting(id, matchA, matchB, position) && activeMatchId != null ? queueReminder(position) : "PvP-Queue: Platz " + position);
@@ -195,7 +202,28 @@ public final class LobbyPvp implements Listener, TabExecutor {
     @EventHandler public void drag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof Menu) event.setCancelled(true);
     }
-    @EventHandler public void quit(PlayerQuitEvent event) { UUID id = event.getPlayer().getUniqueId(); queue.leave(id); lastKit.remove(id); }
+    @EventHandler public void quit(PlayerQuitEvent event) { UUID id = event.getPlayer().getUniqueId(); queue.leave(id); lastKit.remove(id); syncQueueHold(); }
+    private void warmIfFirst(UUID playerId) {
+        int size = queue.size();
+        syncQueueHold();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                String status = host.status();
+                if (!warmOnJoin(size, status) || !warming.compareAndSet(false, true)) return;
+                try {
+                    plugin.getLogger().info("PvP-Host: Warmup-Start");
+                    if (!host.start()) Bukkit.getScheduler().runTask(plugin, () -> message(playerId, "PvP-Server konnte nicht gestartet werden"));
+                } finally { warming.set(false); }
+            } catch (Exception e) { plugin.getLogger().warning("PvP-Warmup: " + e.getClass().getSimpleName()); }
+        });
+    }
+    private void syncQueueHold() {
+        boolean occupied = queue.size() > 0 || activeMatchId != null;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try { store.holdForQueue(occupied); }
+            catch (Exception e) { plugin.getLogger().warning("PvP-Queue-Halteflag: " + e.getClass().getSimpleName()); }
+        });
+    }
     private void tick() {
         String starting = transferProgress;
         for (UUID id : matching) {
@@ -223,6 +251,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private void clearActive() {
         if (activePair != null) { matching.remove(activePair.a()); matching.remove(activePair.b()); }
         activeMatchId = null; activePair = null; transferSent = false; transferProgress = null;
+        syncQueueHold();
     }
     static String queueReminder(int position) {
         return "Ein PvP-Match laeuft gerade - du bist als Naechstes dran (Platz " + position + ").";
@@ -259,12 +288,16 @@ public final class LobbyPvp implements Listener, TabExecutor {
             plugin.getLogger().warning("PvP-Zuweisung fehlgeschlagen: " + e.getClass().getSimpleName());
             Bukkit.getScheduler().runTask(plugin, () -> { if (id.equals(activeMatchId)) clearActive(); finishFailure(pair); tryStartNext(); }); return;
         }
-        if (!host.status().equals("online") && !host.start()) { fail(id, pair, null); return; }
+        String status = host.status();
+        if (mustStart(status)) {
+            plugin.getLogger().info("PvP-Host: starte Container");
+            if (startRejected(status, host.start())) { fail(id, pair, null, "PvP-Server konnte nicht gestartet werden"); return; }
+        }
         long timeout = TRANSFER_TIMEOUT_SECONDS, begin = System.nanoTime(), deadline = begin + TimeUnit.SECONDS.toNanos(timeout);
         while (System.nanoTime() < deadline) {
             long elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - begin);
-            String status = host.status();
-            Transfer step = transferStep(status, "online".equals(status) && ping.ping(), elapsed, timeout);
+            String nowStatus = host.status();
+            Transfer step = transferStep(nowStatus, "online".equals(nowStatus) && ping.ping(), elapsed, timeout);
             if (step == Transfer.CONNECT) {
                 transferProgress = null;
                 Bukkit.getScheduler().runTask(plugin, () -> connect(id, pair));
@@ -322,22 +355,24 @@ public final class LobbyPvp implements Listener, TabExecutor {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, null));
         tryStartNext();
     }
-    private void fail(String id, PvpQueue.Pair pair, UUID remaining) {
+    private void fail(String id, PvpQueue.Pair pair, UUID remaining) { fail(id, pair, remaining, "PvP-Server nicht erreichbar, bitte spaeter erneut"); }
+    private void fail(String id, PvpQueue.Pair pair, UUID remaining, String text) {
         try { store.markStatus(id, "pending", "failed"); }
         catch (Exception e) { plugin.getLogger().warning("PvP-Zuweisung konnte nicht als fehlgeschlagen markiert werden: " + e.getClass().getSimpleName()); }
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (id.equals(activeMatchId)) clearActive();
-            finishFailure(pair);
+            finishFailure(pair, text);
             if (remaining != null && Bukkit.getPlayer(remaining) != null) {
                 queue.join(remaining, remaining.equals(pair.a()) ? pair.kitA() : pair.kitB());
                 message(remaining, "PvP-Queue: Platz " + queue.position(remaining));
             }
         });
     }
-    private void finishFailure(PvpQueue.Pair pair) {
+    private void finishFailure(PvpQueue.Pair pair) { finishFailure(pair, "PvP-Server nicht erreichbar, bitte spaeter erneut"); }
+    private void finishFailure(PvpQueue.Pair pair, String text) {
         unmatch(pair.a()); unmatch(pair.b());
-        message(pair.a(), "PvP-Server nicht erreichbar, bitte spaeter erneut");
-        message(pair.b(), "PvP-Server nicht erreichbar, bitte spaeter erneut");
+        message(pair.a(), text);
+        message(pair.b(), text);
     }
     /** A player already placed in a newer match stays matched. */
     private void unmatch(UUID id) {

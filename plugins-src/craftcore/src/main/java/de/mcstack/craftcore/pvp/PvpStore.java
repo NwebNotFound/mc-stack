@@ -27,8 +27,27 @@ public final class PvpStore {
             s.setString(1,to); s.setLong(2,System.currentTimeMillis()); s.setString(3,id); s.setString(4,from); return s.executeUpdate()==1;
         }
     }
+    public static final String QUEUE_HOLD_ID = "warmup";
+    /** Idle stop stays off while a match is pending or running, or at least one player is queued. */
+    public static boolean holdsServer(int pendingOrRunning, int queuedPlayers) { return pendingOrRunning > 0 || queuedPlayers > 0; }
     public int pendingCount() throws SQLException {
-        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("SELECT COUNT(*) FROM pvp_assignments WHERE status IN ('pending','running')"); ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("SELECT COUNT(*) FROM pvp_assignments WHERE status IN ('pending','running','warmup')"); ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
+    }
+    public void holdForQueue(boolean occupied) throws SQLException {
+        try (Connection c=source.open()) {
+            if (!occupied) {
+                try (PreparedStatement s=c.prepareStatement("DELETE FROM pvp_assignments WHERE match_id=? AND status='warmup'")) { s.setString(1, QUEUE_HOLD_ID); s.executeUpdate(); }
+                return;
+            }
+            long now=System.currentTimeMillis();
+            try (PreparedStatement update=c.prepareStatement("UPDATE pvp_assignments SET status='warmup', updated_at=? WHERE match_id=?")) {
+                update.setLong(1, now); update.setString(2, QUEUE_HOLD_ID); if (update.executeUpdate()>0) return;
+            }
+            try (PreparedStatement insert=c.prepareStatement("INSERT INTO pvp_assignments (match_id,player_a,player_b,kit_a,kit_b,status,created_at,updated_at) VALUES (?,?,?,?,?,'warmup',?,?)")) {
+                insert.setString(1, QUEUE_HOLD_ID); insert.setString(2, "00000000-0000-0000-0000-000000000000"); insert.setString(3, "00000000-0000-0000-0000-000000000000");
+                insert.setString(4, "-"); insert.setString(5, "-"); insert.setLong(6, now); insert.setLong(7, now); insert.executeUpdate();
+            }
+        }
     }
     public void syncKits(Map<String,String> icons) throws SQLException {
         try (Connection c=source.open()) {
