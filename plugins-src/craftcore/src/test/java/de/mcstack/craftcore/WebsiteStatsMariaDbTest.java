@@ -15,7 +15,14 @@ class WebsiteStatsMariaDbTest {
       s.execute("CREATE TABLE accounts(uuid CHAR(36) PRIMARY KEY,balance BIGINT)");
       s.execute("CREATE TABLE market_locks(item VARCHAR(64) PRIMARY KEY,lock_buy BOOLEAN NOT NULL DEFAULT FALSE,lock_sell BOOLEAN NOT NULL DEFAULT FALSE,reason VARCHAR(128),updated_at BIGINT NOT NULL DEFAULT 0)");
       PlayerStats.migrate(c);
-      s.execute("CREATE VIEW v_player_stats AS SELECT p.uuid,p.name mc_name,a.balance/100.0 money,t.playtime_s,t.kills,t.deaths,t.blocks_mined,t.updated_at FROM known_players p LEFT JOIN accounts a ON a.uuid=p.uuid LEFT JOIN player_stats t ON t.uuid=p.uuid");
+      s.execute("CREATE TABLE teams(id BIGINT PRIMARY KEY,name VARCHAR(16),color VARCHAR(4))");
+      s.execute("CREATE TABLE members(uuid CHAR(36) PRIMARY KEY,team_id BIGINT NOT NULL,role VARCHAR(8))");
+      Presence.migrate(c); Presence.migrate(c);
+      s.execute("CREATE TABLE presence_boolean (value BOOLEAN NOT NULL PRIMARY KEY)");
+      s.execute("INSERT INTO presence_boolean VALUES (FALSE),(TRUE)");
+      String script=java.nio.file.Files.readString(java.nio.file.Path.of("../../scripts/v-player-stats.sql"));
+      String view=script.substring(script.indexOf("CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_player_stats AS"),script.indexOf("GRANT SELECT ON craftcore.v_player_stats"));
+      s.execute(view.trim());
       WebsiteStats.migrate(c);
       WebsiteStats.migrate(c);
       s.execute("INSERT INTO market_catalog VALUES('STONE',1.50,0.50,1.00,1)");
@@ -29,6 +36,24 @@ class WebsiteStatsMariaDbTest {
       try(ResultSet r=s.executeQuery("SELECT buy_price,sell_price,buy_enabled,sell_enabled FROM v_market WHERE item='STONE'")){assertTrue(r.next());assertNull(r.getObject(1));assertEquals(0.5,r.getDouble(2),0.001);assertFalse(r.getBoolean(3));assertTrue(r.getBoolean(4));}
       s.execute("INSERT INTO known_players VALUES('p','Player')");
       s.execute("INSERT INTO accounts VALUES('p',1000)");
+      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='p'")) { assertTrue(r.next()); assertNull(r.getString(1)); assertNull(r.getString(2)); assertNull(r.getString(3)); assertEquals(0,r.getInt(4)); }
+      s.execute("INSERT INTO teams VALUES(1,'Builders','&9')");
+      s.execute("INSERT INTO members VALUES('p',1,'owner')");
+      java.util.UUID id=java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
+      s.execute("UPDATE known_players SET uuid='"+id+"' WHERE uuid='p'");
+      s.execute("UPDATE accounts SET uuid='"+id+"' WHERE uuid='p'");
+      s.execute("UPDATE members SET uuid='"+id+"' WHERE uuid='p'");
+      s.execute("SET time_zone='+05:00'");
+      Presence.record(c,id,"lobby",true); Presence.record(c,id,"pvp",true);
+      Presence.resetBackend(c,"lobby");
+      try(ResultSet r=s.executeQuery("SELECT online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertTrue(r.getBoolean(1)); }
+      Presence.record(c,id,"lobby",false);
+      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertEquals("Builders",r.getString(1)); assertEquals("&9",r.getString(2)); assertTrue(Math.abs(java.time.Duration.between(Instant.parse(r.getString(3)),Instant.now()).getSeconds())<10); assertEquals(1,r.getInt(4)); }
+      try(ResultSet r=s.executeQuery("SELECT DATA_TYPE,COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='v_player_stats' AND COLUMN_NAME='online'")) { assertTrue(r.next()); assertEquals("tinyint",r.getString(1)); assertEquals("tinyint(1)",r.getString(2)); }
+      Presence.resetBackend(c,"pvp");
+      try(ResultSet r=s.executeQuery("SELECT online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertFalse(r.getBoolean(1)); }
+      s.execute("UPDATE known_players SET uuid='p' WHERE uuid='"+id+"'");
+      s.execute("UPDATE accounts SET uuid='p' WHERE uuid='"+id+"'");
       s.execute("INSERT INTO player_stats VALUES('p',100,4,2,8,CURRENT_TIMESTAMP)");
       s.execute("INSERT INTO player_stats_details VALUES('p','distance_cm','WALK_ONE_CM',250)");
       s.execute("INSERT INTO player_stats_details VALUES('p','deaths_entity','ZOMBIE',2),('p','craft_item','STONE',3),('p','crafted','STONE',3),('p','blocks_placed','DIRT',4),('p','custom','JUMP',123)");
