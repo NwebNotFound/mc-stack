@@ -1,7 +1,12 @@
--- One-off: playtime snapshots are approximate, not actual last-seen timestamps.
--- Use UTC when reading TIMESTAMP values into presence DATETIME.
-SET time_zone = '+00:00';
+-- Existing presence is preserved; imported players have an unknown last-seen time.
+-- Allow unknown timestamps in tables created by earlier versions.
+ALTER TABLE player_presence MODIFY last_seen DATETIME(6) NULL;
 INSERT INTO player_presence (uuid, server, last_seen, online)
-SELECT uuid, server, updated_at, FALSE FROM player_playtime_world
-WHERE server IN ('lobby', 'survival')
+SELECT uuid, server, NULL, FALSE
+FROM (
+  SELECT uuid, server, MAX(updated_at) AS updated_at
+  FROM player_playtime_world
+  WHERE server IN ('lobby', 'survival')
+  GROUP BY uuid, server
+) AS playtime
 ON DUPLICATE KEY UPDATE uuid = player_presence.uuid;

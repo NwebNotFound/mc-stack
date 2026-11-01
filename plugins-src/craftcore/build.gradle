@@ -37,3 +37,5 @@ dependencies {
 }
 test { useJUnitPlatform() }
 jar { duplicatesStrategy = DuplicatesStrategy.EXCLUDE; from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }; exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA' }
+
+processTestResources { from(project.file('../../scripts/backfill-player-presence.sql')) }
