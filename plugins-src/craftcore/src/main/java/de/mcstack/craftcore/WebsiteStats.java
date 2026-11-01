@@ -19,7 +19,7 @@ final class WebsiteStats {
   static final String LEADERBOARD_VALUES_SQL = "SELECT 'money' board,uuid,mc_name name,COALESCE(money,0) value FROM v_player_stats_ext UNION ALL SELECT 'playtime',uuid,mc_name,playtime FROM v_player_stats_ext UNION ALL SELECT 'blocks_mined',uuid,mc_name,COALESCE(blocks_mined,0) FROM v_player_stats_ext UNION ALL SELECT 'kills',uuid,mc_name,COALESCE(kills,0) FROM v_player_stats_ext UNION ALL SELECT 'kd',uuid,mc_name,kd FROM v_player_stats_ext UNION ALL SELECT 'distance',uuid,mc_name,distance_m FROM v_player_stats_ext";
   static final String LEADERBOARDS_SQL = "SELECT board,period,ROW_NUMBER() OVER (PARTITION BY board,period ORDER BY value DESC,uuid) AS `rank`,uuid,name,value FROM (SELECT board,'all' period,uuid,name,value FROM v_leaderboard_values UNION ALL SELECT v.board,'week',v.uuid,v.name,v.value-COALESCE((SELECT s.value FROM leaderboard_snapshots s WHERE s.board=v.board AND s.uuid=v.uuid AND s.week_ts=(SELECT MAX(week_ts) FROM leaderboard_snapshots) ORDER BY s.day_key LIMIT 1),0) FROM v_leaderboard_values v) ranked";
   /** 24h-Aenderung; vergleicht nur mit Kursen ab dem Preis-Stichtag (price_meta), davor NULL (= neu). */
-  static final String CHANGE_24H_SQL = "CASE WHEN pm.effective_from_epoch IS NOT NULL AND FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 < pm.effective_from_epoch THEN NULL ELSE COALESCE((c.sell_price-h.avg_price)/NULLIF(h.avg_price,0)*100,0) END";
+  static final String CHANGE_24H_SQL = "CASE WHEN pm.effective_from_epoch IS NOT NULL AND h.hour_ts < pm.effective_from_epoch THEN NULL ELSE (c.sell_price-h.avg_price)/NULLIF(h.avg_price,0)*100 END";
   // Keep cause keys distinct from entity IDs even if a damage cause shares an entity name.
   static String entityIdsSql(java.util.stream.Stream<String> ids) { return ids.filter(id -> !id.equalsIgnoreCase("UNKNOWN")).map(id -> "'"+id.toLowerCase(Locale.ROOT)+"'").collect(Collectors.joining(",")); }
   static String detailsSql(String entityIdsSql) { return "JSON_MERGE_PATCH(COALESCE((SELECT JSON_OBJECTAGG(LOWER(d.stat_key),d.stat_value) FROM player_stats_details d WHERE d.uuid=p.uuid AND d.category='custom'),JSON_OBJECT()),JSON_OBJECT("+
@@ -46,7 +46,7 @@ final class WebsiteStats {
       s.execute("CREATE OR REPLACE VIEW v_leaderboard_values AS "+LEADERBOARD_VALUES_SQL);
       s.execute("CREATE OR REPLACE VIEW v_leaderboards AS "+LEADERBOARDS_SQL);
       PriceMeta.ensureSchema(s);
-      s.execute("CREATE OR REPLACE VIEW v_market AS SELECT c.item,CASE WHEN COALESCE(l.lock_buy,0)=1 THEN NULL ELSE c.buy_price END buy_price,c.sell_price sell_price,c.base_price,COALESCE(e.qty,0) volume_24h_qty,COALESCE(e.cp,0) volume_24h_cp,COALESCE(e.trades,0) trades_24h,"+CHANGE_24H_SQL+" change_24h_pct,c.updated_at,COALESCE(l.lock_buy,0)=0 buy_enabled,TRUE sell_enabled FROM market_catalog c LEFT JOIN (SELECT item,SUM(qty) qty,SUM(total_cp) cp,COUNT(*) trades FROM market_events WHERE ts>=UNIX_TIMESTAMP()-86400 GROUP BY item) e ON e.item=c.item LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 LEFT JOIN market_locks l ON l.item=c.item LEFT JOIN price_meta pm ON pm.id=1");
+      s.execute("CREATE OR REPLACE VIEW v_market AS SELECT c.item,CASE WHEN COALESCE(l.lock_buy,0)=1 THEN NULL ELSE c.buy_price END buy_price,c.sell_price sell_price,c.base_price,COALESCE(e.qty,0) volume_24h_qty,COALESCE(e.cp,0) volume_24h_cp,COALESCE(e.trades,0) trades_24h,"+CHANGE_24H_SQL+" change_24h_pct,c.updated_at,COALESCE(l.lock_buy,0)=0 buy_enabled,TRUE sell_enabled FROM market_catalog c LEFT JOIN (SELECT item,SUM(qty) qty,SUM(total_cp) cp,COUNT(*) trades FROM market_events WHERE ts>=UNIX_TIMESTAMP()-86400 GROUP BY item) e ON e.item=c.item LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=(SELECT MAX(h2.hour_ts) FROM market_price_history h2 WHERE h2.item=c.item AND h2.hour_ts<=UNIX_TIMESTAMP()-86400) LEFT JOIN market_locks l ON l.item=c.item LEFT JOIN price_meta pm ON pm.id=1");
       s.execute("CREATE OR REPLACE VIEW v_market_history AS SELECT item,hour_ts,avg_price,min_price,max_price,volume_qty FROM market_price_history WHERE hour_ts>=UNIX_TIMESTAMP()-90*86400");
       MarketEffective.ensureSchema(s);
     }
@@ -60,6 +60,10 @@ final class WebsiteStats {
   static void start(CraftCore core) throws Exception {
     core.tx(c->{migrate(c);return null;});
     Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{try {core.tx(c->{maintain(c,Instant.now());return null;});} catch(Exception e){core.getLogger().warning("Website-Statistik: "+e.getMessage());}},20L,72000L);
+  }
+  static final String SNAPSHOT_SQL = "INSERT INTO market_price_history(item,hour_ts,avg_price,min_price,max_price,volume_qty) SELECT item,?,sell_price,sell_price,sell_price,0 FROM market_catalog WHERE 1=1 ON DUPLICATE KEY UPDATE avg_price=CASE WHEN volume_qty=0 THEN VALUES(avg_price) ELSE avg_price END,min_price=CASE WHEN volume_qty=0 THEN VALUES(min_price) ELSE min_price END,max_price=CASE WHEN volume_qty=0 THEN VALUES(max_price) ELSE max_price END";
+  static void snapshot(Connection c, Instant now) throws SQLException {
+    try(PreparedStatement q=c.prepareStatement(SNAPSHOT_SQL)) { q.setLong(1,Math.floorDiv(now.getEpochSecond(),3600)*3600); q.executeUpdate(); }
   }
   static void catalog(Connection c,String item,long buy,long sell,double base,long now) throws SQLException {
     try(PreparedStatement q=c.prepareStatement("INSERT INTO market_catalog(item,buy_price,sell_price,base_price,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE buy_price=VALUES(buy_price),sell_price=VALUES(sell_price),base_price=VALUES(base_price),updated_at=VALUES(updated_at)")) {

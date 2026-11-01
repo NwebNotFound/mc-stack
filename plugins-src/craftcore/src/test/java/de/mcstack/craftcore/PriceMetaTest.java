@@ -31,7 +31,7 @@ class PriceMetaTest {
       s.execute("INSERT INTO market_price_history SELECT 'STONE',FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600,1.00");
       assertDoesNotThrow(() -> PriceMeta.store(c, PriceMeta.PLACEHOLDER));
       assertDoesNotThrow(() -> PriceMeta.store(c, PriceMeta.PLACEHOLDER));
-      try (ResultSet r = s.executeQuery("SELECT " + WebsiteStats.CHANGE_24H_SQL + " FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 LEFT JOIN price_meta pm ON pm.id=1")) {
+      try (ResultSet r = s.executeQuery("SELECT " + WebsiteStats.CHANGE_24H_SQL + " FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=(SELECT MAX(h2.hour_ts) FROM market_price_history h2 WHERE h2.item=c.item AND h2.hour_ts<=UNIX_TIMESTAMP()-86400) LEFT JOIN price_meta pm ON pm.id=1")) {
         r.next(); assertEquals(10.0, r.getDouble(1), 1e-6);
       }
     }
@@ -65,12 +65,29 @@ class PriceMetaTest {
       PriceMeta.ensureSchema(s);
       s.execute("INSERT INTO market_catalog VALUES('STONE',1.10)");
       s.execute("INSERT INTO market_price_history SELECT 'STONE',FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600,1.00");
-      String q = "SELECT " + WebsiteStats.CHANGE_24H_SQL + " FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=FLOOR((UNIX_TIMESTAMP()-86400)/3600)*3600 LEFT JOIN price_meta pm ON pm.id=1";
+      String q = "SELECT " + WebsiteStats.CHANGE_24H_SQL + " FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=(SELECT MAX(h2.hour_ts) FROM market_price_history h2 WHERE h2.item=c.item AND h2.hour_ts<=UNIX_TIMESTAMP()-86400) LEFT JOIN price_meta pm ON pm.id=1";
       try (ResultSet r = s.executeQuery(q)) { r.next(); assertEquals(10.0, r.getDouble(1), 1e-6); }
       PriceMeta.store(c, Instant.now().minusSeconds(3600));
       try (ResultSet r = s.executeQuery(q)) { r.next(); assertNull(r.getObject(1)); }
       PriceMeta.store(c, Instant.now().minusSeconds(3 * 86400));
       try (ResultSet r = s.executeQuery(q)) { r.next(); assertEquals(10.0, r.getDouble(1), 1e-6); }
+    }
+  }
+  @Test void nearestHistoryAndMissingBaseline() throws Exception {
+    try(Connection c=h2(); Statement s=c.createStatement()) {
+      s.execute("CREATE TABLE market_catalog (item VARCHAR(64),sell_price DECIMAL(20,2))");
+      s.execute("CREATE TABLE market_price_history (item VARCHAR(64),hour_ts BIGINT,avg_price DECIMAL(20,4))");
+      PriceMeta.ensureSchema(s);
+      s.execute("INSERT INTO market_catalog VALUES('STONE',1.50),('DIRT',1.00),('ZERO',1.00)");
+      s.execute("INSERT INTO market_price_history VALUES('STONE',UNIX_TIMESTAMP()-100000,1.00),('STONE',UNIX_TIMESTAMP()-90000,1.20),('STONE',UNIX_TIMESTAMP()-80000,1.40),('ZERO',UNIX_TIMESTAMP()-90000,0)");
+      String q="SELECT c.item,"+WebsiteStats.CHANGE_24H_SQL+" FROM market_catalog c LEFT JOIN market_price_history h ON h.item=c.item AND h.hour_ts=(SELECT MAX(h2.hour_ts) FROM market_price_history h2 WHERE h2.item=c.item AND h2.hour_ts<=UNIX_TIMESTAMP()-86400) LEFT JOIN price_meta pm ON pm.id=1 ORDER BY c.item";
+      try(ResultSet r=s.executeQuery(q)) {
+        assertTrue(r.next()); assertEquals("DIRT",r.getString(1)); assertNull(r.getObject(2));
+        assertTrue(r.next()); assertEquals("STONE",r.getString(1)); assertEquals(25,r.getDouble(2),1e-6);
+        assertTrue(r.next()); assertEquals("ZERO",r.getString(1)); assertNull(r.getObject(2));
+      }
+      PriceMeta.store(c,Instant.now().minusSeconds(88000));
+      try(ResultSet r=s.executeQuery(q)) { r.next(); r.next(); assertNull(r.getObject(2)); }
     }
   }
 }

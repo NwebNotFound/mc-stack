@@ -48,9 +48,10 @@ final class Market implements Listener {
     try(PreparedStatement s=c.prepareStatement("SELECT "+(buy?"lock_buy":"lock_sell")+" FROM market_locks WHERE item=?")){s.setString(1,m.name());try(ResultSet r=s.executeQuery()){return r.next()&&r.getInt(1)==1;}}
   }
   void start() throws Exception {
+    DynamicPrice.configure(core.getConfig());
     PriceCatalog.build(core).forEach((m,raw)->{if(Bukkit.getItemFactory().getItemMeta(m)==null){core.getLogger().warning("Marktartikel ohne ItemMeta ausgeschlossen: "+m);return;} Quote q=quote(core.getConfig(),m,raw); items.put(m,q);});
     Map<Material,Long> minimumPurchases=new EnumMap<>(Material.class);
-    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,DynamicPrice.apply(Math.max(1,cents(core.getConfig(),m,q.base(),true)),DynamicPrice.FLOOR,true));});
+    items.forEach((m,q)->{if(!unbuyable(core.getConfig(),m)) minimumPurchases.put(m,DynamicPrice.apply(Math.max(1,cents(core.getConfig(),m,q.base(),true)),DynamicPrice.floor(),true));});
     List<PriceCatalog.CatalogRecipe> recipes=new ArrayList<>();
     Bukkit.recipeIterator().forEachRemaining(recipe->{var converted=PriceCatalog.recipe(recipe);if(converted!=null)recipes.add(converted);});
     // Ensure even the cheapest purchasable recipe chain costs at least one cent
@@ -71,7 +72,9 @@ final class Market implements Listener {
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); for(Material m:items.keySet()) price(c,m,false,false); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
-    Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
+    if(SpawnRoute.isSurvival(System.getenv().getOrDefault("CRAFTCORE_SERVER","Server")))
+      Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); WebsiteStats.snapshot(c,java.time.Instant.now()); return null; }); } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); } },1L,72000L);
+    else Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -113,7 +116,7 @@ final class Market implements Listener {
     if(trade) f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
     long sell=safeSell(Math.min(config.maxSell(),Math.min(
       DynamicPrice.apply(config.baseSell(),f,false),
-      DynamicPrice.apply(config.baseBuy(),DynamicPrice.FLOOR,true))),config.recipeCost());
+      DynamicPrice.apply(config.baseBuy(),DynamicPrice.floor(),true))),config.recipeCost());
     long purchase=Math.max(config.minimumPurchase(),Math.max(DynamicPrice.apply(config.baseBuy(),f,true),BankPrice.minimumBuy(sell)));
     WebsiteStats.catalog(c,m.name(),purchase,sell,config.base(),now);
     return new Price(buy?purchase:sell,config.base()*f,trade?(buy?"auf":"ab"):"-");
