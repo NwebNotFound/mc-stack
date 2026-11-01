@@ -323,7 +323,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
                         Player player = Bukkit.getPlayer(id);
                         if (player == null) return;
                         player.sendActionBar(Component.text("PvP-Server bereit, verbinde ..."));
-                        try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht erreicht werden"); }
+                        connectBuilder(player);
                     }); return;
                 }
                 long elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - begin);
@@ -332,6 +332,14 @@ public final class LobbyPvp implements Listener, TabExecutor {
             }
             Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server antwortet nicht (Timeout " + timeout + "s), bitte spaeter erneut /pvp build"));
         } finally { buildStarting.set(false); }
+    }
+    private void connectBuilder(Player player) {
+        UUID id = player.getUniqueId();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try { store.requestBuild(id); }
+            catch (Exception e) { plugin.getLogger().warning("PvP-Build-Anfrage: " + e.getClass().getSimpleName()); }
+            Bukkit.getScheduler().runTask(plugin, () -> { try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht erreicht werden"); } });
+        });
     }
     private void connectPlayer(Player player) throws java.io.IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();

@@ -33,6 +33,24 @@ public final class PvpStore {
     public int pendingCount() throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("SELECT COUNT(*) FROM pvp_assignments WHERE status IN ('pending','running','warmup')"); ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
     }
+    public static String buildRequestId(UUID player) { return ("b" + player.toString().replace("-", "")); }
+    public void requestBuild(UUID player) throws SQLException {
+        String id=buildRequestId(player); long now=System.currentTimeMillis();
+        try (Connection c=source.open()) {
+            try (PreparedStatement update=c.prepareStatement("UPDATE pvp_assignments SET status='build', player_a=?, updated_at=? WHERE match_id=?")) {
+                update.setString(1, player.toString()); update.setLong(2, now); update.setString(3, id); if (update.executeUpdate()>0) return;
+            }
+            try (PreparedStatement insert=c.prepareStatement("INSERT INTO pvp_assignments (match_id,player_a,player_b,kit_a,kit_b,status,created_at,updated_at) VALUES (?,?,?,?,?,'build',?,?)")) {
+                insert.setString(1, id); insert.setString(2, player.toString()); insert.setString(3, "00000000-0000-0000-0000-000000000000");
+                insert.setString(4, "-"); insert.setString(5, "-"); insert.setLong(6, now); insert.setLong(7, now); insert.executeUpdate();
+            }
+        }
+    }
+    public boolean consumeBuildRequest(UUID player) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement("UPDATE pvp_assignments SET status='done', updated_at=? WHERE match_id=? AND player_a=? AND status='build'")) {
+            s.setLong(1, System.currentTimeMillis()); s.setString(2, buildRequestId(player)); s.setString(3, player.toString()); return s.executeUpdate()==1;
+        }
+    }
     public void holdForQueue(boolean occupied) throws SQLException {
         try (Connection c=source.open()) {
             if (!occupied) {

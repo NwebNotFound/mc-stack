@@ -11,6 +11,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.entity.*;
 import org.bukkit.event.player.*;
+import org.bukkit.util.Vector;
 import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -60,11 +61,11 @@ public final class PvpMatches implements Listener {
         Player p=e.getPlayer(); reset(p); p.setGameMode(GameMode.ADVENTURE); p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
         boolean builder=PvpAccess.mayBypass(p::hasPermission);
         UUID id=p.getUniqueId();
-        async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
+        async(()->{ Optional<PvpStore.Assignment> found; boolean buildRequest=false; try { buildRequest=store.consumeBuildRequest(id); found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } boolean requested=buildRequest; main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;
-            player.setGameMode(PvpAccess.joinMode(builder,found.isPresent()));
-            PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
-            if(decision==PvpAccess.JoinDecision.BUILDER) { if(PvpAccess.sendToBuildWorld(decision)) player.teleport(build.getSpawnLocation()); return; }
+            PvpAccess.JoinDecision decision=PvpAccess.destination(requested,found.isPresent(),builder);
+            player.setGameMode(PvpAccess.joinMode(decision==PvpAccess.JoinDecision.BUILDER, found.isPresent() && decision!=PvpAccess.JoinDecision.BUILDER));
+            if(decision==PvpAccess.JoinDecision.BUILDER) { if(PvpAccess.sendToBuildWorld(decision)) sendToBuild(player); return; }
             if(decision==PvpAccess.JoinDecision.KICK) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }
             PvpStore.Assignment a=found.get(); Session s=sessions.computeIfAbsent(a.matchId(),k->new Session(a)); players.put(id,s);
             if(Bukkit.getPlayer(a.a())!=null && Bukkit.getPlayer(a.b())!=null && players.get(a.a())==s && players.get(a.b())==s) begin(s);
@@ -94,7 +95,7 @@ public final class PvpMatches implements Listener {
         String id=s.assignment.matchId().replaceAll("[^a-zA-Z0-9_-]", ""); if(id.length()<8) throw new IllegalStateException("Ungueltige Match-ID");
         String worldName="pvp_m_"+id.substring(0,8); if(Bukkit.getWorld(worldName)!=null || new File(Bukkit.getWorldContainer(),worldName).exists()) throw new IllegalStateException("Match-Welt existiert bereits: "+worldName);
         WorldCreator creator=new WorldCreator(worldName).generator(new ChunkGenerator() {}).generateStructures(false);
-        s.world=Bukkit.createWorld(creator); if(s.world==null) throw new IllegalStateException("Welt konnte nicht erstellt werden"); s.world.setKeepSpawnInMemory(false);
+        s.world=Bukkit.createWorld(creator); if(s.world==null) throw new IllegalStateException("Welt konnte nicht erstellt werden"); s.world.setKeepSpawnInMemory(false); s.world.setPVP(true);
         s.arena=arena; s.arenaName=selected.getName().substring(0,selected.getName().length()-4);
         var min=arena.region().min(); var max=arena.region().max(); int i=0;
         for(int x=min.x();x<=max.x();x++) for(int z=min.z();z<=max.z();z++) for(int yy=min.y();yy<=max.y();yy++) s.world.getBlockAt(x,yy,z).setBlockData(Bukkit.createBlockData(blocks.get(i++)),false);
@@ -136,7 +137,31 @@ public final class PvpMatches implements Listener {
         Session s=players.remove(e.getPlayer().getUniqueId()); if(s==null || s.finishing) return;
         if(s.match!=null) { s.match.disconnect(e.getPlayer().getUniqueId(),System.currentTimeMillis()); finish(s); }
     }
-    @EventHandler public void damage(EntityDamageEvent e) { if(e.getEntity() instanceof Player p) { Session s=players.get(p.getUniqueId()); if(s==null || !s.active || s.finishing) e.setCancelled(true); } }
+    private boolean inRound(Player player) { Session s=players.get(player.getUniqueId()); return s!=null && s.active && !s.finishing; }
+    private void sendToBuild(Player player) {
+        Runnable teleport=()->{ if(player.isOnline()) player.teleport(build.getSpawnLocation()); };
+        Bukkit.getScheduler().runTaskLater(plugin,teleport,1L);
+        Bukkit.getScheduler().runTaskLater(plugin,teleport,10L);
+    }
+    @EventHandler public void damage(EntityDamageEvent e) {
+        if(!(e.getEntity() instanceof Player p)) return;
+        if(inRound(p) && e instanceof EntityDamageByEntityEvent by && PvpCombat.keepsKnockback(true, by.getDamager().getType().name())) return;
+        if(!inRound(p)) e.setCancelled(true);
+    }
+    @EventHandler public void projectileHit(ProjectileHitEvent e) {
+        if(!(e.getHitEntity() instanceof Player victim) || !inRound(victim) || !PvpCombat.isUtilityProjectile(e.getEntity().getType().name())) return;
+        if(!(e.getEntity().getShooter() instanceof Player shooter) || shooter.equals(victim)) return;
+        if(e.getEntity().getType().name().equals("FISHING_BOBBER")) return;
+        org.bukkit.util.Vector current=victim.getVelocity();
+        double[] velocity=PvpCombat.snowballKnockback(current.getX(),current.getY(),current.getZ(),shooter.getLocation().getX(),shooter.getLocation().getZ(),victim.getLocation().getX(),victim.getLocation().getZ(),victim.isOnGround());
+        victim.setVelocity(new Vector(velocity[0],velocity[1],velocity[2]));
+    }
+    @EventHandler public void fish(PlayerFishEvent e) {
+        if(e.getState()!=PlayerFishEvent.State.CAUGHT_ENTITY || !(e.getCaught() instanceof Player victim) || !inRound(victim) || !inRound(e.getPlayer())) return;
+        org.bukkit.util.Vector current=victim.getVelocity(); Location from=victim.getLocation(), to=e.getPlayer().getLocation();
+        double[] velocity=PvpCombat.reelPull(current.getX(),current.getY(),current.getZ(),from.getX(),from.getY(),from.getZ(),to.getX(),to.getY(),to.getZ());
+        victim.setVelocity(new Vector(velocity[0],velocity[1],velocity[2]));
+    }
     private void afterRound(Session s) { s.active=false; if(s.match.finished()) finish(s); else Bukkit.getScheduler().runTaskLater(plugin,()->round(s),60L); }
     private void finish(Session s) {
         if(s.finishing) return; s.finishing=true;s.active=false; long ended=System.currentTimeMillis();
