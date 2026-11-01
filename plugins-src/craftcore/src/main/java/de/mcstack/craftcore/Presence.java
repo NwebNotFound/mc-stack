@@ -55,7 +55,8 @@ final class Presence implements Listener {
       }
       return drained;
     }
-  }  private final CraftCore core;
+  }
+  private final CraftCore core;
   private final String server;
   private final Tracker tracker;
   private boolean migrateOnStart;
