@@ -254,7 +254,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
                 Bukkit.getScheduler().runTask(plugin, () -> { Player p = Bukkit.getPlayer(id); if (p != null) p.sendActionBar(Component.text(PvpPing.progress(elapsed, timeout))); });
                 try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
-            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server antwortet nicht (Timeout " + 180 + "s), bitte spaeter erneut /pvp build"));
+            Bukkit.getScheduler().runTask(plugin, () -> message(id, "PvP-Server antwortet nicht (Timeout " + timeout + "s), bitte spaeter erneut /pvp build"));
         } finally { buildStarting.set(false); }
     }
     private void connectPlayer(Player player) throws java.io.IOException {
