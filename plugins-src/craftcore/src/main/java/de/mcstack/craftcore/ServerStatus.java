@@ -16,7 +16,7 @@ final class ServerStatus implements Listener, CommandExecutor, TabCompleter {
   ServerStatus(CraftCore plugin) { this.plugin=plugin; }
   private String read() throws Exception {
     String value=plugin.tx(c->plugin.one(c,"SELECT mode FROM server_status WHERE id=1"));
-    if(!List.of("dev","online","wartung").contains(value)) throw new IllegalStateException("Ungueltiger Servermodus");
+    if(!List.of("dev","online","wartung").contains(value)) throw new IllegalStateException("Ungültiger Servermodus");
     return value;
   }
   void start() throws Exception {
@@ -35,15 +35,15 @@ final class ServerStatus implements Listener, CommandExecutor, TabCompleter {
       String current=read(); mode=current;
       Player p=event.getPlayer();
       if(current.equals("wartung") && !p.isOp() && !p.hasPermission("group.admin"))
-        event.disallow(PlayerLoginEvent.Result.KICK_OTHER,Component.text("Der Server wird gerade gewartet. Bitte versuche es spaeter erneut!",NamedTextColor.YELLOW));
-    } catch(Exception ex) { event.disallow(PlayerLoginEvent.Result.KICK_OTHER,Component.text("Der Serverstatus ist gerade nicht verfuegbar. Bitte versuche es spaeter erneut!",NamedTextColor.YELLOW)); }
+        event.disallow(PlayerLoginEvent.Result.KICK_OTHER,Component.text("Der Server wird gerade gewartet. Bitte versuche es später erneut!",NamedTextColor.YELLOW));
+    } catch(Exception ex) { event.disallow(PlayerLoginEvent.Result.KICK_OTHER,Component.text("Der Serverstatus ist gerade nicht verfügbar. Bitte versuche es später erneut!",NamedTextColor.YELLOW)); }
   }
   @EventHandler public void join(PlayerJoinEvent event) {
     Player p=event.getPlayer(); header(p);
     p.sendMessage(Component.text("Willkommen! Servermodus: "+mode,NamedTextColor.GOLD));
   }
   public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
-    if(!(sender instanceof Player p) || !p.isOp()) { sender.sendMessage("Nur OPs koennen den Servermodus aendern."); return true; }
+    if(!(sender instanceof Player p) || !p.isOp()) { sender.sendMessage("Nur OPs können den Servermodus ändern."); return true; }
     if(args.length!=1 || !List.of("dev","online","wartung").contains(args[0].toLowerCase(Locale.ROOT))) { sender.sendMessage("Benutzung: /servermode <dev|online|wartung>"); return true; }
     String requested=args[0].toLowerCase(Locale.ROOT);
     try { plugin.tx(c->{plugin.exec(c,"UPDATE server_status SET mode=? WHERE id=1",requested);return null;}); mode=requested; Bukkit.getOnlinePlayers().forEach(this::header); sender.sendMessage("Servermodus gesetzt: "+requested); }

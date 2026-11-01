@@ -8,12 +8,12 @@ final class TeamInviteStore {
       String[] args={op,value}; String team=one(c,"SELECT team_id FROM members WHERE uuid=?",id);
       if(op.equals("invite")) {
         String role=one(c,"SELECT role FROM members WHERE uuid=?",id);
-        if(team==null || "MEMBER".equals(role)) return "Nur Owner und Admins duerfen einladen.";
+        if(team==null || "MEMBER".equals(role)) return "Nur Owner und Admins dürfen einladen.";
         String target=one(c,"SELECT uuid FROM online_players WHERE name=? AND seen_at >= UNIX_TIMESTAMP()-15",args[1]);
         if(target==null) return "Spieler ist nicht im Netzwerk online.";
         if(one(c,"SELECT team_id FROM members WHERE uuid=?",target)!=null) return "Spieler ist bereits in einem Team.";
         exec(c,"INSERT INTO team_invites(id,uuid,team_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id)",UUID.randomUUID().toString(),target,team);
-        return "Einladung erstellt fuer "+args[1]+".";
+        return "Einladung erstellt für "+args[1]+".";
       }
       String invitation=op.equals("join") ? one(c,"SELECT i.id FROM team_invites i JOIN teams t ON t.id=i.team_id WHERE i.uuid=? AND t.name=?",id,args[1]) : args[1];
       String invitedTeam=one(c,"SELECT team_id FROM team_invites WHERE id=? AND uuid=?",invitation,id);

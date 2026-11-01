@@ -81,7 +81,7 @@ final class Market implements Listener {
     double floor=cfg.getDouble("market.price-floor."+m.name(),0);
     double min=cfg.getDouble("market.min-price."+m.name(),Math.max(base*cfg.getDouble("market.minimum-factor",0.2),floor));
     double max=cfg.getDouble("market.max-price."+m.name(),Math.max(min,base*cfg.getDouble("market.maximum-factor",3.0)));
-    if(!Double.isFinite(min)||!Double.isFinite(max)||min<0||max<min)throw new IllegalArgumentException("Ungueltige Preisgrenzen: "+m);
+    if(!Double.isFinite(min)||!Double.isFinite(max)||min<0||max<min)throw new IllegalArgumentException("Ungültige Preisgrenzen: "+m);
     return new Quote(base,min,max,base*cfg.getDouble("market.pressure-factor",0.01));
   }
   static boolean unbuyable(org.bukkit.configuration.Configuration cfg, Material m) { return m.name().startsWith("NETHERITE_") || m.name().endsWith("SHULKER_BOX") || m.name().endsWith("_SPAWN_EGG") || m == Material.ENCHANTED_BOOK || cfg.getStringList("market.unbuyable").contains(m.name()); }
@@ -146,7 +146,7 @@ final class Market implements Listener {
       Price buy=quotes.get(m)[0], sell=quotes.get(m)[1]; ItemStack icon=new ItemStack(m); ItemMeta meta=icon.getItemMeta();
       if(meta==null){menu.slots.remove(slot);core.getLogger().warning("Marktartikel ohne ItemMeta uebersprungen: "+m);continue;} meta.setLore(List.of(isUnbuyable(m)?"Kauf: nur Spielerhandel":"Kauf: "+Money.format(buy.cents()),"Verkauf: "+Money.format(sell.cents()),"Trend: "+buy.trend(),isUnbuyable(m)?"Nicht bei der Bank kaufbar":"Linksklick: 1 kaufen", "Rechtsklick: 1 verkaufen")); icon.setItemMeta(meta); inv.setItem(slot,icon);
     }
-    inv.setItem(45,button(Material.ARROW,"Vorherige Seite")); inv.setItem(46,button(Material.GRASS_BLOCK,"Bloecke")); inv.setItem(47,button(Material.IRON_INGOT,"Materialien")); inv.setItem(48,button(Material.IRON_SWORD,"Ausruestung")); inv.setItem(49,button(Material.APPLE,"Nahrung")); inv.setItem(50,button(Material.REDSTONE,"Technik")); inv.setItem(51,button(Material.CHEST,"Alle Kategorien")); inv.setItem(52,button(Material.GOLD_INGOT,"Verkaufen | Tageslimit uebrig: "+Money.format(remaining))); inv.setItem(53,button(Material.ARROW,"Naechste Seite")); if(core.npcPreviews.contains(p.getOpenInventory().getTopInventory())) core.npcPreviews.add(inv); p.openInventory(inv);
+    inv.setItem(45,button(Material.ARROW,"Vorherige Seite")); inv.setItem(46,button(Material.GRASS_BLOCK,"Blöcke")); inv.setItem(47,button(Material.IRON_INGOT,"Materialien")); inv.setItem(48,button(Material.IRON_SWORD,"Ausrüstung")); inv.setItem(49,button(Material.APPLE,"Nahrung")); inv.setItem(50,button(Material.REDSTONE,"Technik")); inv.setItem(51,button(Material.CHEST,"Alle Kategorien")); inv.setItem(52,button(Material.GOLD_INGOT,"Verkaufen | Tageslimit übrig: "+Money.format(remaining))); inv.setItem(53,button(Material.ARROW,"Nächste Seite")); if(core.npcPreviews.contains(p.getOpenInventory().getTopInventory())) core.npcPreviews.add(inv); p.openInventory(inv);
   }
   @EventHandler public void drag(InventoryDragEvent e) { if(e.getView().getTopInventory().getHolder() instanceof Menu) e.setCancelled(true); }
   @EventHandler public void click(InventoryClickEvent e) {
@@ -156,7 +156,7 @@ final class Market implements Listener {
     if(m!=null && core.npcPreviews.contains(e.getView().getTopInventory())) { p.sendMessage("NPC-Vorschau: Handel ist hier wegen unsicherer Item-Auslieferung gesperrt."); return; }
     try { if(m!=null) { if(e.isRightClick())sell(p,m); else buy(p,m); open(p,menu.category,menu.query,menu.page); }
       else switch(slot) { case 45 -> open(p,menu.category,menu.query,menu.page-1); case 53 -> open(p,menu.category,menu.query,menu.page+1); case 46 -> open(p,"bloecke",menu.query,0); case 47 -> open(p,"materialien",menu.query,0); case 48 -> open(p,"ausruestung",menu.query,0); case 49 -> open(p,"nahrung",menu.query,0); case 50 -> open(p,"technik",menu.query,0); case 51 -> open(p,"alle",menu.query,0); case 52 -> { if(core.npcPreviews.contains(e.getView().getTopInventory())) p.sendMessage("NPC-Vorschau: Handel gesperrt."); else openSell(p); } default -> {} }
-    } catch(Exception ex) { core.getLogger().warning("Bank: "+ex); p.sendMessage("Bankaktion fehlgeschlagen. Bitte spaeter erneut versuchen."); }
+    } catch(Exception ex) { core.getLogger().warning("Bank: "+ex); p.sendMessage("Bankaktion fehlgeschlagen. Bitte später erneut versuchen."); }
   }
   static long durabilityPrice(long cents, int damage, int maxDurability) {
     if(maxDurability<=0) return cents;
@@ -194,7 +194,7 @@ final class Market implements Listener {
   static <T> void drain(int size, java.util.function.IntFunction<T> get, java.util.function.IntConsumer clear, java.util.function.Consumer<T> deliver) {
     for(int slot=0;slot<size;slot++){T item=get.apply(slot);clear.accept(slot);if(item!=null)deliver.accept(item);}
   }
-  static final String SELL_MENU_OFF = "Das Verkaufsmenue ist gerade deaktiviert.";
+  static final String SELL_MENU_OFF = "Das Verkaufsmenü ist gerade deaktiviert.";
  static boolean marketSellEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("market.sell.enabled", false); }
  static boolean sellMenuEnabled(org.bukkit.configuration.Configuration cfg) { return cfg.getBoolean("sell-menu.enabled", false); }
  void openSell(Player p) throws Exception {
@@ -203,7 +203,7 @@ final class Market implements Listener {
     refreshSell(menu); p.openInventory(menu.inventory); sellMenus.put(menu.owner,menu);
   }
   private void refreshSell(SellMenu menu) {
-    ItemStack button=button(Material.LIME_DYE,"Verkauf bestaetigen");
+    ItemStack button=button(Material.LIME_DYE,"Verkauf bestätigen");
     List<String> lore=new ArrayList<>();
     lore.add("Alle geeigneten Stacks verkaufen.");
     try {
@@ -228,7 +228,7 @@ final class Market implements Listener {
     for(Material material:materials) if(!prices.containsKey(material)) prices.put(material,quote.get(material));
     return prices;
   }
-  static String sellPreview(String item,long unit,int amount) { return item+": "+Money.format(unit)+" / Stueck, "+Money.format(total(unit,amount))+" / Stack"; }
+  static String sellPreview(String item,long unit,int amount) { return item+": "+Money.format(unit)+" / Stück, "+Money.format(total(unit,amount))+" / Stack"; }
   private void refreshLater(SellMenu menu) { Bukkit.getScheduler().runTask(core,()->{if(sellMenus.get(menu.owner)!=menu)return;try{refreshSell(menu);}catch(Exception ex){core.getLogger().warning("Verkaufsanzeige: "+ex);}}); }
   @EventHandler public void sellDrag(InventoryDragEvent e) {
     if(!(e.getView().getTopInventory().getHolder() instanceof SellMenu menu))return;
@@ -316,10 +316,10 @@ final class Market implements Listener {
   }
   private void finishSell(Player player,UUID uuid,String key,ItemStack stack,SellResult result) {
     SellStackFlow.resolve(result.status(),
-      ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstaende fuer "+Money.format(result.cp())+".");},
-      ()->{if(player.isOnline() && Bukkit.getPlayer(uuid)==player) { for(ItemStack left:player.getInventory().addItem(stack).values())player.getWorld().dropItemNaturally(player.getLocation(),left); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurueckgegeben.":"Verkauf fehlgeschlagen; Stack zurueckgegeben."); }
+      ()->{core.sellBalance(uuid,result.balance()); player.sendMessage("Verkauft: "+stack.getAmount()+" Gegenstände für "+Money.format(result.cp())+".");},
+      ()->{if(player.isOnline() && Bukkit.getPlayer(uuid)==player) { for(ItemStack left:player.getInventory().addItem(stack).values())player.getWorld().dropItemNaturally(player.getLocation(),left); player.sendMessage(result.limited()?"Tageslimit erreicht; Stack zurückgegeben.":"Verkauf fehlgeschlagen; Stack zurückgegeben."); }
         else { String nbt=Base64.getEncoder().encodeToString(stack.serializeAsBytes()); Bukkit.getScheduler().runTaskAsynchronously(core,()->{ try { core.tx(c->{SellTransaction.refundOwed(c,key,uuid.toString(),nbt,stack.getAmount());return null;}); queueRefunds(uuid); } catch(Exception ex) {core.getLogger().severe("Rueckerstattung nicht gespeichert fuer "+key+": "+ex); } }); } },
-      ()->player.sendMessage("Verkauf ungeklaert. Bitte Admin informieren: "+key));
+      ()->player.sendMessage("Verkauf ungeklärt. Bitte Admin informieren: "+key));
   }
   @EventHandler public void refundJoin(PlayerJoinEvent e) { UUID uuid=e.getPlayer().getUniqueId(); Bukkit.getScheduler().runTaskAsynchronously(core,()->queueRefunds(uuid)); }
   private void queueRefunds(UUID uuid) {

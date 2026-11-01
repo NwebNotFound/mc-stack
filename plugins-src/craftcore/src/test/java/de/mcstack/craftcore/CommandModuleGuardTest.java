@@ -9,7 +9,7 @@ class CommandModuleGuardTest {
   @Test void missingModuleReportsUnavailableAndStopsDispatch() {
     List<String> replies = new ArrayList<>();
     assertFalse(CraftCore.moduleAvailable(null, replies::add));
-    assertEquals(List.of("Dieser Befehl ist auf diesem Server nicht verfuegbar."), replies);
+    assertEquals(List.of("Dieser Befehl ist auf diesem Server nicht verfügbar."), replies);
   }
 
   @Test void availableModuleAllowsDispatchWithoutReply() {

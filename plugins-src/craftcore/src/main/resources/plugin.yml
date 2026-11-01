@@ -40,7 +40,7 @@ commands:
     description: Servermodus setzen (nur OP)
     usage: /servermode <dev|online|wartung>
   menu:
-    description: Zentrales Men?
+    description: Zentrales Menü
   help:
     description: Kategorien und Hilfe
   abholen:
@@ -68,7 +68,7 @@ commands:
   tpteam:
     description: Teleport zu Teammitgliedern auf Survival
   vip:
-    description: VIP-Menue
+    description: VIP-Menü
   sethome:
     description: Zuhause setzen
 
@@ -91,7 +91,7 @@ commands:
     usage: /ah
 
   testrun:
-    description: Test-CP nur fuer Konten ...c0de0001 und ...c0de0002 (Konsole/RCON)
+    description: Test-CP nur für Konten ...c0de0001 und ...c0de0002 (Konsole/RCON)
     usage: /testrun <uuid> <cent> <idem_key>
 
   trade:
@@ -126,5 +126,5 @@ permissions:
     description: NPCs setzen
     default: op
   craftcore.end.bypass:
-    description: End-Sperre fuer Ops umgehen
+    description: End-Sperre für Ops umgehen
     default: op

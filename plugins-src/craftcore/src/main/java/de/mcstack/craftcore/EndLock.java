@@ -17,7 +17,7 @@ import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 
 final class EndLock implements Listener {
-  private static final String DEFAULT_MESSAGE = "&cDas End ist noch gesperrt - es wird spaeter als Event freigeschaltet!";
+  private static final String DEFAULT_MESSAGE = "&cDas End ist noch gesperrt - es wird später als Event freigeschaltet!";
   private final CraftCore core;
   private final EndLockRules rules = new EndLockRules();
   EndLock(CraftCore core) { this.core = core; }

@@ -30,22 +30,22 @@ final class Trade implements Listener {
     if(active.containsKey(p.getUniqueId())){p.sendMessage("Du handelst bereits.");return;}
     if(args[0].equalsIgnoreCase("accept")){
       Request r=requests.remove(p.getUniqueId()); Player from=r==null?null:Bukkit.getPlayer(r.from());
-      if(r==null || r.expires()<System.currentTimeMillis() || from==null || active.containsKey(from.getUniqueId()) || !near(p,from)){p.sendMessage("Keine gueltige Anfrage in Reichweite.");return;}
-      if(!emptyCursor(p) || !emptyCursor(from)){p.sendMessage("Beide Spieler muessen den Cursor leeren.");from.sendMessage("Beide Spieler muessen den Cursor leeren.");return;}
+      if(r==null || r.expires()<System.currentTimeMillis() || from==null || active.containsKey(from.getUniqueId()) || !near(p,from)){p.sendMessage("Keine gültige Anfrage in Reichweite.");return;}
+      if(!emptyCursor(p) || !emptyCursor(from)){p.sendMessage("Beide Spieler müssen den Cursor leeren.");from.sendMessage("Beide Spieler müssen den Cursor leeren.");return;}
       Session s=new Session(from,p); s.inv=Bukkit.createInventory(s,54,"Handel: "+from.getName()+" / "+p.getName());
       for(int i=0;i<54;i++) if(!offer(i)) s.inv.setItem(i,button(Material.GRAY_STAINED_GLASS_PANE," "));
       active.put(from.getUniqueId(),s);active.put(p.getUniqueId(),s); requests.remove(from.getUniqueId());
       refresh(s);from.openInventory(s.inv);p.openInventory(s.inv);return;
     }
     Player target=Bukkit.getPlayerExact(args[0]);
-    if(target==null || target.equals(p) || !near(p,target) || active.containsKey(target.getUniqueId())){p.sendMessage("Spieler muss verfuegbar und innerhalb von 10 Bloecken sein.");return;}
+    if(target==null || target.equals(p) || !near(p,target) || active.containsKey(target.getUniqueId())){p.sendMessage("Spieler muss verfügbar und innerhalb von 10 Blöcken sein.");return;}
     requests.put(target.getUniqueId(),new Request(p.getUniqueId(),System.currentTimeMillis()+30000));
     p.sendMessage("Handelsanfrage an "+target.getName()+" gesendet (30 Sekunden).");target.sendMessage(p.getName()+" moechte handeln. Annehmen mit /trade accept");
   }
   boolean emptyCursor(Player p){ItemStack c=p.getItemOnCursor();return c==null || c.getType().isAir();}
   static boolean offer(int slot){return slot>=0 && slot<18 || slot>=27 && slot<45;}
   ItemStack button(Material m,String name){ItemStack i=new ItemStack(m);ItemMeta meta=i.getItemMeta();meta.setDisplayName(name);i.setItemMeta(meta);return i;}
-  void refresh(Session s){s.inv.setItem(18,button(s.state.first?Material.LIME_WOOL:Material.RED_WOOL,s.a.getName()+": "+(s.state.first?"bestaetigt":"bestaetigen")));s.inv.setItem(26,button(s.state.second?Material.LIME_WOOL:Material.RED_WOOL,s.b.getName()+": "+(s.state.second?"bestaetigt":"bestaetigen")));s.inv.setItem(22,button(Material.CLOCK,s.state.ticks<0?"Beide bestaetigen": "Handel in "+((s.state.ticks+19)/20)+" s"));}
+  void refresh(Session s){s.inv.setItem(18,button(s.state.first?Material.LIME_WOOL:Material.RED_WOOL,s.a.getName()+": "+(s.state.first?"bestätigt":"bestätigen")));s.inv.setItem(26,button(s.state.second?Material.LIME_WOOL:Material.RED_WOOL,s.b.getName()+": "+(s.state.second?"bestätigt":"bestätigen")));s.inv.setItem(22,button(Material.CLOCK,s.state.ticks<0?"Beide bestätigen": "Handel in "+((s.state.ticks+19)/20)+" s"));}
   @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=true) public void click(InventoryClickEvent e){
     if(!(e.getView().getTopInventory().getHolder() instanceof Session s))return; e.setCancelled(true);
     if(s.ended || !(e.getWhoClicked() instanceof Player p) || active.get(p.getUniqueId())!=s || !near(s.a,s.b))return;
@@ -73,6 +73,6 @@ final class Trade implements Listener {
   }
   boolean fits(Player p,List<ItemStack> incoming){ItemStack[] contents=p.getInventory().getStorageContents();ItemStack[] copy=new ItemStack[contents.length];for(int i=0;i<copy.length;i++)if(contents[i]!=null)copy[i]=contents[i].clone();for(ItemStack item:incoming){int left=item.getAmount();for(ItemStack slot:copy)if(slot!=null && slot.isSimilar(item)){int n=Math.min(left,Math.max(0,slot.getMaxStackSize()-slot.getAmount()));slot.setAmount(slot.getAmount()+n);left-=n;}for(int i=0;i<copy.length && left>0;i++)if(copy[i]==null || copy[i].getType().isAir()){int n=Math.min(left,item.getMaxStackSize());copy[i]=item.clone();copy[i].setAmount(n);left-=n;}if(left>0)return false;}return true;}
   List<ItemStack> snapshot(Session s,int start){List<ItemStack> items=new ArrayList<>();for(int i=start;i<start+18;i++){ItemStack item=s.inv.getItem(i);if(item!=null && !item.getType().isAir())items.add(item.clone());}return items;}
-  void tick(){for(Session s:new HashSet<>(active.values())){if(!near(s.a,s.b) || s.a.getOpenInventory().getTopInventory()!=s.inv || s.b.getOpenInventory().getTopInventory()!=s.inv){cancel(s,null,"Handel wegen Distanz oder geschlossenem Inventar abgebrochen.");continue;}if(s.state.ticks>=0){if(s.state.tick()){List<ItemStack> a=snapshot(s,0),b=snapshot(s,27);if(!fits(s.a,b)||!fits(s.b,a)){s.state.changed();refresh(s);s.a.sendMessage("Nicht genug Inventarplatz; bitte erneut bestaetigen.");s.b.sendMessage("Nicht genug Inventarplatz; bitte erneut bestaetigen.");continue;}s.ended=true;active.remove(s.a.getUniqueId());active.remove(s.b.getUniqueId());take(s,0);take(s,27);for(ItemStack item:b)give(s.a,item);for(ItemStack item:a)give(s.b,item);s.a.closeInventory();s.b.closeInventory();s.a.sendMessage("Handel abgeschlossen.");s.b.sendMessage("Handel abgeschlossen.");}else if(s.state.ticks%20==0)refresh(s);}}}
+  void tick(){for(Session s:new HashSet<>(active.values())){if(!near(s.a,s.b) || s.a.getOpenInventory().getTopInventory()!=s.inv || s.b.getOpenInventory().getTopInventory()!=s.inv){cancel(s,null,"Handel wegen Distanz oder geschlossenem Inventar abgebrochen.");continue;}if(s.state.ticks>=0){if(s.state.tick()){List<ItemStack> a=snapshot(s,0),b=snapshot(s,27);if(!fits(s.a,b)||!fits(s.b,a)){s.state.changed();refresh(s);s.a.sendMessage("Nicht genug Inventarplatz; bitte erneut bestätigen.");s.b.sendMessage("Nicht genug Inventarplatz; bitte erneut bestätigen.");continue;}s.ended=true;active.remove(s.a.getUniqueId());active.remove(s.b.getUniqueId());take(s,0);take(s,27);for(ItemStack item:b)give(s.a,item);for(ItemStack item:a)give(s.b,item);s.a.closeInventory();s.b.closeInventory();s.a.sendMessage("Handel abgeschlossen.");s.b.sendMessage("Handel abgeschlossen.");}else if(s.state.ticks%20==0)refresh(s);}}}
   void shutdown(){for(Session s:new HashSet<>(active.values()))cancel(s,null,"Handel wegen Serverstopp abgebrochen.");}
 }

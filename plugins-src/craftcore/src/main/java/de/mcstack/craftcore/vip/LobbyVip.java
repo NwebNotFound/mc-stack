@@ -18,7 +18,7 @@ public final class LobbyVip implements CommandExecutor {
     public LobbyVip(JavaPlugin plugin, VipStore.ConnectionSource source) { this.plugin=plugin; this.store=new VipStore(source); }
     public void start() { Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this); Bukkit.getMessenger().registerOutgoingPluginChannel(plugin,"BungeeCord"); }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof Player player)) { sender.sendMessage("Nur fuer Spieler."); return true; }
+        if (!(sender instanceof Player player)) { sender.sendMessage("Nur für Spieler."); return true; }
         UUID id=player.getUniqueId();
         if (args.length==0) { player.sendMessage("/vw create|rename|list|start|stop|join"); return true; }
         String action=args[0].toLowerCase(Locale.ROOT);
@@ -26,7 +26,7 @@ public final class LobbyVip implements CommandExecutor {
         if ((action.equals("create") && !VipNames.validate(args[1])) || (action.equals("rename") && !VipNames.validate(args[2]))) { player.sendMessage("Der Name muss 3 bis 24 Zeichen lang sein und darf nur Buchstaben, Zahlen, _ und - enthalten."); return true; }
         String type=action.equals("create") && args.length==3 ? args[2].toLowerCase(Locale.ROOT) : "normal";
         if (action.equals("create") && !Set.of("normal","flat","void").contains(type)) { player.sendMessage("Welttyp: normal, flat oder void."); return true; }
-        if (!busy.add(id)) { player.sendMessage("Eine VIP-Welt-Aktion laeuft bereits."); return true; }
+        if (!busy.add(id)) { player.sendMessage("Eine VIP-Welt-Aktion läuft bereits."); return true; }
         int slots=action.equals("create") ? VipPerks.slots(id) : 0;
         Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
             try { execute(id,action,args,type,slots); }
@@ -44,7 +44,7 @@ public final class LobbyVip implements CommandExecutor {
         if (Set.of("start","stop","join").contains(action)) {
             var decision=VipReconcile.decide(world.status(),world.slot(),world.id(),host.slots());
             switch (decision.kind()) {
-                case HOST_UNAVAILABLE -> { message(owner,"VIP-Host nicht erreichbar, bitte spaeter erneut versuchen"); return; }
+                case HOST_UNAVAILABLE -> { message(owner,"VIP-Host nicht erreichbar, bitte später erneut versuchen"); return; }
                 case STOPPED -> { store.idleStopped(world.id()); world=new VipStore.World(world.id(),world.name(),"stopped",null); }
                 case RUNNING -> { if (!"running".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"running",decision.slot()); world=new VipStore.World(world.id(),world.name(),"running",decision.slot()); }
                 case STARTING -> { if (!"starting".equals(world.status()) || !Objects.equals(world.slot(),decision.slot())) store.status(world.id(),"starting",decision.slot()); world=new VipStore.World(world.id(),world.name(),"starting",decision.slot()); }
@@ -54,14 +54,14 @@ public final class LobbyVip implements CommandExecutor {
         switch(action) {
             case "rename" -> { store.rename(owner,world.id(),args[2]); message(owner,"VIP-Welt umbenannt."); }
             case "join" -> { if (VipRules.canJoin(world.status(),world.slot())) connect(owner,world.slot()); else if ("starting".equals(world.status()) && world.slot()!=null) waitForWorld(owner,world.id(),world.slot()); else message(owner,"Starte die VIP-Welt zuerst."); }
-            case "stop" -> { if (!VipRules.canStop(world.status(),world.slot())) { message(owner,"Die VIP-Welt laeuft nicht."); return; } if (host.stop(world.slot()).outcome()!=VipHostClient.Outcome.STOPPED) { message(owner,"VIP-Welt konnte nicht gestoppt werden."); return; } store.stopped(world.id()); message(owner,"VIP-Welt gestoppt."); }
+            case "stop" -> { if (!VipRules.canStop(world.status(),world.slot())) { message(owner,"Die VIP-Welt läuft nicht."); return; } if (host.stop(world.slot()).outcome()!=VipHostClient.Outcome.STOPPED) { message(owner,"VIP-Welt konnte nicht gestoppt werden."); return; } store.stopped(world.id()); message(owner,"VIP-Welt gestoppt."); }
             case "start" -> startWorld(owner,world);
         }
     }
     private void startWorld(UUID owner, VipStore.World world) throws SQLException {
         if ("running".equals(world.status()) && world.slot()!=null) { connect(owner,world.slot()); return; }
         if ("starting".equals(world.status()) && world.slot()!=null) { waitForWorld(owner,world.id(),world.slot()); return; }
-        if (!VipRules.canStart(world.status()) || world.slot()!=null) { message(owner,"Die VIP-Welt laeuft bereits oder startet gerade."); return; }
+        if (!VipRules.canStart(world.status()) || world.slot()!=null) { message(owner,"Die VIP-Welt läuft bereits oder startet gerade."); return; }
         var result=host.start(world.id());
         if (result.outcome()==VipHostClient.Outcome.NO_FREE_SLOT) { // TODO Warteschlange
             message(owner,"Alle Slots belegt"); return;

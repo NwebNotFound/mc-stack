@@ -10,8 +10,8 @@ class SellGuiTest {
     assertEquals(4800,Market.total(unit,64));
   }
   @Test void previewFormatsUnitAndStackInCents() {
-    assertEquals("STONE: 0.75 CP / Stueck, 48.00 CP / Stack",Market.sellPreview("STONE",75,64));
-    assertEquals("STONE: 0.01 CP / Stueck, 0.01 CP / Stack",Market.sellPreview("STONE",1,1));
+    assertEquals("STONE: 0.75 CP / Stück, 48.00 CP / Stack",Market.sellPreview("STONE",75,64));
+    assertEquals("STONE: 0.01 CP / Stück, 0.01 CP / Stack",Market.sellPreview("STONE",1,1));
   }
   @Test void asyncConfigIsAnImmutableSnapshot() {
     var cfg=new org.bukkit.configuration.MemoryConfiguration();

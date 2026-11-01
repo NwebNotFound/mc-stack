@@ -176,7 +176,7 @@ invites:
 
 end-lock:
   enabled: true
-  message: '&cDas End ist noch gesperrt - es wird spaeter als Event freigeschaltet!'
+  message: '&cDas End ist noch gesperrt - es wird später als Event freigeschaltet!'
 
 # Konsole und RCON. Test-CP nur an Konten, deren UUID auf c0de0001 oder c0de0002 endet.
 testrun:

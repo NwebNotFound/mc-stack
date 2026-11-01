@@ -14,7 +14,7 @@ final class NpcDefinitions {
   record NpcDef(String key, String displayName, String skin, String message, ActionType action, String actionArg) {
     NpcDef {
       if (displayName == null || displayName.isBlank() || displayName.length() > 64) throw new IllegalArgumentException("Name muss 1 bis 64 Zeichen lang sein");
-      if (key == null || !key.matches("[a-z0-9_-]{1,32}")) throw new IllegalArgumentException("Ungueltiger Key");
+      if (key == null || !key.matches("[a-z0-9_-]{1,32}")) throw new IllegalArgumentException("Ungültiger Key");
       Objects.requireNonNull(skin); Objects.requireNonNull(message); Objects.requireNonNull(action); Objects.requireNonNull(actionArg);
       parseAction(action.name() + (actionArg.isEmpty() ? "" : " " + actionArg));
     }
@@ -26,7 +26,7 @@ final class NpcDefinitions {
     if (defs.stream().anyMatch(d->!d.key().equals(key) && stripColors(d.displayName()).equalsIgnoreCase(stripped))) throw new IllegalArgumentException("NPC-Name existiert bereits");
   }
   static String keyFromName(String name) {
-    if (name == null || name.isBlank() || name.length() > 64) throw new IllegalArgumentException("Ungueltiger Name");
+    if (name == null || name.isBlank() || name.length() > 64) throw new IllegalArgumentException("Ungültiger Name");
     String key = stripColors(name).toLowerCase(Locale.ROOT).replaceAll("\\s+", "_").replaceAll("[^a-z0-9_-]", "");
     if (key.length() > 32) key = key.substring(0,32);
     if (key.isEmpty()) throw new IllegalArgumentException("Name ergibt keinen Key");
@@ -38,8 +38,8 @@ final class NpcDefinitions {
     ActionType type;
     try { type = ActionType.valueOf(parts[0].toUpperCase(Locale.ROOT)); } catch (IllegalArgumentException ex) { throw new IllegalArgumentException("Unbekannte Aktion"); }
     String arg = parts.length == 2 ? parts[1].trim() : "";
-    if (type == ActionType.NONE ? !arg.isEmpty() : arg.isEmpty()) throw new IllegalArgumentException("Ungueltiges Aktionsargument");
-    if ((type == ActionType.SERVER || type == ActionType.MENU) && !arg.matches("[a-zA-Z0-9_-]+")) throw new IllegalArgumentException("Ungueltiges Aktionsargument");
+    if (type == ActionType.NONE ? !arg.isEmpty() : arg.isEmpty()) throw new IllegalArgumentException("Ungültiges Aktionsargument");
+    if ((type == ActionType.SERVER || type == ActionType.MENU) && !arg.matches("[a-zA-Z0-9_-]+")) throw new IllegalArgumentException("Ungültiges Aktionsargument");
     if (type == ActionType.COMMAND && arg.startsWith("/")) throw new IllegalArgumentException("Befehl ohne Slash angeben");
     return new Action(type,arg);
   }

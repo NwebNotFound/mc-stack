@@ -121,7 +121,7 @@ final class CitizensNpcs implements Listener {
           var lobbyPvp=core.lobbyPvp();
           switch(NpcDefinitions.menuAction(def.actionArg(),lobbyPvp!=null)) {
             case PVP -> lobbyPvp.openMenu(player);
-            case PVP_UNAVAILABLE -> { player.sendMessage("PvP-Menue ist gerade nicht verfuegbar."); core.getLogger().warning("PvP-Menue fuer NPC " + def.key() + " ist nicht verfuegbar."); }
+            case PVP_UNAVAILABLE -> { player.sendMessage("PvP-Menü ist gerade nicht verfügbar."); core.getLogger().warning("PvP-Menue fuer NPC " + def.key() + " ist nicht verfuegbar."); }
             case COMMAND -> player.performCommand(def.actionArg());
             case MENU -> menu.open(player,def.actionArg().toLowerCase(Locale.ROOT));
           }
@@ -152,7 +152,7 @@ final class CitizensNpcs implements Listener {
       for(int end=limit;end>=2;end--) { var match=NpcDefinitions.find(definitions.values(),String.join(" ",Arrays.copyOfRange(args,1,end))); if(match.isPresent()) { def=match.get(); nameEnd=end; break; } }
       if(def==null) throw new IllegalArgumentException("NPC nicht gefunden");
       String path="npcs."+def.key();
-      if(op.equals("remove")) { if(args.length!=nameEnd) throw new IllegalArgumentException("Ungueltige Argumente"); NPC npc=npcs.remove(def.key()); if(npc!=null) npc.destroy(); definitions.remove(def.key()); config.set(path,null); save(); sender.sendMessage("NPC entfernt."); return; }
+      if(op.equals("remove")) { if(args.length!=nameEnd) throw new IllegalArgumentException("Ungültige Argumente"); NPC npc=npcs.remove(def.key()); if(npc!=null) npc.destroy(); definitions.remove(def.key()); config.set(path,null); save(); sender.sendMessage("NPC entfernt."); return; }
       if(op.equals("move")) { if(args.length!=nameEnd || !(sender instanceof Player player)) throw new IllegalArgumentException("Nur im Spiel: /cc npc move <name>"); config.set(path+".location",player.getLocation()); NPC npc=npcs.get(def.key()); if(npc.isSpawned()) npc.teleport(player.getLocation(),org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN); else npc.spawn(player.getLocation()); save(); sender.sendMessage("NPC verschoben."); return; }
       if(args.length<=nameEnd) throw new IllegalArgumentException("Wert fehlt");
       String value=String.join(" ",Arrays.copyOfRange(args,nameEnd,args.length));
@@ -160,7 +160,7 @@ final class CitizensNpcs implements Listener {
         case "rename" -> { NpcDefinitions.validateDisplayName(definitions.values(),def.key(),value); def=new NpcDefinitions.NpcDef(def.key(),value,def.skin(),def.message(),def.action(),def.actionArg()); }
         case "setskin" -> { if(args.length!=nameEnd+1) throw new IllegalArgumentException("Ein Skinname erwartet"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),value,def.message(),def.action(),def.actionArg()); }
         case "setmessage" -> def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),value,def.action(),def.actionArg());
-        case "setaction" -> { var action=NpcDefinitions.parseAction(value); if(action.type()==NpcDefinitions.ActionType.MENU && !Set.of("menu","bank","shop","ah","stats","pay","trade","team","claim","home","vip","pvp").contains(action.arg().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Unbekanntes Menue"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),def.message(),action.type(),action.arg()); }
+        case "setaction" -> { var action=NpcDefinitions.parseAction(value); if(action.type()==NpcDefinitions.ActionType.MENU && !Set.of("menu","bank","shop","ah","stats","pay","trade","team","claim","home","vip","pvp").contains(action.arg().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Unbekanntes Menü"); def=new NpcDefinitions.NpcDef(def.key(),def.displayName(),def.skin(),def.message(),action.type(),action.arg()); }
         default -> throw new IllegalArgumentException("Unbekannter Unterbefehl");
       }
       definitions.put(def.key(),def); apply(def); save(); sender.sendMessage("NPC aktualisiert.");

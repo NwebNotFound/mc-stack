@@ -76,7 +76,7 @@ final class LaunchPads implements Listener, TabExecutor {
     }
     if (args.length<2) { sender.sendMessage(net.kyori.adventure.text.Component.text("LaunchPads: ").append(net.kyori.adventure.text.Component.text("[Liste]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/cc launch list"))).append(net.kyori.adventure.text.Component.text(" | Setzen: /cc launch set <id>"))); return true; }
     String action=args[0].toLowerCase(Locale.ROOT), id=args[1];
-    if (!id.matches("[A-Za-z0-9_-]+")) { sender.sendMessage("Ungueltige ID (erlaubt: Buchstaben, Zahlen, _ und -)."); return true; }
+    if (!id.matches("[A-Za-z0-9_-]+")) { sender.sendMessage("Ungültige ID (erlaubt: Buchstaben, Zahlen, _ und -)."); return true; }
     List<Map<String, Object>> entries=configuredPads();
     int index=LaunchPadLogic.indexOf(entries,id);
     if (action.equals("remove") && args.length==2) {
@@ -85,7 +85,7 @@ final class LaunchPads implements Listener, TabExecutor {
     }
     if (!action.equals("set") && !action.equals("target")) { sender.sendMessage("Unbekannte Aktion. Nutze /cc launch list oder /cc launch set <id>."); return true; }
     if ((action.equals("set") && args.length!=2 && args.length!=5) || (action.equals("target") && args.length!=2)) { sender.sendMessage("Bitte nutze /cc launch "+action+" <id>"+(action.equals("set")?" [x y z]":"")); return true; }
-    if (!(sender instanceof Player player)) { sender.sendMessage("Dieser Befehl ist nur fuer Spieler verfuegbar."); return true; }
+    if (!(sender instanceof Player player)) { sender.sendMessage("Dieser Befehl ist nur für Spieler verfügbar."); return true; }
     if (action.equals("target")) {
       if (index<0) { sender.sendMessage("LaunchPad nicht gefunden: "+id); return true; }
       Location location=player.getLocation();
@@ -95,7 +95,7 @@ final class LaunchPads implements Listener, TabExecutor {
       double[] target={0,-59,-6};
       if (args.length==5) {
         try { for (int i=0;i<3;i++) { target[i]=Double.parseDouble(args[i+2]); if (!Double.isFinite(target[i])) throw new NumberFormatException(); } }
-        catch (NumberFormatException ex) { sender.sendMessage("Zielkoordinaten muessen endliche Zahlen sein."); return true; }
+        catch (NumberFormatException ex) { sender.sendMessage("Zielkoordinaten müssen endliche Zahlen sein."); return true; }
       }
       Location location=player.getLocation();
       if (args.length==2 && !location.getWorld().getName().equals("world")) { sender.sendMessage("Das Standardziel liegt in Welt world; bitte Zielkoordinaten angeben."); return true; }

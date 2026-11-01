@@ -42,15 +42,15 @@ final class MineRushLootEditor implements Listener, CommandExecutor {
     }
   }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
-    if(!(sender instanceof Player p)) { sender.sendMessage("Nur fuer Spieler."); return true; }
+    if(!(sender instanceof Player p)) { sender.sendMessage("Nur für Spieler."); return true; }
     if(!p.hasPermission("craftcore.minerush.edit")) { p.sendMessage("Keine Berechtigung."); return true; }
-    if(!"survival".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER",""))) {p.sendMessage("Der Loot-Editor ist nur auf Survival verfuegbar.");return true;}
+    if(!"survival".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER",""))) {p.sendMessage("Der Loot-Editor ist nur auf Survival verfügbar.");return true;}
     if(args.length!=3 || !args[0].equalsIgnoreCase("loot") || !args[1].equalsIgnoreCase("edit") || !args[2].matches("[a-zA-Z0-9_-]{1,32}")) {p.sendMessage("/mr loot edit <tabelle> (Name: Buchstaben, Zahlen, _ oder -)");return true;}
     String name=args[2].toLowerCase(Locale.ROOT);
     if(open.containsKey(name)) {p.sendMessage("Diese Tabelle wird bereits bearbeitet.");return true;}
     try { Editor editor=new Editor(name,load(name)); editor.render(); open.put(name,editor); p.openInventory(editor.inventory);
       p.sendMessage("Loot-Editor: Inventar-Item anklicken kopiert es; Shift-Klick entfernt. Mengenbereich ist in YAML editierbar.");
-    } catch(Exception e) {core.getLogger().warning("Loot-Tabelle "+name+": "+e);p.sendMessage("Tabelle konnte nicht gelesen werden; Serverlog pruefen.");}
+    } catch(Exception e) {core.getLogger().warning("Loot-Tabelle "+name+": "+e);p.sendMessage("Tabelle konnte nicht gelesen werden; Serverlog prüfen.");}
     return true;
   }
   private File file(String name) { return new File(directory,name+".yml"); }
@@ -60,10 +60,10 @@ final class MineRushLootEditor implements Listener, CommandExecutor {
     ConfigurationSection section=yaml.getConfigurationSection("entries");
     if(section==null) {if(yaml.contains("entries")) throw new IOException("entries muss eine Sektion sein"); return result;}
     for(String key:section.getKeys(false)) {
-      ConfigurationSection e=section.getConfigurationSection(key); if(e==null) throw new IOException("Ungueltiger Eintrag "+key);
+      ConfigurationSection e=section.getConfigurationSection(key); if(e==null) throw new IOException("Ungültiger Eintrag "+key);
       ItemStack item=e.getItemStack("item"); int weight=e.getInt("weight",0), min=e.getInt("min",0), max=e.getInt("max",0);
       Rarity rarity=Rarity.valueOf(e.getString("rarity","").toUpperCase(Locale.ROOT));
-      if(item==null || item.getType().isAir() || weight<1 || weight>1000000 || min<1 || max<min || max>item.getMaxStackSize()) throw new IOException("Ungueltiger Eintrag "+key);
+      if(item==null || item.getType().isAir() || weight<1 || weight>1000000 || min<1 || max<min || max>item.getMaxStackSize()) throw new IOException("Ungültiger Eintrag "+key);
       result.add(new Entry(item,weight,min,max,rarity));
     }
     if(result.size()>54) throw new IOException("Maximal 54 Eintraege"); return result;
@@ -91,7 +91,7 @@ final class MineRushLootEditor implements Listener, CommandExecutor {
     } else if(raw>=54 && event.getClickedInventory()!=null && editor.entries.size()<54) {
       ItemStack item=event.getCurrentItem(); if(item!=null && !item.getType().isAir()) {ItemStack copy=item.clone(); int amount=copy.getAmount(); copy.setAmount(1); editor.entries.add(new Entry(copy,1,amount,amount,Rarity.GEWOEHNLICH));}
     }
-    if(!before.equals(editor.entries)) try {save(editor);} catch(IOException ex) {editor.entries.clear();editor.entries.addAll(before);core.getLogger().warning("Loot speichern: "+ex);player.sendMessage("Speichern fehlgeschlagen; Aenderung verworfen.");}
+    if(!before.equals(editor.entries)) try {save(editor);} catch(IOException ex) {editor.entries.clear();editor.entries.addAll(before);core.getLogger().warning("Loot speichern: "+ex);player.sendMessage("Speichern fehlgeschlagen; Änderung verworfen.");}
     editor.render();
   }
   @EventHandler public void drag(InventoryDragEvent e) {if(e.getView().getTopInventory().getHolder() instanceof MineRushLootEditor.Editor) e.setCancelled(true);}

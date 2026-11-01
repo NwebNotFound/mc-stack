@@ -26,10 +26,10 @@ final class MineRushRoom {
 
   static List<String> validate(Definition room) {
     List<String> errors = new ArrayList<>();
-    if (!room.name().matches("[a-zA-Z0-9_-]{1,32}")) errors.add("Ungueltiger Raumname");
+    if (!room.name().matches("[a-zA-Z0-9_-]{1,32}")) errors.add("Ungültiger Raumname");
     if (room.width() < 1 || room.height() < 1 || room.depth() < 1 ||
         room.width() > 64 || room.height() > 64 || room.depth() > 64 ||
-        (long) room.width() * room.height() * room.depth() > 65536) errors.add("Ungueltige Raumgroesse");
+        (long) room.width() * room.height() * room.depth() > 65536) errors.add("Ungültige Raumgröße");
     int entrances = 0, exits = 0;
     Set<Point> occupied = new HashSet<>();
     for (Marker marker : room.markers()) {

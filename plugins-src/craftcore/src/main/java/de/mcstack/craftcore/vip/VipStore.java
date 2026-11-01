@@ -49,7 +49,7 @@ public final class VipStore {
     public void running(String id, String slot) throws SQLException {
         long now=clock.millis();
         try (Connection c=source.open()) { c.setAutoCommit(false); try {
-            try (PreparedStatement s=c.prepareStatement(SET_RUNNING)) { s.setLong(1,now); s.setString(2,id); s.setString(3,slot); if(s.executeUpdate()!=1) throw new SQLException("Weltstatus geaendert"); }
+            try (PreparedStatement s=c.prepareStatement(SET_RUNNING)) { s.setLong(1,now); s.setString(2,id); s.setString(3,slot); if(s.executeUpdate()!=1) throw new SQLException("Weltstatus geändert"); }
             try (PreparedStatement s=c.prepareStatement(INSERT_RUN)) { s.setString(1,id); s.setString(2,slot); s.setLong(3,now); s.executeUpdate(); }
             c.commit();
         } catch(SQLException e) { c.rollback(); throw e; } }

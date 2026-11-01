@@ -14,13 +14,13 @@ final class PartialPurchase {
     try (PreparedStatement q=c.prepareStatement(sql)) {
       q.setString(1,id); if(table.equals("ah_journal")) q.setLong(2,now);
       try(ResultSet r=q.executeQuery()) {
-        if(!r.next()) return exists(c,purchaseId)?"Dieser Kauf wurde bereits bearbeitet.":"Angebot ist nicht mehr verfuegbar.";
+        if(!r.next()) return exists(c,purchaseId)?"Dieser Kauf wurde bereits bearbeitet.":"Angebot ist nicht mehr verfügbar.";
         seller=r.getString(1); price=r.getLong(2); item=r.getString(3); available=r.getInt(4); material=r.getString(5);
       }
     }
     if(exists(c,purchaseId)) return "Dieser Kauf wurde bereits bearbeitet.";
-    if(price!=expectedPrice || available!=expectedAmount || !item.equals(expectedItem)) return "Preis oder Bestand hat sich geaendert. Bitte erneut oeffnen.";
-    if(quantity<1 || quantity>available) return "Bestand hat sich geaendert.";
+    if(price!=expectedPrice || available!=expectedAmount || !item.equals(expectedItem)) return "Preis oder Bestand hat sich geändert. Bitte erneut öffnen.";
+    if(quantity<1 || quantity>available) return "Bestand hat sich geändert.";
     if(seller.equals(buyer)) return "Du kannst dein eigenes Angebot nicht kaufen.";
     long total=UnitPrice.total(UnitPrice.fromTotal(price,available),quantity);
     try(PreparedStatement q=c.prepareStatement("INSERT IGNORE INTO accounts(uuid,balance) VALUES (?,0),(?,0)")){q.setString(1,buyer);q.setString(2,seller);q.executeUpdate();}

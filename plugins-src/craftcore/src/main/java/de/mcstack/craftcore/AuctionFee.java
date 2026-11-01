@@ -5,7 +5,7 @@ import java.math.BigInteger;
 
 final class AuctionFee {
   static long calculate(long gross,int basisPoints) {
-    if (gross<0 || basisPoints<0 || basisPoints>10000) throw new IllegalArgumentException("Ungueltige Auktionsgebuehr");
+    if (gross<0 || basisPoints<0 || basisPoints>10000) throw new IllegalArgumentException("Ungültige Auktionsgebühr");
     return BigInteger.valueOf(gross).multiply(BigInteger.valueOf(basisPoints)).add(BigInteger.valueOf(9999)).divide(BigInteger.valueOf(10000)).longValueExact();
   }
   static void record(Connection c,String purchase,String listing,String buyer,String seller,long gross,long fee,long now)throws SQLException {

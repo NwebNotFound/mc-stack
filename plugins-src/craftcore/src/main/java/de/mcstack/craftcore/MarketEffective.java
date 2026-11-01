@@ -49,7 +49,7 @@ final class MarketEffective {
     for (String key : section.getKeys(false)) {
       Material material = Material.matchMaterial(key);
       double value = section.getDouble(key);
-      if (material == null || !Double.isFinite(value) || value < 0.01) throw new IllegalArgumentException("Ungueltiger Basispreis: " + key);
+      if (material == null || !Double.isFinite(value) || value < 0.01) throw new IllegalArgumentException("Ungültiger Basispreis: " + key);
       out.put(material, value);
     }
     return out;

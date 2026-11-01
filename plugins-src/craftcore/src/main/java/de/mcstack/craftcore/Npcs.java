@@ -44,7 +44,7 @@ final class Npcs implements Listener {
   }
   void command(Player p,String[] args) {
     if(!p.hasPermission("craftcore.npc.set")) {p.sendMessage("Keine Berechtigung.");return;}
-    if(!isLobby()) {p.sendMessage("Bank- und Auktions-NPCs koennen nur in der Lobby gesetzt werden.");return;}
+    if(!isLobby()) {p.sendMessage("Bank- und Auktions-NPCs können nur in der Lobby gesetzt werden.");return;}
     if(args.length!=2 || !args[0].equalsIgnoreCase("set") || !TYPES.contains(args[1].toLowerCase(Locale.ROOT))) {p.sendMessage("/npc set bank|ah");return;}
     String type=args[1].toLowerCase(Locale.ROOT);
     Location old=core.getConfig().getLocation("npcs."+type+".location");
@@ -54,7 +54,7 @@ final class Npcs implements Listener {
       removeAt(pos,type); spawn(type,pos);
       core.getConfig().set("npcs."+type+".location",pos); core.saveConfig();
       p.sendMessage("NPC "+type+" gesetzt. Die GUI ist bis zur sicheren Item-Auslieferung nur eine Vorschau.");
-    } catch(Exception e) {core.getLogger().warning("NPC setzen: "+e);p.sendMessage("NPC konnte nicht gesetzt werden; bitte Serverlog pruefen.");}
+    } catch(Exception e) {core.getLogger().warning("NPC setzen: "+e);p.sendMessage("NPC konnte nicht gesetzt werden; bitte Serverlog prüfen.");}
   }
   @EventHandler public void damage(EntityDamageEvent e) {if(type(e.getEntity())!=null && TYPES.contains(type(e.getEntity()))) e.setCancelled(true);}
   @EventHandler public void interact(PlayerInteractEntityEvent e) {
@@ -66,6 +66,6 @@ final class Npcs implements Listener {
       else Auction.instance.command(p,new String[0]);
       core.npcPreviews.add(p.getOpenInventory().getTopInventory());
       p.sendMessage("Nur Vorschau: Handel und Item-Auslieferung hier gesperrt, bis sie absturzsicher sind.");
-    } catch(Exception ex) {core.getLogger().warning("NPC-GUI: "+ex);p.sendMessage("Ansicht konnte nicht geoeffnet werden.");}
+    } catch(Exception ex) {core.getLogger().warning("NPC-GUI: "+ex);p.sendMessage("Ansicht konnte nicht geöffnet werden.");}
   }
 }

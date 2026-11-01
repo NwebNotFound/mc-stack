@@ -17,11 +17,11 @@ final class HomeSlots {
   }
   static String buy(Connection c,String server,String id,int expected,long price) throws SQLException {
     int slots=lock(c,server,id);
-    if(slots!=expected || slots>=5)return "Angebot hat sich geaendert. Bitte Menue erneut oeffnen.";
+    if(slots!=expected || slots>=5)return "Angebot hat sich geändert. Bitte Menü erneut öffnen.";
     if(price<=0)throw new IllegalArgumentException("Home-Preis muss positiv sein");
     if(!EconomyStore.change(c,id,-price))return "Nicht genug CP.";
     try(PreparedStatement s=c.prepareStatement("UPDATE home_slots SET slots=slots+1 WHERE server=? AND uuid=?")){s.setString(1,server);s.setString(2,id);if(s.executeUpdate()!=1)throw new SQLException("Home-Slot nicht gespeichert");}
-    return "Home-Slot gekauft: "+(slots+1)+" Slots fuer "+Money.format(price);
+    return "Home-Slot gekauft: "+(slots+1)+" Slots für "+Money.format(price);
   }
   static long price(CraftCore core,int current){if(current<1||current>=5)throw new IllegalArgumentException("Home-Slot");return Money.cents(core.getConfig().getDouble("home-slot-prices."+(current+1),DEFAULT_PRICES[current-1]));}
 }

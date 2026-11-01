@@ -17,7 +17,7 @@ public final class PvpDebug implements CommandExecutor {
         }
         boolean join=args[0].equalsIgnoreCase("join");
         UUID player=null;
-        if(join) { try { player=UUID.fromString(args[1]); } catch(IllegalArgumentException e) { sender.sendMessage("Ungueltige UUID"); return true; } }
+        if(join) { try { player=UUID.fromString(args[1]); } catch(IllegalArgumentException e) { sender.sendMessage("Ungültige UUID"); return true; } }
         UUID id=player; String matchId=args[1];
         Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
             try {

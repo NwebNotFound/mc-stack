@@ -14,7 +14,7 @@ final class SaleNotices {
   }
   static void notify(CraftCore core,Player player,boolean joined) {
     if(!player.isOnline())return;
-    try{core.tx(c->{SaleNoticeStore.deliver(c,player.getUniqueId().toString(),s->player.sendMessage((joined?"Waehrend du weg warst: ":"Dein Verkauf: ")+s.amount()+"x "+s.item().replace('_',' ')+" verkauft, +"+Money.format(s.cents())));return null;});}
+    try{core.tx(c->{SaleNoticeStore.deliver(c,player.getUniqueId().toString(),s->player.sendMessage((joined?"Während du weg warst: ":"Dein Verkauf: ")+s.amount()+"x "+s.item().replace('_',' ')+" verkauft, +"+Money.format(s.cents())));return null;});}
     catch(Exception ex){core.getLogger().warning("Verkaufsmeldungen: "+ex);}
   }
   static void afterPurchase(CraftCore core,String purchaseId) {

@@ -59,10 +59,10 @@ final class DeathEvents implements Listener {
   }
   static File statsDirectory(File worldFolder) { return new File(worldFolder,"players/stats"); }
   void backfill(CommandSender sender) {
-    if(!SpawnRoute.isSurvival(server)){sender.sendMessage("Backfill bitte auf Survival ausfuehren.");return;}
+    if(!SpawnRoute.isSurvival(server)){sender.sendMessage("Backfill bitte auf Survival ausführen.");return;}
     File dir=statsDirectory(Bukkit.getWorlds().get(0).getWorldFolder());
     Set<String> online=new HashSet<>(); Bukkit.getOnlinePlayers().forEach(p->online.add(p.getUniqueId().toString()));
-    final File stats=dir; sender.sendMessage("Death-Backfill gestartet: "+stats+" (Online-Spieler ausgenommen; nach Quit erneut ausfuehren)");
+    final File stats=dir; sender.sendMessage("Death-Backfill gestartet: "+stats+" (Online-Spieler ausgenommen; nach Quit erneut ausführen)");
     writer.execute(()->{int n=0,errors=0; File[] files=stats.listFiles((d,name)->name.endsWith(".json"));
       if(files==null){core.getLogger().warning("Death-Backfill: Stats-Verzeichnis nicht lesbar: "+stats); return;}
       for(File f:files) try { String uuid=UUID.fromString(f.getName().substring(0,f.getName().length()-5)).toString(); if(online.contains(uuid)) continue; long cutoff=f.lastModified();

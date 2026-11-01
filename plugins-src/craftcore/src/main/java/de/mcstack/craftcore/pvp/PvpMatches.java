@@ -57,7 +57,7 @@ public final class PvpMatches implements Listener {
         Player p=e.getPlayer(); reset(p); p.setGameMode(GameMode.ADVENTURE); p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
         boolean builder=PvpAccess.mayBypass(p::hasPermission);
         UUID id=p.getUniqueId();
-        async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfuegbar."); },40L); } }); throw ex; } main(()->{
+        async(()->{ Optional<PvpStore.Assignment> found; try { found=store.pendingFor(id); } catch(SQLException | RuntimeException ex) { main(()->{ Player player=Bukkit.getPlayer(id); if(player!=null && !builder) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("PvP-Zuweisung nicht verfügbar."); },40L); } }); throw ex; } main(()->{
             Player player=Bukkit.getPlayer(id); if(player==null) return;
             player.setGameMode(PvpAccess.joinMode(builder,found.isPresent()));
             PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
@@ -85,10 +85,10 @@ public final class PvpMatches implements Listener {
             var min=a.region().min(); var max=a.region().max(); long size=((long)max.x()-min.x()+1)*((long)max.y()-min.y()+1)*((long)max.z()-min.z()+1);
             if(size==b.size() && size>0 && a.spawns().containsKey(1) && a.spawns().containsKey(2)) { selected=f;arena=a;blocks=b;break; }
         } catch(RuntimeException ignored) {} }
-        if(selected==null) throw new IllegalStateException("Keine gueltige Arena vorhanden");
+        if(selected==null) throw new IllegalStateException("Keine gültige Arena vorhanden");
         YamlConfiguration kits=YamlConfiguration.loadConfiguration(kitsFile);
         if(!kits.isConfigurationSection("kits."+s.assignment.kitA()) || !kits.isConfigurationSection("kits."+s.assignment.kitB())) throw new IllegalStateException("Kit fehlt");
-        String id=s.assignment.matchId().replaceAll("[^a-zA-Z0-9_-]", ""); if(id.length()<8) throw new IllegalStateException("Ungueltige Match-ID");
+        String id=s.assignment.matchId().replaceAll("[^a-zA-Z0-9_-]", ""); if(id.length()<8) throw new IllegalStateException("Ungültige Match-ID");
         String worldName="pvp_m_"+id.substring(0,8); if(Bukkit.getWorld(worldName)!=null || new File(Bukkit.getWorldContainer(),worldName).exists()) throw new IllegalStateException("Match-Welt existiert bereits: "+worldName);
         WorldCreator creator=new WorldCreator(worldName).generator(new ChunkGenerator() {}).generateStructures(false);
         s.world=Bukkit.createWorld(creator); if(s.world==null) throw new IllegalStateException("Welt konnte nicht erstellt werden"); s.world.setKeepSpawnInMemory(false);

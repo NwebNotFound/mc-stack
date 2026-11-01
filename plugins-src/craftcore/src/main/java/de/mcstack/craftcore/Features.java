@@ -63,9 +63,9 @@ final class Features implements Listener {
       String result=plugin.tx(c->{if(plugin.one(c,"SELECT owner FROM claims WHERE server=? AND world=? AND x=? AND z=?",server,world(l),l.getBlockX()>>4,l.getBlockZ()>>4)!=null)return "Chunk ist bereits beansprucht.";long b=plugin.balance(c,id);if(b<cost)return "Nicht genug CP.";plugin.exec(c,"UPDATE accounts SET balance=? WHERE uuid=?",b-cost,id.toString());plugin.exec(c,"INSERT INTO claims VALUES (?,?,?,?,?,?)",server,world(l),l.getBlockX()>>4,l.getBlockZ()>>4,id.toString(),team(c,id));return "Chunk beansprucht für "+Money.format(cost);});p.sendMessage(result); if(result.startsWith("Chunk beansprucht")) border(p,l);return;
     }
     if(cmd.equals("unclaim")) {String msg=plugin.tx(c->{try(PreparedStatement s=c.prepareStatement("SELECT owner,team_id FROM claims WHERE server=? AND world=? AND x=? AND z=?")){s.setString(1,server);s.setString(2,world(l));s.setInt(3,l.getBlockX()>>4);s.setInt(4,l.getBlockZ()>>4);try(ResultSet r=s.executeQuery()){if(!r.next())return "Chunk ist nicht beansprucht.";if(!allowed(c,id,r.getString(1),r.getString(2)))return "Keine Berechtigung.";}}plugin.exec(c,"DELETE FROM claims WHERE server=? AND world=? AND x=? AND z=?",server,world(l),l.getBlockX()>>4,l.getBlockZ()>>4);return "Claim freigegeben.";});p.sendMessage(msg);return;}
-    if((cmd.equals("home") || cmd.equals("sethome")) && !SpawnRoute.isSurvival(server)){p.sendMessage("Homes sind nur auf Survival verf?gbar.");return;}
+    if((cmd.equals("home") || cmd.equals("sethome")) && !SpawnRoute.isSurvival(server)){p.sendMessage("Homes sind nur auf Survival verfügbar.");return;}
     if(cmd.equals("spawn")){startTeleport(p,()->spawn(p));return;}
-    if(cmd.equals("sethome")) {String name=a.length==0?"home":a[0].toLowerCase(Locale.ROOT);if(!name.matches("[a-z0-9_]{1,16}")){p.sendMessage("Ungültiger Name.");return;}String msg=plugin.tx(c->{int slots=HomeSlots.lock(c,server,id.toString());String existing=plugin.one(c,"SELECT name FROM homes WHERE server=? AND uuid=? AND name=?",server,id.toString(),name);int count=Integer.parseInt(plugin.one(c,"SELECT COUNT(*) FROM homes WHERE server=? AND uuid=?",server,id.toString()));if(existing==null && count>=slots)return "Home-Limit erreicht. Weitere Slots im /home-Menue kaufen.";plugin.exec(c,"REPLACE INTO homes VALUES (?,?,?,?,?,?,?,?,?)",server,id.toString(),name,world(l),l.getX(),l.getY(),l.getZ(),l.getYaw(),l.getPitch());return "Home gespeichert: "+name;});p.sendMessage(msg);return;}
+    if(cmd.equals("sethome")) {String name=a.length==0?"home":a[0].toLowerCase(Locale.ROOT);if(!name.matches("[a-z0-9_]{1,16}")){p.sendMessage("Ungültiger Name.");return;}String msg=plugin.tx(c->{int slots=HomeSlots.lock(c,server,id.toString());String existing=plugin.one(c,"SELECT name FROM homes WHERE server=? AND uuid=? AND name=?",server,id.toString(),name);int count=Integer.parseInt(plugin.one(c,"SELECT COUNT(*) FROM homes WHERE server=? AND uuid=?",server,id.toString()));if(existing==null && count>=slots)return "Home-Limit erreicht. Weitere Slots im /home-Menü kaufen.";plugin.exec(c,"REPLACE INTO homes VALUES (?,?,?,?,?,?,?,?,?)",server,id.toString(),name,world(l),l.getX(),l.getY(),l.getZ(),l.getYaw(),l.getPitch());return "Home gespeichert: "+name;});p.sendMessage(msg);return;}
     Location dest;
     {String name=a.length==0?"home":a[0].toLowerCase(Locale.ROOT);dest=plugin.tx(c->{try(PreparedStatement s=c.prepareStatement("SELECT world,x,y,z,yaw,pitch FROM homes WHERE server=? AND uuid=? AND name=?")){s.setString(1,server);s.setString(2,id.toString());s.setString(3,name);try(ResultSet r=s.executeQuery()){if(!r.next())return null;World w=Bukkit.getWorld(r.getString(1));return w==null?null:new Location(w,r.getDouble(2),r.getDouble(3),r.getDouble(4),r.getFloat(5),r.getFloat(6));}}});}
     if(dest==null){p.sendMessage("Home nicht gefunden.");return;}startTeleport(p,()->p.teleport(dest));
@@ -136,7 +136,7 @@ final class Features implements Listener {
         });
         Bukkit.getScheduler().runTask(plugin,()->{
           if(claim==null){if(p.isOnline())p.sendMessage("Grab ist bereits in Benutzung oder leer.");return;}
-          if(claim.id()<0){if(p.isOnline())p.sendMessage("Dieses Grab gehoert dir nicht.");return;}
+          if(claim.id()<0){if(p.isOnline())p.sendMessage("Dieses Grab gehört dir nicht.");return;}
           if(!p.isOnline()){release(claim.id());return;}
           List<ItemStack> items;
           try {items=decode(claim.items());} catch(Exception ex){plugin.getLogger().warning("Grabdaten unlesbar: "+ex);release(claim.id());p.sendMessage("Grab konnte nicht gelesen werden.");return;}
@@ -148,7 +148,7 @@ final class Features implements Listener {
             } catch(Exception ex){plugin.getLogger().severe("Grab "+claim.id()+" ausgegeben, DB-Abschluss fehlgeschlagen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab ausgegeben; Datenbankabschluss fehlgeschlagen. Bitte Admin informieren.");});}
           });
         });
-      } catch(Exception ex){plugin.getLogger().warning("Grab oeffnen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geoeffnet werden.");});}
+      } catch(Exception ex){plugin.getLogger().warning("Grab oeffnen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geöffnet werden.");});}
     });
   }
   record GraveClaim(long id,String items,int xp) {}

@@ -6,7 +6,7 @@ import java.time.*;
 /** Sale revenue is counted in cents in the same transaction as the bank journal. */
 final class DailyRevenue {
   static String dayKey(Instant now, ZoneId zone, int resetHour) {
-    if(resetHour<0 || resetHour>23) throw new IllegalArgumentException("Ungueltige Resetstunde");
+    if(resetHour<0 || resetHour>23) throw new IllegalArgumentException("Ungültige Resetstunde");
     ZonedDateTime local=now.atZone(zone);
     return (local.getHour()<resetHour ? local.toLocalDate().minusDays(1) : local.toLocalDate()).toString();
   }
