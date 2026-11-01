@@ -106,10 +106,28 @@ def _text(v):
     return v or None
 
 
+PLACEHOLDERS = ("0", "null", "none")
+
+
+def _clean(v):
+    """0, '0', '', None, 'null' -> None (Platzhalter), sonst getrimmter Text.
+    Bewusster Trade-off: ein Team, das wirklich 'None' oder 'null' heisst, wird ebenfalls null."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v == 0:
+        return None
+    t = _text(v)
+    return None if t is None or t.lower() in PLACEHOLDERS else t
+
+
 def _iso_utc(v):
     """UTC-Zeitstempel (datetime, Unix-s/ms, String) -> ISO 8601 mit Z, sonst None."""
     import datetime as _dt
-    if v is None:
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v <= 0:
+        return None
+    if isinstance(v, str) and v.strip() in ("", "0", "0000-00-00 00:00:00", "0000-00-00T00:00:00Z"):
         return None
     try:
         if isinstance(v, _dt.datetime):
@@ -127,6 +145,8 @@ def _iso_utc(v):
         else:
             return None
     except (ValueError, OverflowError, OSError):
+        return None
+    if d.year <= 1970:
         return None
     return d.replace(microsecond=0).isoformat() + "Z"
 
@@ -179,7 +199,7 @@ HEX_TO_CODE = {v: "&" + k for k, v in MC_COLORS.items()}
 def team_colors(r):
     """Alle Quellformen (team_color als Hex/&-Code, team_color_hex, team_color_code) ->
     team_color == team_color_hex (#RRGGBB oder None), team_color_code (&x oder None)."""
-    raw, hcol, ccol = r.get("team_color"), r.get("team_color_hex"), r.get("team_color_code")
+    raw, hcol, ccol = (_clean(r.get(k)) for k in ("team_color", "team_color_hex", "team_color_code"))
     code = team_color_code(ccol) or team_color_code(raw)
     h = _hex(hcol) or _hex(raw) or (MC_COLORS[code[1]] if code else None)
     if not code and h:
@@ -188,12 +208,14 @@ def team_colors(r):
 
 
 def presence_fields(r):
-    """team/team_color/last_seen/online aus v_player_stats; fehlende Spalten -> None."""
+    """team/team_color/last_seen/online aus v_player_stats; Platzhalter (0/''/None) -> None.
+    online: Spalte aus der View (player_presence); fehlt sie, None (unbekannt)."""
+    online = _bool(r.get("online")) if "online" in r else None
     return {
-        "team": _text(r.get("team")),
+        "team": _clean(r.get("team")),
         **team_colors(r),
         "last_seen": _iso_utc(r.get("last_seen")),
-        "online": _bool(r.get("online")),
+        "online": online,
     }
 
 
