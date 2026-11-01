@@ -57,4 +57,15 @@ class ResourceSyncTest {
     assertTrue(ResourceSync.syncPrices(f.toFile(), ResourceSync.resource("prices-base.yml"), LOG));
     assertEquals(2, YamlConfiguration.loadConfiguration(f.toFile()).getInt("version"));
   }
+  @Test void umlautsSurviveCompiledMessagesAndConfigMerge() throws Exception {
+    assertEquals("Nur f\u00fcr Spieler.", CraftCore.PLAYER_ONLY_MESSAGE);
+    Path f = dir.resolve("umlaut.yml");
+    String old = "config-version: 1\nmessage: 'F\u00fcr Gr\u00f6\u00dfe'\n";
+    Files.writeString(f, old, StandardCharsets.UTF_8);
+    assertTrue(ResourceSync.syncConfig(f.toFile(), "config-version: 1\nadded: 'sch\u00f6n'\n", LOG));
+    YamlConfiguration reloaded = YamlConfiguration.loadConfiguration(f.toFile());
+    assertEquals("F\u00fcr Gr\u00f6\u00dfe", reloaded.getString("message"));
+    assertEquals("sch\u00f6n", reloaded.getString("added"));
+    assertEquals(old, Files.readString(dir.resolve("umlaut.yml.bak"), StandardCharsets.UTF_8));
+  }
 }
