@@ -9,8 +9,10 @@ commands:
     permission: craftcore.holo.admin
   parkour:
     description: Parkour verlassen oder Bestenliste platzieren
-    usage: /parkour leave|setboard
+    usage: /parkour leave|setboard|times|reset|removetime|resetall
 
 permissions:
+  craftcore.parkour.admin:
+    default: op
   craftcore.holo.admin:
     default: op

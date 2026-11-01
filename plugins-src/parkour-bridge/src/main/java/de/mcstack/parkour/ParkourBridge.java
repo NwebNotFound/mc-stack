@@ -32,6 +32,9 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
  private String password;
  private boolean configReady;
  private record Candidate(ParkourSession session, String course, long ms) {}
+ private volatile List<CourseArgs.Course> adminCourses=List.of();
+ private volatile Map<String,List<String>> adminPlayers=Map.of();
+ private final java.util.concurrent.atomic.AtomicBoolean loadingAdminCompletions=new java.util.concurrent.atomic.AtomicBoolean();
 
  private Connection db() throws SQLException { return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000","craftcore",password); }
  @Override public void onEnable() {
@@ -43,7 +46,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   getConfig(); configReady=true; warnInvalidWaterMode();
   var floorSection=getConfig().getConfigurationSection("course-floors");
   if(floorSection!=null && !floorSection.getKeys(false).isEmpty()) getLogger().info("course-floors aktiv: "+floorSection.getValues(false));
-  getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh();
+  getServer().getPluginManager().registerEvents(this,this); new HoloAdmin(this).start(); removeRetiredBoards(); for(World world:Bukkit.getWorlds()) for(Chunk chunk:world.getLoadedChunks()) cleanOrphans(chunk); refresh(); loadAdminCompletions();
  }
 
  boolean saveConfigChecked() {
@@ -233,7 +236,93 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   String old=getConfig().getString(key+".entity"); if(old!=null) try { Entity entity=Bukkit.getEntity(UUID.fromString(old)); if(entity instanceof TextDisplay) entity.remove(); } catch(IllegalArgumentException ignored) {}
   getConfig().set(key+".entity",null); getConfig().set(key+".location",p.getLocation()); saveConfig(); refresh();
  }
+ private String placeholders(int count) { return String.join(",",Collections.nCopies(count,"?")); }
+ private int bindVariants(PreparedStatement statement,Set<String> variants) throws SQLException { int i=1; for(String variant:variants) statement.setString(i++,variant); return i; }
+ private void reply(CommandSender sender,String message) { if(isEnabled()) getServer().getScheduler().runTask(this,()->sender.sendMessage(message)); }
+ private volatile long adminCompletionsLoadedAt;
+ private void loadAdminCompletions() {
+  if(worker.isShutdown() || !loadingAdminCompletions.compareAndSet(false,true)) return;
+  // courses() reads Lobby Parkour's shared SQLite connection, so it stays on the main thread.
+  List<CourseArgs.Course> loaded;
+  try { loaded=courses(); } catch(SQLException ex) { loadingAdminCompletions.set(false); getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); return; }
+  worker.execute(()->{ try(Connection c=db()) {
+   Map<String,List<String>> players=new HashMap<>();
+   try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT DISTINCT course,name FROM parkour_times ORDER BY name")) {
+    while(r.next()) { String slug=ParkourSql.course(r.getString(1)); if(slug!=null) players.computeIfAbsent(slug,k->new ArrayList<>()).add(r.getString(2)); }
+   }
+   adminCourses=List.copyOf(loaded); adminPlayers=Map.copyOf(players); adminCompletionsLoadedAt=System.currentTimeMillis();
+  } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Vervollstaendigung konnte nicht geladen werden",ex); } finally { loadingAdminCompletions.set(false); } });
+ }
+ private void adminCommand(CommandSender sender,String[] args) {
+  String action=args[0].toLowerCase(Locale.ROOT);
+  if(action.equals("resetall")) {
+   if(args.length!=2 || !ParkourAdmin.confirmed(args)) { sender.sendMessage("Bestaetigung: /parkour resetall confirm"); return; }
+   worker.execute(()->deleteAdminTimes(sender,null,null)); return;
+  }
+  if(args.length<2) { sender.sendMessage("Verwendung: /parkour "+action+" <Kurs>"+(action.equals("removetime")?" <Spieler>":"")); return; }
+  boolean confirm=action.equals("reset") && ParkourAdmin.confirmed(args);
+  int end=confirm?args.length-1:args.length;
+  String full=ParkourAdmin.course(args,1,end);
+  // Capture Bukkit's offline UUID on the main thread; the stored UUID takes precedence.
+  String last=end>2?args[end-1].replace("\"",""):null;
+  // getOfflinePlayerIfCached never blocks the main thread with a Mojang lookup.
+  OfflinePlayer cached=last!=null && !action.equals("times")?Bukkit.getOfflinePlayerIfCached(last):null;
+  UUID fallback=cached==null?null:cached.getUniqueId();
+  List<CourseArgs.Course> loaded;
+  try { loaded=courses(); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); sender.sendMessage("Parkour-Kurse konnten nicht gelesen werden."); return; }
+  worker.execute(()->{
+   try(Connection c=db()) {
+    ParkourAdmin.Target target=ParkourAdmin.select(args,end,!action.equals("times"),loaded);
+    CourseArgs.Course course=target.course(); String player=target.player();
+    if(course==null) { reply(sender,"Kurs nicht gefunden: "+full); return; }
+    if(action.equals("times")) { listAdminTimes(sender,c,course); return; }
+    if(action.equals("removetime") && player==null) { reply(sender,"Verwendung: /parkour removetime <Kurs> <Spieler>"); return; }
+    if(action.equals("reset") && !confirm) { reply(sender,"Bestaetigung: /parkour reset "+course.pkName()+(player==null?"":" "+player)+" confirm"); return; }
+    String uuid=null;
+    if(player!=null) {
+     Set<String> variants=ParkourAdmin.variants(course.pkName());
+     try(PreparedStatement q=c.prepareStatement("SELECT uuid FROM parkour_times WHERE course IN ("+placeholders(variants.size())+") AND LOWER(name)=LOWER(?) ORDER BY updated_at DESC LIMIT 1")) {
+      int i=bindVariants(q,variants); q.setString(i,player); try(ResultSet r=q.executeQuery()) { uuid=r.next()?r.getString(1):fallback==null?null:fallback.toString(); }
+     }
+     if(uuid==null) { reply(sender,"Spieler nicht gefunden: "+player); return; }
+    }
+    deleteAdminTimes(sender,course,uuid);
+   } catch(Exception ex) { getLogger().log(Level.WARNING,"Parkour-Verwaltung fehlgeschlagen",ex); reply(sender,"Parkour-Verwaltung fehlgeschlagen: "+ex.getMessage()); }
+  });
+ }
+ private void listAdminTimes(CommandSender sender,Connection c,CourseArgs.Course course) throws SQLException {
+  Set<String> variants=ParkourAdmin.variants(course.pkName()); List<String> lines=new ArrayList<>();
+  try(PreparedStatement q=c.prepareStatement("SELECT uuid,name,best_ms FROM parkour_times WHERE course IN ("+placeholders(variants.size())+") AND best_ms>0 ORDER BY best_ms ASC, updated_at ASC, uuid ASC")) {
+   bindVariants(q,variants); Set<String> seen=new HashSet<>(); try(ResultSet r=q.executeQuery()) { while(r.next()) if(seen.add(r.getString(1))) lines.add((lines.size()+1)+". "+r.getString(2)+"  "+ParkourAdmin.format(r.getLong(3))); }
+  }
+  reply(sender,"Bestzeiten fuer "+course.pkName()+":\n"+(lines.isEmpty()?"Noch keine Bestzeiten":String.join("\n",lines)));
+ }
+ private void deleteAdminTimes(CommandSender sender,CourseArgs.Course course,String uuid) {
+  int craft=-1; String error=null;
+  try(Connection c=db()) {
+   Set<String> variants=course==null?Set.of():ParkourAdmin.variants(course.pkName());
+   String sql="DELETE FROM parkour_times"+(course==null?"":" WHERE course IN ("+placeholders(variants.size())+")"+(uuid==null?"":" AND uuid=?"));
+   try(PreparedStatement q=c.prepareStatement(sql)) { int i=bindVariants(q,variants); if(uuid!=null) q.setString(i,uuid); craft=q.executeUpdate(); }
+  } catch(SQLException ex) { error="CraftCore: "+ex.getMessage(); getLogger().log(Level.WARNING,"CraftCore-Zeiten konnten nicht geloescht werden",ex); }
+  int craftCount=craft; String craftError=error;
+  // Lobby Parkour's shared SQLite connection is used on the main thread, so only touch it there.
+  if(isEnabled()) getServer().getScheduler().runTask(this,()->deleteLobbyTimes(sender,course,uuid,craftCount,craftError));
+ }
+ private void deleteLobbyTimes(CommandSender sender,CourseArgs.Course course,String uuid,int craft,String error) {
+  int lobby=-1;
+  try {
+   // Lobby Parkour may cache best times in memory until restart; direct SQLite deletes cannot invalidate that cache.
+   String sql="DELETE FROM times"+(course==null?"":" WHERE parkour_id=?"+(uuid==null?"":" AND uuid=?"));
+   try(PreparedStatement q=ParkoursDatabase.getConnection().prepareStatement(sql)) { if(course!=null) q.setInt(1,course.id()); if(uuid!=null) q.setString(2,uuid); lobby=q.executeUpdate(); }
+  } catch(SQLException ex) { error=(error==null?"":error+"; ")+"Lobby Parkour: "+ex.getMessage(); getLogger().log(Level.WARNING,"Lobby-Parkour-Zeiten konnten nicht geloescht werden",ex); }
+  sender.sendMessage("Zeiten geloescht: CraftCore="+(craft<0?"Fehler":craft)+", Lobby Parkour="+(lobby<0?"Fehler":lobby)+(error==null?"":" ("+error+")"));
+  refresh(); loadAdminCompletions();
+ }
  @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
+  if(args.length>0 && List.of("times","reset","removetime","resetall").contains(args[0].toLowerCase(Locale.ROOT))) {
+   if(!sender.hasPermission("craftcore.parkour.admin")) { sender.sendMessage("Keine Berechtigung."); return true; }
+   adminCommand(sender,args); return true;
+  }
   if(!(sender instanceof Player p)) { sender.sendMessage("Nur im Spiel verfuegbar."); return true; }
   if(args.length==1 && args[0].equalsIgnoreCase("leave")) { if(!ParkourSessionManager.isInSession(p.getUniqueId())) { p.sendMessage("Du bist nicht im Parkour."); return true; } ParkourSessionManager.restoreInventory(p); ParkourSessionManager.endSession(p.getUniqueId()); p.sendMessage("Parkour verlassen."); return true; }
   if(args.length>=1 && args[0].equalsIgnoreCase("setboard")) {
@@ -250,13 +339,22 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   p.sendMessage(Component.text("Parkour: ").append(Component.text("[Lauf verlassen]").clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/parkour leave"))).append(Component.text(" - Starte einen Kurs am Startpunkt in der Lobby."))); return true;
  }
  @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-  if(args.length==2 && sender.isOp() && args[0].equalsIgnoreCase("setboard")) {
+  if(args.length==1) {
+   List<String> choices=new ArrayList<>(List.of("leave")); if(sender.isOp()) choices.add("setboard");
+   if(sender.hasPermission("craftcore.parkour.admin")) choices.addAll(List.of("times","reset","removetime","resetall"));
+   return choices.stream().filter(x->x.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+  }
+  String action=args[0].toLowerCase(Locale.ROOT);
+  boolean admin=sender.hasPermission("craftcore.parkour.admin") && List.of("times","reset","removetime","resetall").contains(action);
+  boolean setboard=sender.isOp() && action.equals("setboard");
+  if(!admin && !setboard) return List.of();
+  if(setboard) {
+   if(args.length!=2) return List.of();
    try { return CourseArgs.completeCourses(args[1],courses()); }
    catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht geladen werden",ex); return List.of(); }
   }
-  if(args.length!=1) return List.of();
-  List<String> choices=sender.isOp()?List.of("leave","setboard"):List.of("leave");
-  return choices.stream().filter(x->x.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+  if(System.currentTimeMillis()-adminCompletionsLoadedAt>30_000) loadAdminCompletions();
+  return ParkourAdmin.complete(args,adminCourses,adminPlayers);
  }
 
 }
