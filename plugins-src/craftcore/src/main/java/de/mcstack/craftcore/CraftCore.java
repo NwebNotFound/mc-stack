@@ -436,9 +436,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
           if(!role.equals("OWNER"))return "Nur der Owner darf Rollen ändern.";
           exec(c,"UPDATE members SET role=? WHERE uuid=?",op.equals("promote")?"ADMIN":"MEMBER",oid); return "Rolle geändert.";
         case "color":
-          if(tid==null || !"OWNER".equals(role)) return "Nur der Owner darf die Teamfarbe aendern.";
-          if(a.length!=2 || RankDisplay.teamColor(a[1]).isEmpty()) return "Ungueltige Farbe. Verfuegbar: "+String.join(", ",RankDisplay.TEAM_COLORS.keySet());
-          exec(c,"UPDATE teams SET color=? WHERE id=?",RankDisplay.teamColor(a[1]).orElseThrow(),tid); return "Teamfarbe geaendert.";
+          if(tid==null || !"OWNER".equals(role)) return "Nur der Owner darf die Teamfarbe ändern.";
+          if(a.length!=2 || RankDisplay.teamColor(a[1]).isEmpty()) return "Ungültige Farbe. Verfügbar: "+String.join(", ",RankDisplay.TEAM_COLORS.keySet());
+          exec(c,"UPDATE teams SET color=? WHERE id=?",RankDisplay.teamColor(a[1]).orElseThrow(),tid); return "Teamfarbe geändert.";
         case "info":
           if(tid==null)return "Du bist in keinem Team."; String name=one(c,"SELECT name FROM teams WHERE id=?",tid); String count=one(c,"SELECT COUNT(*) FROM members WHERE team_id=?",tid); return "Team: "+name+" | Rolle: "+role+" | Mitglieder: "+count;
         default: {String suggestion=UserMenu.nearest(op,List.of("create","invite","join","leave","kick","info","promote","demote")); return "[Craft] Unbekannter Team-Befehl."+(suggestion==null?"":" Meintest du /team "+suggestion+"?");}
