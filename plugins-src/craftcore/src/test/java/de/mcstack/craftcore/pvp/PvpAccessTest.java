@@ -17,6 +17,11 @@ class PvpAccessTest {
         assertEquals(PvpAccess.JoinDecision.BUILDER, PvpAccess.decide(false, true));
         assertEquals(PvpAccess.JoinDecision.KICK, PvpAccess.decide(false, false));
     }
+    @Test void onlyBuildersWithoutAssignmentAreSentToBuildWorld() {
+        assertTrue(PvpAccess.sendToBuildWorld(PvpAccess.decide(false, true)));
+        assertFalse(PvpAccess.sendToBuildWorld(PvpAccess.decide(true, true)));
+        assertFalse(PvpAccess.sendToBuildWorld(PvpAccess.decide(false, false)));
+    }
     @Test void eachPermissionAllowsBypass() {
         for (String permission : Set.of("craftcore.build.pvp", "group.builder", "group.admin")) {
             assertTrue(PvpAccess.mayBypass(permission::equals));

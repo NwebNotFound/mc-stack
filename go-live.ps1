@@ -10,7 +10,7 @@ function Invoke-Docker([string[]]$Arguments) {
     return $out
 }
 function Sql([string]$Query) {
-    $out = $Query | & docker compose exec -T craftcore-db sh -c 'exec mariadb -N -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"' 2>&1
+    $out = $Query | & docker compose exec -T craftcore-db sh -c 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb -N -u "$MARIADB_USER" "$MARIADB_DATABASE"' 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Datenbankabfrage fehlgeschlagen.' }
     return @($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
 }
@@ -89,7 +89,7 @@ try {
         }
     }
     $dump = Join-Path $backup 'craftcore.sql'
-    $dumpCommand = 'exec mariadb-dump -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" --single-transaction --quick --no-tablespaces --routines --triggers "$MARIADB_DATABASE"'
+    $dumpCommand = 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb-dump -u "$MARIADB_USER" --single-transaction --quick --no-tablespaces --routines --triggers "$MARIADB_DATABASE"'
     & python -c "import subprocess,sys; f=open(sys.argv[1],'xb'); r=subprocess.run(['docker','compose','exec','-T','craftcore-db','sh','-c',sys.argv[2]],stdout=f,stderr=subprocess.DEVNULL); f.close(); sys.exit(r.returncode)" $dump $dumpCommand
     if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $dump).Length -lt 100 -or -not (Select-String -LiteralPath $dump -Pattern '-- Dump completed' -Quiet -SimpleMatch)) { throw 'CraftCore-Dump fehlgeschlagen.' }
     & python (Join-Path $PSScriptRoot 'scripts\golive-luckperms-dump.py') (Join-Path $backup 'luckperms.sql')

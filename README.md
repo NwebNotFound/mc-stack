@@ -1,4 +1,4 @@
-﻿# MC Stack
+# MC Stack
 
 Minecraft Java mit Lobby, Survival und Simple Voice Chat in Docker.
 
@@ -17,3 +17,5 @@ Die Installer erzeugen `.env` und `secrets/forwarding.secret` nur, wenn sie fehl
 ## Stoppen und Umzug
 
 `docker compose stop` fährt die Server sauber herunter; `docker compose up -d` startet sie wieder. Für einen Umzug zuerst stoppen, dann den gesamten Projektordner einschließlich `data/`, `.env` und `secrets/` privat auf das neue Gerät kopieren. Die Installer dort starten. Diese Kopie enthält Welten und Geheimnisse und gehört nicht in ein öffentliches Repository. Vorher eine zusätzliche Sicherung anlegen. `docker compose down` entfernt Container und Netzwerk, nicht die Daten im Projektordner.
+
+For PvP and VIP database account setup, use `tools/pvp-db-user.ps1` and `tools/vip-db-user.ps1`; see [DEPLOY.md](DEPLOY.md) for required credentials and migration order.

@@ -577,7 +577,9 @@ class Bot(discord.Client):
                         r.get("course"), r.get("course_name"), r.get("course_icon")) for r in rows]
                 try:  # Anzeigename/Icon von Craft (v_parkour_courses), optional
                     cur.execute("SELECT * FROM v_parkour_courses")
-                    raw = parkour.apply_meta(raw, parkour.course_meta([d[0] for d in cur.description], cur.fetchall()))
+                    pc_cols, pc_rows = [d[0] for d in cur.description], cur.fetchall()
+                    raw = parkour.drop_hidden(raw, parkour.hidden_slugs(pc_cols, pc_rows))
+                    raw = parkour.apply_meta(raw, parkour.course_meta(pc_cols, pc_rows))
                 except (pymysql.err.OperationalError, pymysql.err.ProgrammingError):
                     pass  # View fehlt oder kein GRANT -> huebsch gemachter Slug
                 return raw

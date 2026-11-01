@@ -36,7 +36,7 @@ final class PlayerStats implements Listener {
   static List<Detail> details(Player p) {
     List<Detail> result=new ArrayList<>();
     for(Material m:Material.values()) if(m.isBlock() && !m.isLegacy()) { int n=p.getStatistic(Statistic.MINE_BLOCK,m); if(n>0) result.add(new Detail("blocks_mined",m.name(),n)); }
-    for(Material m:Material.values()) if(!m.isLegacy() && m.isItem()) for(Statistic stat:List.of(Statistic.CRAFT_ITEM,Statistic.USE_ITEM,Statistic.BREAK_ITEM,Statistic.PICKUP,Statistic.DROP)) { try { int n=p.getStatistic(stat,m); if(n>0) result.add(new Detail(stat.name().toLowerCase(Locale.ROOT),m.name(),n)); } catch(IllegalArgumentException ignored) {} }
+    for(Material m:Material.values()) if(!m.isLegacy() && m.isItem()) for(Statistic stat:List.of(Statistic.CRAFT_ITEM,Statistic.USE_ITEM,Statistic.BREAK_ITEM,Statistic.PICKUP,Statistic.DROP)) { try { int n=p.getStatistic(stat,m); if(n>0) { result.add(new Detail(stat.name().toLowerCase(Locale.ROOT),m.name(),n)); if(stat==Statistic.USE_ITEM && m.isBlock()) result.add(new Detail("blocks_placed",m.name(),n)); } } catch(IllegalArgumentException ignored) {} }
     for(Statistic stat:Statistic.values()) if(stat.getType()==Statistic.Type.UNTYPED) { try { int n=p.getStatistic(stat); if(n>0) result.add(new Detail("custom",stat.name(),n)); } catch(IllegalArgumentException ignored) {} }
     for(String key:DISTANCE_STATS) {
       try { int n=p.getStatistic(Statistic.valueOf(key)); if(n>0) result.add(new Detail("distance_cm",key,n)); }
@@ -81,6 +81,9 @@ final class PlayerStats implements Listener {
   // Offline-Backfill: Tracking lief bisher nur fuer Online-Spieler (alle 5 min / beim Verlassen). Spieler, die seit dem
   // Einbau nicht online waren, hatten daher keine Zeile -> Bestenlisten 0, details leer. Quelle: Vanilla-Statistik-JSONs.
   static Object[] parseStats(UUID uuid, String json, boolean survival) {
+    return parseStats(uuid,json,survival,key->{ Material material=key.startsWith("minecraft:") ? Material.matchMaterial(key) : null; return material!=null && !material.isLegacy() && material.isItem() && material.isBlock(); });
+  }
+  static Object[] parseStats(UUID uuid, String json, boolean survival, java.util.function.Predicate<String> isBlock) {
     var root=com.google.gson.JsonParser.parseString(json).getAsJsonObject(); var st=root.has("stats")?root.getAsJsonObject("stats"):new com.google.gson.JsonObject();
     java.util.function.Function<String,com.google.gson.JsonObject> sec=k->st.has(k)&&st.get(k).isJsonObject()?st.getAsJsonObject(k):new com.google.gson.JsonObject();
     var custom=sec.apply("minecraft:custom");
@@ -89,7 +92,7 @@ final class PlayerStats implements Listener {
     if(!survival) return new Object[]{playtime,null,List.of()};
     List<Detail> r=new ArrayList<>(); long blocks=0;
     for(var e:sec.apply("minecraft:mined").entrySet()) { long x=e.getValue().getAsLong(); if(x<=0)continue; blocks+=x; r.add(new Detail("blocks_mined",key(e.getKey()),x)); }
-    for(String section:List.of("crafted","used","broken","picked_up","dropped")) for(var e:sec.apply("minecraft:"+section).entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail(Map.of("crafted","craft_item","used","use_item","broken","break_item","picked_up","pickup","dropped","drop").get(section),key(e.getKey()),x)); }
+    for(String section:List.of("crafted","used","broken","picked_up","dropped")) for(var e:sec.apply("minecraft:"+section).entrySet()) { long x=e.getValue().getAsLong(); if(x>0) { String item=key(e.getKey()); r.add(new Detail(Map.of("crafted","craft_item","used","use_item","broken","break_item","picked_up","pickup","dropped","drop").get(section),item,x)); if(section.equals("used") && isBlock.test(e.getKey())) r.add(new Detail("blocks_placed",item,x)); } }
     for(var e:custom.entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("custom",key(e.getKey()),x)); }
     for(String k:DISTANCE_STATS) { long x=cv.applyAsLong(k.toLowerCase(Locale.ROOT)); if(x>0) r.add(new Detail("distance_cm",k,x)); }
     for(var e:sec.apply("minecraft:killed").entrySet()) { long x=e.getValue().getAsLong(); if(x>0) r.add(new Detail("kills_entity",key(e.getKey()),x)); }

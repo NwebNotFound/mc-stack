@@ -26,3 +26,5 @@ ALTER USER 'craft_pvp'@'%' IDENTIFIED BY '@PVP_DB_PASSWORD@';
 GRANT SELECT, INSERT, UPDATE, DELETE ON craftcore.pvp_matches TO 'craft_pvp'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON craftcore.pvp_rounds TO 'craft_pvp'@'%';
 GRANT SELECT ON craftcore.v_player_rank TO 'craft_pvp'@'%';
+-- Run scripts/v-player-stats.sql first to create the shared presence table.
+GRANT SELECT, INSERT, UPDATE ON craftcore.player_presence TO 'craft_pvp'@'%';
