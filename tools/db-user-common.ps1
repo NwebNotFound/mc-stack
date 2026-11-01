@@ -3,14 +3,22 @@ function Invoke-DbUserSetup([string]$PasswordKey, [string]$SqlFile, [string]$Pla
   $ErrorActionPreference = 'Stop'
   $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
   $vals = @{}
+  $unsupported = @{}
   foreach ($line in Get-Content -LiteralPath (Join-Path $root '.env') -Encoding UTF8) {
     if ($line -match '^([A-Z0-9_]+)=(.*)$') {
       $value = $Matches[2].Trim()
-      if ($value.Length -ge 2 -and (($value[0] -eq '"' -and $value[$value.Length-1] -eq '"') -or ($value[0] -eq "'" -and $value[$value.Length-1] -eq "'"))) { $value = $value.Substring(1, $value.Length-2) }
+      # Nur Formate, die Compose identisch liest: '...' woertlich; "..." und unquoted ohne \, $ und Inline-Kommentar.
+      # Alles andere wird abgelehnt, damit Helper und Container nie verschiedene Passwoerter sehen.
+      $bad = $false
+      if ($value.Length -ge 2 -and $value[0] -eq "'" -and $value[$value.Length-1] -eq "'") { $value = $value.Substring(1, $value.Length-2); if ($value.Contains("'")) { $bad = $true } }
+      elseif ($value.Length -ge 2 -and $value[0] -eq '"' -and $value[$value.Length-1] -eq '"') { $value = $value.Substring(1, $value.Length-2); if ($value -match '[\\$"]') { $bad = $true } }
+      elseif ($value -match '[\\$"'']' -or $value -match '\s#') { $bad = $true }
+      if ($bad) { $vals[$Matches[1]] = $null; $unsupported[$Matches[1]] = $true; continue }
       $vals[$Matches[1]] = $value
     }
   }
   foreach ($key in @('MARIADB_ADMIN_USER', 'MARIADB_ADMIN_PASSWORD', $PasswordKey)) {
+    if ($unsupported[$key]) { throw "${key}: Wertformat nicht unterstuetzt (\, `$, Anfuehrungszeichen oder Inline-Kommentar). Wert in einfache Anfuehrungszeichen setzen oder ohne diese Zeichen neu erzeugen." }
     if (-not $vals[$key]) { throw "$key fehlt in .env" }
     if ($vals[$key] -match '[\r\n\x00]') { throw "$key enthaelt unzulaessige Zeichen" }
   }
