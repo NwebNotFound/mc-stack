@@ -1,6 +1,7 @@
 package de.mcstack.craftcore.pvp;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,6 +30,22 @@ class LobbyPvpTest {
         assertEquals(LobbyPvp.Transfer.CONNECT, LobbyPvp.transferStep("online", true, 46, 180));
         assertEquals(LobbyPvp.Transfer.FAIL, LobbyPvp.transferStep("online", false, 180, 180));
         assertEquals(LobbyPvp.Transfer.FAIL, LobbyPvp.transferStep("offline", false, 181, 180));
+    }
+    @Test void failedMatchReleasesTheSameTwoPlayersAndDoesNotRemindThem() {
+        UUID a = UUID.randomUUID(), b = UUID.randomUUID(), waiting = UUID.randomUUID();
+        PvpQueue queue = new PvpQueue();
+        queue.join(a, "sword");
+        queue.join(b, "axe");
+        assertFalse(LobbyPvp.releaseMatch("pending", false, false));
+        assertTrue(LobbyPvp.releaseMatch("failed", false, false));
+        assertTrue(LobbyPvp.releaseMatch("done", false, false));
+        assertTrue(LobbyPvp.releaseMatch("pending", true, false));
+        assertTrue(LobbyPvp.releaseMatch("pending", false, true));
+        assertFalse(LobbyPvp.remindWaiting(a, a, b, 1));
+        assertFalse(LobbyPvp.remindWaiting(b, a, b, 2));
+        assertTrue(LobbyPvp.remindWaiting(waiting, a, b, 3));
+        assertFalse(LobbyPvp.remindWaiting(waiting, a, b, 0));
+        assertEquals(new PvpQueue.Pair(a, "sword", b, "axe"), queue.poll().orElseThrow());
     }
     @Test void playersStillOnLobbyFailTheTransfer() {
         assertTrue(LobbyPvp.stillOnLobby(true, true));

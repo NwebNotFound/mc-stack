@@ -43,8 +43,10 @@ public final class LobbyPvp implements Listener, TabExecutor {
     // Accessed only on the server thread, including while a pair is starting.
     private final Set<UUID> matching = new HashSet<>();
     private String activeMatchId;
+    private PvpQueue.Pair activePair;
     private long activeSince;
     private boolean checkingStatus;
+    private boolean transferSent;
     private volatile String transferProgress;
     enum Transfer { WAIT, CONNECT, FAIL }
     static final long TRANSFER_TIMEOUT_SECONDS = 180;
@@ -57,6 +59,14 @@ public final class LobbyPvp implements Listener, TabExecutor {
     }
     /** A player still registered on this lobby did not leave after the connect attempt. */
     static boolean stillOnLobby(boolean aPresent, boolean bPresent) { return aPresent || bPresent; }
+    /** Drop the lobby slot when the assignment ended, the 30 minute hold expired, or both players are back. */
+    static boolean releaseMatch(String status, boolean timedOut, boolean playersBack) {
+        return timedOut || playersBack || "failed".equals(status) || "done".equals(status);
+    }
+    /** Players of the pending match are not "next"; the reminder is only for people waiting behind it. */
+    static boolean remindWaiting(UUID player, UUID matchA, UUID matchB, int position) {
+        return position > 0 && player != null && !player.equals(matchA) && !player.equals(matchB);
+    }
 
     public LobbyPvp(JavaPlugin plugin, PvpStore.ConnectionSource source) {
         this.plugin = plugin; this.source = source; this.store = new PvpStore(source);
@@ -178,7 +188,8 @@ public final class LobbyPvp implements Listener, TabExecutor {
         if (matching.contains(id)) { player.sendMessage("PvP-Match wird bereits vorbereitet"); return; }
         lastKit.put(id, kit); queue.join(id, kit);
         int position = queue.position(id);
-        player.sendMessage(activeMatchId == null ? "PvP-Queue: Platz " + position : queueReminder(position));
+        UUID matchA = activePair == null ? null : activePair.a(), matchB = activePair == null ? null : activePair.b();
+        player.sendMessage(remindWaiting(id, matchA, matchB, position) && activeMatchId != null ? queueReminder(position) : "PvP-Queue: Platz " + position);
         open(player, menu.kits, menu.page);
     }
     @EventHandler public void drag(InventoryDragEvent event) {
@@ -191,23 +202,36 @@ public final class LobbyPvp implements Listener, TabExecutor {
             Player player = Bukkit.getPlayer(id);
             if (player != null) player.sendActionBar(Component.text(starting != null ? starting : "PvP-Server startet ..."));
         }
-        if (activeMatchId != null && System.nanoTime() - activeSince >= TimeUnit.MINUTES.toNanos(30)) activeMatchId = null;
+        if (activeMatchId != null && releaseMatch(null, System.nanoTime() - activeSince >= TimeUnit.MINUTES.toNanos(30), false)) {
+            PvpQueue.Pair pair = activePair;
+            String id = activeMatchId;
+            clearActive();
+            if (pair != null) Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, null));
+        }
+        if (activeMatchId != null) return;
+        tryStartNext();
+    }
+    private void tryStartNext() {
         if (activeMatchId != null) return;
         queue.poll().ifPresent(pair -> {
             String id = UUID.randomUUID().toString();
-            activeMatchId = id; activeSince = System.nanoTime();
+            activeMatchId = id; activePair = pair; activeSince = System.nanoTime(); transferSent = false;
             matching.add(pair.a()); matching.add(pair.b());
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> prepare(id, pair));
         });
+    }
+    private void clearActive() {
+        if (activePair != null) { matching.remove(activePair.a()); matching.remove(activePair.b()); }
+        activeMatchId = null; activePair = null; transferSent = false; transferProgress = null;
     }
     static String queueReminder(int position) {
         return "Ein PvP-Match laeuft gerade - du bist als Naechstes dran (Platz " + position + ").";
     }
     private void remindQueue() {
-        if (activeMatchId == null) return;
+        if (activeMatchId == null || activePair == null) return;
         for (Player player : Bukkit.getOnlinePlayers()) {
-            int position = queue.position(player.getUniqueId());
-            if (position > 0) player.sendMessage(queueReminder(position));
+            UUID id = player.getUniqueId();
+            if (remindWaiting(id, activePair.a(), activePair.b(), queue.position(id))) player.sendMessage(queueReminder(queue.position(id)));
         }
     }
     private void checkActiveMatch() {
@@ -215,19 +239,17 @@ public final class LobbyPvp implements Listener, TabExecutor {
         String id = activeMatchId;
         checkingStatus = true;
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            boolean finished = false;
+            String status = null;
             try (Connection c = source.open(); PreparedStatement s = c.prepareStatement("SELECT status FROM pvp_assignments WHERE match_id=?")) {
                 s.setString(1, id);
-                try (ResultSet r = s.executeQuery()) {
-                    if (r.next()) finished = "done".equals(r.getString(1)) || "failed".equals(r.getString(1));
-                }
+                try (ResultSet r = s.executeQuery()) { if (r.next()) status = r.getString(1); }
             } catch (Exception e) {
                 plugin.getLogger().warning("PvP-Status konnte nicht geladen werden: " + e.getClass().getSimpleName());
             }
-            boolean clear = finished;
+            String found = status;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 checkingStatus = false;
-                if (clear && id.equals(activeMatchId)) activeMatchId = null;
+                if (id.equals(activeMatchId) && releaseMatch(found, false, false)) { clearActive(); tryStartNext(); }
             });
         });
     }
@@ -235,7 +257,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
         try { store.createAssignment(id, pair.a(), pair.b(), pair.kitA(), pair.kitB());
         } catch (Exception e) {
             plugin.getLogger().warning("PvP-Zuweisung fehlgeschlagen: " + e.getClass().getSimpleName());
-            Bukkit.getScheduler().runTask(plugin, () -> { if (id.equals(activeMatchId)) activeMatchId = null; finishFailure(pair); }); return;
+            Bukkit.getScheduler().runTask(plugin, () -> { if (id.equals(activeMatchId)) clearActive(); finishFailure(pair); tryStartNext(); }); return;
         }
         if (!host.status().equals("online") && !host.start()) { fail(id, pair, null); return; }
         long timeout = TRANSFER_TIMEOUT_SECONDS, begin = System.nanoTime(), deadline = begin + TimeUnit.SECONDS.toNanos(timeout);
@@ -289,22 +311,22 @@ public final class LobbyPvp implements Listener, TabExecutor {
         try {
             connectPlayer(a); connectPlayer(b);
             matching.remove(pair.a()); matching.remove(pair.b());
+            transferSent = true;
             Bukkit.getScheduler().runTaskLater(plugin, () -> confirmLeftLobby(id, pair), LOBBY_CHECK_DELAY_TICKS);
         } catch (Exception e) { Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, null)); }
     }
     private void confirmLeftLobby(String id, PvpQueue.Pair pair) {
         if (!id.equals(activeMatchId)) return;
         if (!stillOnLobby(Bukkit.getPlayer(pair.a()) != null, Bukkit.getPlayer(pair.b()) != null)) return;
-        activeMatchId = null;
-        transferProgress = null;
+        clearActive();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> fail(id, pair, null));
+        tryStartNext();
     }
     private void fail(String id, PvpQueue.Pair pair, UUID remaining) {
         try { store.markStatus(id, "pending", "failed"); }
         catch (Exception e) { plugin.getLogger().warning("PvP-Zuweisung konnte nicht als fehlgeschlagen markiert werden: " + e.getClass().getSimpleName()); }
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (id.equals(activeMatchId)) activeMatchId = null;
-            transferProgress = null;
+            if (id.equals(activeMatchId)) clearActive();
             finishFailure(pair);
             if (remaining != null && Bukkit.getPlayer(remaining) != null) {
                 queue.join(remaining, remaining.equals(pair.a()) ? pair.kitA() : pair.kitB());
@@ -313,9 +335,14 @@ public final class LobbyPvp implements Listener, TabExecutor {
         });
     }
     private void finishFailure(PvpQueue.Pair pair) {
-        matching.remove(pair.a()); matching.remove(pair.b());
+        unmatch(pair.a()); unmatch(pair.b());
         message(pair.a(), "PvP-Server nicht erreichbar, bitte spaeter erneut");
         message(pair.b(), "PvP-Server nicht erreichbar, bitte spaeter erneut");
+    }
+    /** A player already placed in a newer match stays matched. */
+    private void unmatch(UUID id) {
+        if (activePair != null && (id.equals(activePair.a()) || id.equals(activePair.b()))) return;
+        matching.remove(id);
     }
     private void message(UUID id, String text) { Player player = Bukkit.getPlayer(id); if (player != null) player.sendMessage(text); }
 }
