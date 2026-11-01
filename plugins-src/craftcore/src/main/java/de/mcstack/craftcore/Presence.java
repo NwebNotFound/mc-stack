@@ -26,25 +26,36 @@ final class Presence implements Listener {
       return thread;
     });
     private boolean stopping;
+    private volatile boolean closed;
     Tracker(Store store,Consumer<Exception> errors) { this.store=store; this.errors=errors; }
     private void run(Work work) { try { work.run(); } catch(Exception e) { errors.accept(e); } }
     private interface Work { void run() throws Exception; }
-    private synchronized void submit(Work work) { if(!stopping) writer.execute(() -> run(work)); }
+    private synchronized void submit(Work work) { if(!stopping) writer.execute(() -> { if(!closed) run(work); }); }
     void start() { submit(store::reset); }
     void join(UUID uuid) { submit(() -> store.write(uuid,true)); }
     void quit(UUID uuid) { submit(() -> store.write(uuid,false)); }
+    /**
+     * Stops intake, waits up to timeout for queued writes, then drops whatever is left and runs the
+     * final backend reset synchronously on the calling thread, so it can neither be lost on JVM exit
+     * nor run late after a re-enable. Returns true if the queue drained in time. Idempotent.
+     */
     boolean stop(long timeout,TimeUnit unit) throws InterruptedException {
       synchronized(this) {
-        if(!stopping) {
-          stopping=true;
-          writer.execute(() -> run(store::reset));
-          writer.shutdown();
-        }
+        if(stopping) return writer.isTerminated();
+        stopping=true;
+        writer.shutdown();
       }
-      return writer.awaitTermination(timeout,unit);
+      boolean drained=false;
+      try {
+        drained=writer.awaitTermination(timeout,unit);
+        if(!drained) { writer.shutdownNow(); writer.awaitTermination(1,TimeUnit.SECONDS); }
+      } finally {
+        closed=true;
+        run(store::reset);
+      }
+      return drained;
     }
-  }
-  private final CraftCore core;
+  }  private final CraftCore core;
   private final String server;
   private final Tracker tracker;
   private boolean migrateOnStart;
@@ -71,7 +82,7 @@ final class Presence implements Listener {
     Bukkit.getPluginManager().registerEvents(this,core);
     for(var player:Bukkit.getOnlinePlayers()) tracker.join(player.getUniqueId());
   }
-  void shutdown() { try { if(!tracker.stop(5,TimeUnit.SECONDS)) core.getLogger().warning("Presence shutdown: writer still draining; reset remains queued"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); core.getLogger().warning("Presence shutdown interrupted; reset remains queued"); } }
+  void shutdown() { try { if(!tracker.stop(5,TimeUnit.SECONDS)) core.getLogger().warning("Presence shutdown: queue did not drain in 5 s; pending writes dropped, offline reset done synchronously"); } catch(InterruptedException e) { Thread.currentThread().interrupt(); core.getLogger().warning("Presence shutdown interrupted; offline reset done synchronously"); } }
   @EventHandler(priority=EventPriority.MONITOR) public void join(PlayerJoinEvent event) { tracker.join(event.getPlayer().getUniqueId()); }
   @EventHandler(priority=EventPriority.MONITOR) public void quit(PlayerQuitEvent event) { tracker.quit(event.getPlayer().getUniqueId()); }
 }
