@@ -173,17 +173,6 @@ def team_color_code(v):
     return None
 
 
-def team_color_hex(hex_col, raw):
-    """#RRGGBB (gross) aus team_color_hex, sonst aus &-Code/Hex in team_color, sonst None."""
-    h = _hex(hex_col)
-    if h:
-        return h
-    c = team_color_code(raw)
-    if c:
-        return MC_COLORS[c[1]]
-    return _hex(raw)
-
-
 HEX_TO_CODE = {v: "&" + k for k, v in MC_COLORS.items()}
 
 
