@@ -64,7 +64,7 @@ public final class PvpMatches implements Listener {
             Player player=Bukkit.getPlayer(id); if(player==null) return;
             player.setGameMode(PvpAccess.joinMode(builder,found.isPresent()));
             PvpAccess.JoinDecision decision=PvpAccess.decide(found.isPresent(),builder);
-            if(decision==PvpAccess.JoinDecision.BUILDER) return;
+            if(decision==PvpAccess.JoinDecision.BUILDER) { if(PvpAccess.sendToBuildWorld(decision)) player.teleport(build.getSpawnLocation()); return; }
             if(decision==PvpAccess.JoinDecision.KICK) { lobby(player); Bukkit.getScheduler().runTaskLater(plugin,()->{ if(player.isOnline()) player.kickPlayer("Keine PvP-Zuweisung."); },40L); return; }
             PvpStore.Assignment a=found.get(); Session s=sessions.computeIfAbsent(a.matchId(),k->new Session(a)); players.put(id,s);
             if(Bukkit.getPlayer(a.a())!=null && Bukkit.getPlayer(a.b())!=null && players.get(a.a())==s && players.get(a.b())==s) begin(s);
