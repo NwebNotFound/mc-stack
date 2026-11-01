@@ -13,14 +13,35 @@ CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_player_stats AS
 SELECT p.uuid, p.name AS mc_name,
        CAST(a.balance / 100.0 AS DECIMAL(21,2)) AS money,
        s.playtime_s, s.kills, s.deaths, s.blocks_mined, s.updated_at,
-       t.name AS team, t.color AS team_color,
+       t.name AS team, t.color AS team_color_code,
+       t.color_hex AS team_color_hex, t.color_hex AS team_color,
        DATE_FORMAT(presence.last_seen,'%Y-%m-%dT%H:%i:%sZ') AS last_seen,
        boolean_value.value AS online
 FROM craftcore.known_players p
 LEFT JOIN craftcore.accounts a ON a.uuid = p.uuid
 LEFT JOIN craftcore.player_stats s ON s.uuid = p.uuid
 LEFT JOIN craftcore.members m ON m.uuid = p.uuid
-LEFT JOIN craftcore.teams t ON t.id = m.team_id
+LEFT JOIN (SELECT id, name, color,
+                  CASE LOWER(REPLACE(color, '§', '&'))
+                    WHEN '&0' THEN '#000000'
+                    WHEN '&1' THEN '#0000AA'
+                    WHEN '&2' THEN '#00AA00'
+                    WHEN '&3' THEN '#00AAAA'
+                    WHEN '&4' THEN '#AA0000'
+                    WHEN '&5' THEN '#AA00AA'
+                    WHEN '&6' THEN '#FFAA00'
+                    WHEN '&7' THEN '#AAAAAA'
+                    WHEN '&8' THEN '#555555'
+                    WHEN '&9' THEN '#5555FF'
+                    WHEN '&a' THEN '#55FF55'
+                    WHEN '&b' THEN '#55FFFF'
+                    WHEN '&c' THEN '#FF5555'
+                    WHEN '&d' THEN '#FF55FF'
+                    WHEN '&e' THEN '#FFFF55'
+                    WHEN '&f' THEN '#FFFFFF'
+                    ELSE NULL
+                  END AS color_hex
+           FROM craftcore.teams) t ON t.id = m.team_id
 LEFT JOIN (SELECT uuid, MAX(last_seen) AS last_seen, MAX(online) AS online
            FROM craftcore.player_presence GROUP BY uuid) presence ON presence.uuid = p.uuid
 JOIN craftcore.presence_boolean boolean_value ON boolean_value.value = (COALESCE(presence.online, 0) <> 0);

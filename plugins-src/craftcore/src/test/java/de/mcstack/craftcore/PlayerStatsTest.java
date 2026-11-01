@@ -6,6 +6,22 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.*;
 class PlayerStatsTest {
+ @Test void viewContainsVanillaTeamColorMapping() throws Exception {
+  String sql=java.nio.file.Files.readString(java.nio.file.Path.of("../../scripts/v-player-stats.sql"));
+  int start=sql.indexOf("CASE LOWER(REPLACE(color, '§', '&'))");
+  assertTrue(start>=0);
+  int end=sql.indexOf("END AS color_hex",start);
+  assertTrue(end>start);
+  var matcher=java.util.regex.Pattern.compile("WHEN '&([0-9a-f])' THEN '(#[0-9A-F]{6})'").matcher(sql.substring(start,end));
+  java.util.Map<String,String> actual=new java.util.HashMap<>();
+  while(matcher.find()) assertNull(actual.put(matcher.group(1),matcher.group(2)));
+  assertEquals(java.util.Map.ofEntries(
+   java.util.Map.entry("0","#000000"),java.util.Map.entry("1","#0000AA"),java.util.Map.entry("2","#00AA00"),java.util.Map.entry("3","#00AAAA"),
+   java.util.Map.entry("4","#AA0000"),java.util.Map.entry("5","#AA00AA"),java.util.Map.entry("6","#FFAA00"),java.util.Map.entry("7","#AAAAAA"),
+   java.util.Map.entry("8","#555555"),java.util.Map.entry("9","#5555FF"),java.util.Map.entry("a","#55FF55"),java.util.Map.entry("b","#55FFFF"),
+   java.util.Map.entry("c","#FF5555"),java.util.Map.entry("d","#FF55FF"),java.util.Map.entry("e","#FFFF55"),java.util.Map.entry("f","#FFFFFF")),actual);
+  assertTrue(sql.substring(start,end).contains("ELSE NULL"));
+ }
  @Test void migrationAndUpsertReplaceSnapshots() throws Exception {
   try(Connection c=DriverManager.getConnection("jdbc:h2:mem:stats;MODE=MySQL;DB_CLOSE_DELAY=-1")) {
    PlayerStats.migrate(c); PlayerStats.migrate(c);

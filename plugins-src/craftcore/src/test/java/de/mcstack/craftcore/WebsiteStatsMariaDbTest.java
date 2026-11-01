@@ -36,9 +36,14 @@ class WebsiteStatsMariaDbTest {
       try(ResultSet r=s.executeQuery("SELECT buy_price,sell_price,buy_enabled,sell_enabled FROM v_market WHERE item='STONE'")){assertTrue(r.next());assertNull(r.getObject(1));assertEquals(0.5,r.getDouble(2),0.001);assertFalse(r.getBoolean(3));assertTrue(r.getBoolean(4));}
       s.execute("INSERT INTO known_players VALUES('p','Player')");
       s.execute("INSERT INTO accounts VALUES('p',1000)");
-      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='p'")) { assertTrue(r.next()); assertNull(r.getString(1)); assertNull(r.getString(2)); assertNull(r.getString(3)); assertEquals(0,r.getInt(4)); }
+      try(ResultSet r=s.executeQuery("SELECT team,team_color_code,team_color_hex,team_color,last_seen,online FROM v_player_stats WHERE uuid='p'")) { assertTrue(r.next()); assertNull(r.getString(1)); assertNull(r.getString(2)); assertNull(r.getString(3)); assertNull(r.getString(4)); assertNull(r.getString(5)); assertEquals(0,r.getInt(6)); }
       s.execute("INSERT INTO teams VALUES(1,'Builders','&9')");
       s.execute("INSERT INTO members VALUES('p',1,'owner')");
+      s.execute("UPDATE teams SET color='§A' WHERE id=1");
+      try(ResultSet r=s.executeQuery("SELECT team_color_code,team_color_hex,team_color FROM v_player_stats WHERE uuid='p'")) { assertTrue(r.next()); assertEquals("§A",r.getString(1)); assertEquals("#55FF55",r.getString(2)); assertEquals("#55FF55",r.getString(3)); }
+      s.execute("UPDATE teams SET color='&z' WHERE id=1");
+      try(ResultSet r=s.executeQuery("SELECT team_color_code,team_color_hex,team_color FROM v_player_stats WHERE uuid='p'")) { assertTrue(r.next()); assertEquals("&z",r.getString(1)); assertNull(r.getString(2)); assertNull(r.getString(3)); }
+      s.execute("UPDATE teams SET color='&9' WHERE id=1");
       java.util.UUID id=java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
       s.execute("UPDATE known_players SET uuid='"+id+"' WHERE uuid='p'");
       s.execute("UPDATE accounts SET uuid='"+id+"' WHERE uuid='p'");
@@ -53,7 +58,7 @@ class WebsiteStatsMariaDbTest {
       Presence.record(c,id,"lobby",false);
       Instant after;
       try(ResultSet r=s.executeQuery("SELECT DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-%dT%H:%i:%sZ')")) { assertTrue(r.next()); after=Instant.parse(r.getString(1)); }
-      try(ResultSet r=s.executeQuery("SELECT team,team_color,last_seen,online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertEquals("Builders",r.getString(1)); assertEquals("&9",r.getString(2)); String seen=r.getString(3); assertTrue(seen.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z")); Instant written=Instant.parse(seen); assertFalse(written.isBefore(before)); assertFalse(written.isAfter(after)); assertEquals(1,r.getInt(4)); }
+      try(ResultSet r=s.executeQuery("SELECT team,team_color_code,team_color_hex,team_color,last_seen,online FROM v_player_stats WHERE uuid='"+id+"'")) { assertTrue(r.next()); assertEquals("Builders",r.getString(1)); assertEquals("&9",r.getString(2)); assertEquals("#5555FF",r.getString(3)); assertEquals("#5555FF",r.getString(4)); String seen=r.getString(5); assertTrue(seen.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z")); Instant written=Instant.parse(seen); assertFalse(written.isBefore(before)); assertFalse(written.isAfter(after)); assertEquals(1,r.getInt(6)); }
       try(ResultSet r=s.executeQuery("SELECT v.last_seen,DATE_FORMAT(MAX(p.last_seen),'%Y-%m-%dT%H:%i:%sZ') FROM v_player_stats v JOIN player_presence p ON p.uuid=v.uuid WHERE v.uuid='"+id+"' GROUP BY v.last_seen")) { assertTrue(r.next()); assertEquals(r.getString(2),r.getString(1)); }
       // A known UTC DATETIME must survive the view without session-zone conversion.
       Instant expected=Instant.parse("2026-01-15T12:34:56Z");
