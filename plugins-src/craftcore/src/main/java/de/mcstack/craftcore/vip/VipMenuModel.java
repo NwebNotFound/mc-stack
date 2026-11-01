@@ -13,14 +13,11 @@ public final class VipMenuModel {
         int limit=Math.max(0, allowed);
         int count=Math.max(0, worlds);
         List<Slot> result=new ArrayList<>();
-        if (limit==0) {
-            result.add(new Slot(Kind.LOCKED, -1, "Kein VIP-Rang"));
-        } else {
-            for (int i=0; i<limit; i++) {
-                result.add(i<count ? new Slot(Kind.OCCUPIED, i, "Slot belegt") : new Slot(Kind.FREE, -1, ""));
-            }
-            if (!VipRules.canCreate(count, limit)) result.add(new Slot(Kind.LOCKED, -1, "Limit erreicht"));
-        }
+        // Owned worlds are always shown (e.g. after a rank downgrade); the rank only controls free/locked slots.
+        for (int i=0; i<count; i++) result.add(new Slot(Kind.OCCUPIED, i, "Slot belegt"));
+        for (int i=count; i<limit; i++) result.add(new Slot(Kind.FREE, -1, ""));
+        if (limit==0) result.add(new Slot(Kind.LOCKED, -1, "Kein VIP-Rang"));
+        else if (!VipRules.canCreate(count, limit)) result.add(new Slot(Kind.LOCKED, -1, "Limit erreicht"));
         return List.copyOf(result);
     }
 }

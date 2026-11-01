@@ -27,10 +27,17 @@ class VipMenuModelTest {
         assertEquals(FREE,slots.get(1).kind());
         assertEquals(FREE,slots.get(2).kind());
     }
-    @Test void excessWorldsShowLimit() {
-        var slots=VipMenuModel.slots(1,2);
+    @Test void excessWorldsStayVisible() {
+        var slots=VipMenuModel.slots(1,3);
+        assertEquals(4,slots.size());
+        for (int i=0;i<3;i++) { assertEquals(OCCUPIED,slots.get(i).kind()); assertEquals(i,slots.get(i).worldIndex()); }
+        assertEquals("Limit erreicht",slots.get(3).reason());
+    }
+    @Test void rankLostKeepsOwnedWorlds() {
+        var slots=VipMenuModel.slots(0,2);
+        assertEquals(3,slots.size());
         assertEquals(OCCUPIED,slots.get(0).kind());
-        assertEquals(LOCKED,slots.get(1).kind());
-        assertEquals("Limit erreicht",slots.get(1).reason());
+        assertEquals(OCCUPIED,slots.get(1).kind());
+        assertEquals("Kein VIP-Rang",slots.get(2).reason());
     }
 }

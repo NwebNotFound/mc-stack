@@ -85,11 +85,11 @@ final class UserMenu implements Listener, CommandExecutor, TabCompleter {
       try {
         List<VipStore.World> worlds=new VipStore(plugin::connection).list(id);
         // Leave room for the limit indicator and help book in the inventory.
-        for (var slot:VipMenuModel.slots(Math.min(slots,52),worlds.size())) {
+        for (var slot:VipMenuModel.slots(Math.min(slots,52),Math.min(worlds.size(),52))) {
           switch (slot.kind()) {
             case OCCUPIED -> {
               var world=worlds.get(slot.worldIndex());
-              entries.add(new Entry(world.name(),Material.GRASS_BLOCK,"vw join "+world.name(),
+              entries.add(new Entry(world.name(),Material.GRASS_BLOCK,"vw start "+world.name(),
                   "Slot belegt | Typ: "+world.type()+" | Status: "+world.status()));
             }
             case FREE -> entries.add(new Entry("Freier Slot",Material.LIME_DYE,"vw create ",
