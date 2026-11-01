@@ -14,6 +14,16 @@ grave-despawn-minutes: 1440
 market:
   sell:
     enabled: false
+    # CP pro Verzauberungsstufe; optionale Schluessel z. B. sharpness oder minecraft:sharpness.
+    enchant:
+      bonus-per-level: 1.0
+      # Maximaler Verzauberungsbonus pro Item in CP (5 CP = 500 Cent).
+      max-bonus: 5.0
+      overrides: {}
+    durability:
+      min-factor: 0.0
+    # Optionaler Basispreis in CP pro Traenkenpfeil, sonst der normale Marktkurs.
+    # tipped-arrow-price: 1.0
   base-factor: 0.5
   sell-factor: 0.75
   # Bank-Ankauf hoechstens 50 % des Kaufpreises (alle Items).

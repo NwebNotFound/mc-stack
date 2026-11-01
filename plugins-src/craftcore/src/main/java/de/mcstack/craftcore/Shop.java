@@ -7,6 +7,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.inventory.*;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
@@ -46,19 +47,27 @@ final class Shop implements Listener {
     if(page+1<pages)inv.setItem(53,button(Material.ARROW,"Naechste Seite"));p.openInventory(inv);
   }
   static final class Edit implements InventoryHolder {
-    final Listing row; final int page; Edit(Listing row,int page){this.row=row;this.page=page;}
+    Listing row; final int page; long pendingPrice; final WithdrawConfirm withdraw=new WithdrawConfirm(); Edit(Listing row,int page){this.row=row;this.page=page;this.pendingPrice=row.price();}
     public Inventory getInventory(){return null;}
   }
-  void edit(Player p,Listing row,int page){
-    Inventory inv=Bukkit.createInventory(new Edit(row,page),27,"Angebot bearbeiten");
-    inv.setItem(4,ItemStack.deserializeBytes(Base64.getDecoder().decode(row.item())));
-    inv.setItem(10,button(Material.RED_DYE,"Preis -1 CP"));inv.setItem(11,button(Material.ORANGE_DYE,"Preis -10 CP"));
-    inv.setItem(12,button(Material.PAPER,"Gesamtpreis: "+Money.format(row.price())));
-    inv.setItem(13,button(Material.LIME_DYE,"Preis +1 CP"));inv.setItem(14,button(Material.GREEN_DYE,"Preis +10 CP"));
-    inv.setItem(18,button(Material.RED_DYE,"Preis -0,01 CP"));inv.setItem(19,button(Material.ORANGE_DYE,"Preis -0,10 CP"));inv.setItem(21,button(Material.LIME_DYE,"Preis +0,01 CP"));inv.setItem(22,button(Material.GREEN_DYE,"Preis +0,10 CP"));
-    inv.setItem(16,button(Material.CHEST,"Aus Haupthand nachfuellen"));inv.setItem(20,button(Material.BARRIER,"Angebot zurueckziehen"));
-    inv.setItem(24,button(Material.ARROW,"Zurueck"));p.openInventory(inv);
+  static long editDelta(int slot){return switch(slot){case 9 -> -1000;case 10 -> -100;case 11 -> -10;case 13 -> 10;case 14 -> 100;case 15 -> 1000;default -> 0;};}
+  ItemStack editButton(Material type,String name,String lore){ItemStack item=button(type,name);ItemMeta meta=item.getItemMeta();meta.setLore(List.of(lore));item.setItemMeta(meta);return item;}
+  void edit(Player p,Listing row,int page){Edit edit=new Edit(row,page);Inventory inv=Bukkit.createInventory(edit,27,"Angebot bearbeiten");renderEdit(inv,edit);p.openInventory(inv);
+    // The listing icon is a display copy of the DB-owned item; there are no owned input slots.
+    core.menuReturns.registerHeld(p.getUniqueId(),edit,new int[0],inv::getItem,slot->inv.setItem(slot,null),
+      item->new ArrayList<>(p.getInventory().addItem(item).values()),item->{try{core.tx(c->{Deliveries.insert(c,UUID.randomUUID().toString(),p.getUniqueId().toString(),item,"menu_return");return null;});}catch(Exception ex){core.getLogger().severe("Menue-Rueckgabe nicht gespeichert: "+ex);p.getWorld().dropItemNaturally(p.getLocation(),item);}},
+      ()->edit.withdraw.reset(),p::closeInventory);}
+  void renderEdit(Inventory inv,Edit edit){
+    for(int i=0;i<27;i++)inv.setItem(i,editButton(Material.GRAY_STAINED_GLASS_PANE," "," "));
+    ItemStack offered=ItemStack.deserializeBytes(Base64.getDecoder().decode(edit.row.item()));ItemMeta meta=offered.getItemMeta();List<String> lore=meta.hasLore()?new ArrayList<>(meta.getLore()):new ArrayList<>();lore.add("Menge: "+offered.getAmount());lore.add("Gesamtpreis: "+Money.format(edit.pendingPrice));meta.setLore(lore);offered.setItemMeta(meta);inv.setItem(4,offered);
+    int[] slots={9,10,11,13,14,15};String[] names={"Preis -10 CP","Preis -1 CP","Preis -0,10 CP","Preis +0,10 CP","Preis +1 CP","Preis +10 CP"};for(int i=0;i<slots.length;i++)inv.setItem(slots[i],editButton(i<3?Material.RED_DYE:Material.LIME_DYE,names[i],"Aenderung wird erst beim Speichern uebernommen."));
+    inv.setItem(12,editButton(Material.PAPER,"Gesamtpreis: "+Money.format(edit.pendingPrice),"Vorgemerkter Preis fuer das gesamte Angebot."));
+    inv.setItem(16,editButton(Material.CHEST,"Menge +: aus Haupthand nachfuellen","Passende Items werden sofort zum Angebot hinzugefuegt."));
+    inv.setItem(19,editButton(Material.LIME_WOOL,"Speichern","Vorgemerkten Preis speichern."));inv.setItem(21,editButton(Material.RED_WOOL,"Abbrechen","Vorgemerkten Preis verwerfen."));
+    inv.setItem(23,editButton(Material.HOPPER,edit.withdraw.armed()?"Wirklich zurueckziehen? Nochmal klicken":"Angebot zurueckziehen","Items gehen ins Abholfach; innerhalb von 10 Sekunden erneut klicken."));inv.setItem(25,editButton(Material.ARROW,"Zurueck","Zur Angebotsliste ohne Preis zu speichern."));
   }
+  @EventHandler public void editClose(InventoryCloseEvent e){if(e.getInventory().getHolder() instanceof Edit edit)core.menuReturns.finish(e.getPlayer().getUniqueId(),edit);}
+  @EventHandler public void editQuit(PlayerQuitEvent e){core.menuReturns.finish(e.getPlayer().getUniqueId());}
   static final class Confirmation implements InventoryHolder {
     final Listing row; Confirmation(Listing row){this.row=row;}
     public Inventory getInventory(){return null;}
@@ -123,20 +132,23 @@ final class Shop implements Listener {
   @EventHandler public void click(InventoryClickEvent e){
     if(e.getView().getTopInventory().getHolder() instanceof PurchaseMenu pm && pm.table.equals("shop_journal")){e.setCancelled(true);if(e.getWhoClicked() instanceof Player p && e.getClickedInventory()==e.getView().getTopInventory() && e.isLeftClick() && !e.isShiftClick())try{pm.click(core,p,e.getRawSlot());}catch(Exception ex){core.getLogger().warning("Shopkauf: "+ex);p.sendMessage("Kauf fehlgeschlagen.");}return;}
     if(e.getView().getTopInventory().getHolder() instanceof Edit edit){
-      e.setCancelled(true);if(!(e.getWhoClicked() instanceof Player p)||e.getClickedInventory()!=e.getView().getTopInventory()||!e.isLeftClick()||e.isShiftClick())return;
+      e.setCancelled(true);
+      if(e.getRawSlot()!=23 || e.getClickedInventory()!=e.getView().getTopInventory() || !e.isLeftClick() || e.isShiftClick()) {
+        if(edit.withdraw.reset())renderEdit(e.getView().getTopInventory(),edit);
+      }
+      if(!(e.getWhoClicked() instanceof Player p)||e.getClickedInventory()!=e.getView().getTopInventory()||!e.isLeftClick()||e.isShiftClick())return;
       try{int slot=e.getRawSlot();Listing row=edit.row;String seller=p.getUniqueId().toString();
-        if(slot==24){open(p,seller,edit.page,true);return;}
-        if(slot==20){remove(p,row.id());open(p,seller,edit.page,true);return;}
-        if(slot==10||slot==11||slot==13||slot==14||slot==18||slot==19||slot==21||slot==22){long delta=switch(slot){case 10 -> -100;case 11 -> -1000;case 13 -> 100;case 14 -> 1000;case 18 -> -1;case 19 -> -10;case 21 -> 1;default -> 10;};long price=Math.addExact(row.price(),delta);if(price<1){p.sendMessage("Preis muss positiv sein.");return;}
-          boolean ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET price=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setLong(1,price);q.setString(2,row.id());q.setString(3,seller);q.setLong(4,row.price());q.setString(5,row.item());return q.executeUpdate()==1;}});
-          if(!ok){p.sendMessage("Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}edit(p,new Listing(row.id(),seller,row.name(),price,row.item()),edit.page);return;}
+        if(slot==21||slot==25){open(p,seller,edit.page,true);return;}
+        if(slot==23){if(!edit.withdraw.click(System.nanoTime())){renderEdit(e.getView().getTopInventory(),edit);return;}remove(p,row.id());open(p,seller,edit.page,true);return;}
+        long delta=editDelta(slot);if(delta!=0){long price=Math.addExact(edit.pendingPrice,delta);if(price<1){p.sendMessage("Preis muss positiv sein.");return;}edit.pendingPrice=price;renderEdit(e.getView().getTopInventory(),edit);return;}
+        if(slot==19){boolean ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET price=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setLong(1,edit.pendingPrice);q.setString(2,row.id());q.setString(3,seller);q.setLong(4,row.price());q.setString(5,row.item());return q.executeUpdate()==1;}});p.sendMessage(ok?"Preis gespeichert.":"Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}
         if(slot==16){ItemStack existing=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.item()));ItemStack hand=p.getInventory().getItemInMainHand();
           if(hand.getType().isAir()||!existing.isSimilar(hand)){p.sendMessage("Halte passende Items in der Haupthand.");return;}
           int count=Math.min(hand.getAmount(),existing.getMaxStackSize()-existing.getAmount());if(count<=0){p.sendMessage("Der Angebotsstapel ist voll.");return;}
           ItemStack original=hand.clone(),updated=existing.clone();updated.setAmount(existing.getAmount()+count);String encoded=Base64.getEncoder().encodeToString(updated.serializeAsBytes());
           if(count==hand.getAmount())p.getInventory().setItemInMainHand(null);else {ItemStack rest=hand.clone();rest.setAmount(hand.getAmount()-count);p.getInventory().setItemInMainHand(rest);}
           boolean ok;try{ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET item=?,amount=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setString(1,encoded);q.setInt(2,updated.getAmount());q.setString(3,row.id());q.setString(4,seller);q.setLong(5,row.price());q.setString(6,row.item());return q.executeUpdate()==1;}});}catch(Exception ex){p.getInventory().setItemInMainHand(original);throw ex;}
-          if(!ok){p.getInventory().setItemInMainHand(original);p.sendMessage("Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}p.sendMessage(count+" Items nachgefuellt; Gesamtpreis bleibt gleich.");edit(p,new Listing(row.id(),seller,row.name(),row.price(),encoded),edit.page);
+          if(!ok){p.getInventory().setItemInMainHand(original);p.sendMessage("Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}p.sendMessage(count+" Items nachgefuellt; Gesamtpreis bleibt gleich.");edit.row=new Listing(row.id(),seller,row.name(),row.price(),encoded);renderEdit(e.getView().getTopInventory(),edit);
         }
       }catch(Exception ex){core.getLogger().warning("Shopbearbeitung: "+ex);p.sendMessage("Bearbeitung fehlgeschlagen.");}return;
     }
