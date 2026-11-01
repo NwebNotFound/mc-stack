@@ -244,6 +244,8 @@ final class Market implements Listener {
     menu.total=0; menu.count=0;
     for(int i=36;i<54;i++)menu.inventory.setItem(i,button(Material.GRAY_STAINED_GLASS_PANE," "));
     menu.inventory.setItem(53,button(Material.BARRIER,"Schliessen"));
+    // One DB round trip per distinct material (price) and material/value (limit) instead of per slot.
+    Map<Material,Long> priceCache=new EnumMap<>(Material.class); Map<String,Boolean> allowedCache=new HashMap<>();
     for(int i=0;i<36;i++) {
       ItemStack real=p.getInventory().getItem(i); menu.snapshots[i]=real==null?null:real.clone(); menu.sellable[i]=false;
       if(real==null||real.getType().isAir()){menu.inventory.setItem(i,null);continue;}
@@ -255,9 +257,16 @@ final class Market implements Listener {
         else {
           int damage=real.getItemMeta() instanceof Damageable d?d.getDamage():0;
           SellConfig config=sellConfig(real.getType());
-          breakdown=core.tx(c->sellBreakdown(real.getType(),price(c,real.getType(),false,false,config).cents(),sellEnchants(real),damage,config.pricing()));
-          if(breakdown.total()==0)reason="Wert 0 CP (komplett beschaedigt)";
-          else if(!previewAllowed(p,real.getType(),breakdown.total(),config))reason="Limit erreicht";
+          Long cents=priceCache.get(real.getType());
+          if(cents==null){cents=core.tx(c->price(c,real.getType(),false,false,config).cents());priceCache.put(real.getType(),cents);}
+          breakdown=sellBreakdown(real.getType(),cents,sellEnchants(real),damage,config.pricing());
+          long unitTotal=breakdown.total();
+          if(unitTotal==0)reason="Wert 0 CP (komplett beschaedigt)";
+          else {
+            String key=real.getType().name()+"|"+unitTotal; Boolean allowed=allowedCache.get(key);
+            if(allowed==null){allowed=previewAllowed(p,real.getType(),unitTotal,config);allowedCache.put(key,allowed);}
+            if(!allowed)reason="Limit erreicht";
+          }
         }
         if(reason!=null) lore.add(org.bukkit.ChatColor.GRAY+reason);
         else {
