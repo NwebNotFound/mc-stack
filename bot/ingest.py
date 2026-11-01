@@ -149,11 +149,60 @@ def _bool(v):
         return None
 
 
+MC_COLORS = {
+    "0": "#000000", "1": "#0000AA", "2": "#00AA00", "3": "#00AAAA",
+    "4": "#AA0000", "5": "#AA00AA", "6": "#FFAA00", "7": "#AAAAAA",
+    "8": "#555555", "9": "#5555FF", "a": "#55FF55", "b": "#55FFFF",
+    "c": "#FF5555", "d": "#FF55FF", "e": "#FFFF55", "f": "#FFFFFF",
+}
+
+
+def _hex(v):
+    import re
+    t = _text(v)
+    if t and re.fullmatch(r"#[0-9A-Fa-f]{6}", t):
+        return t.upper()
+    return None
+
+
+def team_color_code(v):
+    """Roher &-Code (auch §-Code -> &), sonst None."""
+    t = _text(v)
+    if t and len(t) == 2 and t[0] in "&\u00a7" and t[1].lower() in MC_COLORS:
+        return "&" + t[1].lower()
+    return None
+
+
+def team_color_hex(hex_col, raw):
+    """#RRGGBB (gross) aus team_color_hex, sonst aus &-Code/Hex in team_color, sonst None."""
+    h = _hex(hex_col)
+    if h:
+        return h
+    c = team_color_code(raw)
+    if c:
+        return MC_COLORS[c[1]]
+    return _hex(raw)
+
+
+HEX_TO_CODE = {v: "&" + k for k, v in MC_COLORS.items()}
+
+
+def team_colors(r):
+    """Alle Quellformen (team_color als Hex/&-Code, team_color_hex, team_color_code) ->
+    team_color == team_color_hex (#RRGGBB oder None), team_color_code (&x oder None)."""
+    raw, hcol, ccol = r.get("team_color"), r.get("team_color_hex"), r.get("team_color_code")
+    code = team_color_code(ccol) or team_color_code(raw)
+    h = _hex(hcol) or _hex(raw) or (MC_COLORS[code[1]] if code else None)
+    if not code and h:
+        code = HEX_TO_CODE.get(h)
+    return {"team_color": h, "team_color_hex": h, "team_color_code": code}
+
+
 def presence_fields(r):
     """team/team_color/last_seen/online aus v_player_stats; fehlende Spalten -> None."""
     return {
         "team": _text(r.get("team")),
-        "team_color": _text(r.get("team_color")),
+        **team_colors(r),
         "last_seen": _iso_utc(r.get("last_seen")),
         "online": _bool(r.get("online")),
     }

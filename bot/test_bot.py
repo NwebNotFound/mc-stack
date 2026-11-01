@@ -296,7 +296,7 @@ class IngestTests(unittest.TestCase):
         cols = ["uuid", "mc_name", "money", "playtime_s", "kills", "deaths", "blocks_mined", "updated_at"]
         out = ingest.build_stats(cols, [("u1", "Steve", 12.5, 3600, 1, 2, None, "x")])
         self.assertEqual(out, {"u1": {"money": 12.5, "playtime": 3600, "kills": 1, "deaths": 2,
-                                      "team": None, "team_color": None, "last_seen": None, "online": None}})
+                                      "team": None, "team_color": None, "team_color_hex": None, "team_color_code": None, "last_seen": None, "online": None}})
 
     def test_no_token_no_push(self):
         import asyncio, ingest
