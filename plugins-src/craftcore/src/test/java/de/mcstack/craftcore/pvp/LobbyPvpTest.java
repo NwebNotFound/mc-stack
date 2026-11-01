@@ -23,4 +23,17 @@ class LobbyPvpTest {
     @Test void queueReminderIncludesPosition() {
         assertEquals("Ein PvP-Match laeuft gerade - du bist als Naechstes dran (Platz 3).", LobbyPvp.queueReminder(3));
     }
+    @Test void transferWaitsUntilContainerIsOnlineAndPingAnswers() {
+        assertEquals(LobbyPvp.Transfer.WAIT, LobbyPvp.transferStep("online", false, 10, 180));
+        assertEquals(LobbyPvp.Transfer.WAIT, LobbyPvp.transferStep("starting", true, 44, 180));
+        assertEquals(LobbyPvp.Transfer.CONNECT, LobbyPvp.transferStep("online", true, 46, 180));
+        assertEquals(LobbyPvp.Transfer.FAIL, LobbyPvp.transferStep("online", false, 180, 180));
+        assertEquals(LobbyPvp.Transfer.FAIL, LobbyPvp.transferStep("offline", false, 181, 180));
+    }
+    @Test void playersStillOnLobbyFailTheTransfer() {
+        assertTrue(LobbyPvp.stillOnLobby(true, true));
+        assertTrue(LobbyPvp.stillOnLobby(true, false));
+        assertTrue(LobbyPvp.stillOnLobby(false, true));
+        assertFalse(LobbyPvp.stillOnLobby(false, false));
+    }
 }
