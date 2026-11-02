@@ -74,18 +74,27 @@ final class Market implements Listener {
     for(Material dm:List.of(Material.IRON_INGOT,Material.RAW_IRON,Material.IRON_BLOCK,Material.GOLD_INGOT)) if(items.containsKey(dm)) core.getLogger().info("Rezeptkosten "+dm+": "+recipeCosts.get(dm)+" ct via "+RecipeCost.path(dm));
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_price_factors (material VARCHAR(64) PRIMARY KEY, sell_factor DOUBLE NOT NULL, buy_factor DOUBLE NOT NULL, updated BIGINT NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS discord_links (uuid CHAR(36) PRIMARY KEY, discord_id VARCHAR(20) NULL, INDEX discord_lookup (discord_id))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_link_revenue (owner VARCHAR(40) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(owner,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS market_prices (material VARCHAR(64) PRIMARY KEY, price DOUBLE NOT NULL, updated BIGINT NOT NULL, trend VARCHAR(8) NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_daily (player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(player,item,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_revenue_daily (player CHAR(36) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(player,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_journal (id CHAR(36) PRIMARY KEY, player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, status VARCHAR(24) NOT NULL, INDEX bank_pending (status,player))"); return null;});
     core.tx(c->{DynamicPrice.migrate(c);CurvePrice.migrate(c);BankBuy.migrate(c);BuybackCaps.ensureSchema(c);return null;});
-    core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); long now=System.currentTimeMillis(); for(Material m:items.keySet()) persistCurve(c,m,now); return null;});
+    core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); return null;});
+    long boot=System.currentTimeMillis(); for(Material m:curveOrder()) core.tx(c->{persistCurve(c,m,boot);return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
     Bukkit.getScheduler().runTaskTimerAsynchronously(core,this::snapshotCurves,1L,72000L);
   }
+  private List<Material> curveOrder() {
+    List<Material> ordered=new ArrayList<>(items.keySet());
+    ordered.sort(Comparator.comparing(Material::name));
+    return ordered;
+  }
+  /** One short transaction per item, name order, so a trade locking a sorted name set cannot deadlock. */
   private void snapshotCurves() {
-    try { core.tx(c->{
-      try(Statement q=c.createStatement(); ResultSet r=q.executeQuery("SELECT GET_LOCK('craftcore-market-snapshot', 0)")) { if(!r.next()||r.getInt(1)!=1) return null; }
-      try { long now=System.currentTimeMillis(); for(Material m:items.keySet()) persistCurve(c,m,now); WebsiteStats.snapshot(c,java.time.Instant.now()); }
-      finally { try(Statement q=c.createStatement()) { q.execute("SELECT RELEASE_LOCK('craftcore-market-snapshot')"); } }
-      return null;
-    }); } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); }
+    try(Connection guard=core.connection()) {
+      try(Statement q=guard.createStatement(); ResultSet r=q.executeQuery("SELECT GET_LOCK('craftcore-market-snapshot', 0)")) { if(!r.next()||r.getInt(1)!=1) return; }
+      try {
+        long now=System.currentTimeMillis();
+        for(Material m:curveOrder()) core.tx(c->{persistCurve(c,m,now);return null;});
+        core.tx(c->{WebsiteStats.snapshot(c,java.time.Instant.now());return null;});
+      } finally { try(Statement q=guard.createStatement()) { q.execute("SELECT RELEASE_LOCK('craftcore-market-snapshot')"); } }
+    } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); }
   }
   /** Fold recovery into the row and publish the catalog. Not used by GUI reads. */
   private void persistCurve(Connection c, Material m, long now) throws SQLException {
@@ -187,8 +196,7 @@ final class Market implements Listener {
     CurvePrice.save(c,m.name(),end,now);
     CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
-    long first=buy ? CurvePrice.cents(base,net,cap,factors).buy() : Math.min(CurvePrice.cents(base,net,cap,factors).sell(),config.maxSell());
-    return new Price(qty==1 ? first : total, CurvePrice.mid(base,end), buy?"auf":"ab");
+    return new Price(total, CurvePrice.mid(base,end), buy?"auf":"ab");
   }
   private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config) throws SQLException {
     long now=System.currentTimeMillis();

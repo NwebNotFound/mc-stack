@@ -78,6 +78,34 @@ class CurvePriceTest {
     assertTrue(dump(0.05, 64) < buyBack(0.05, 64));
   }
 
+  @Test void halfLivesAreReadFromConfig() {
+    var live = CurvePrice.factors(RecipeArbitrageTest.liveCfg());
+    assertEquals(72, live.halfLifeHours());
+    assertEquals(12, live.halfLifeCheapHours());
+    assertEquals(12, CurvePrice.halfLifeHours(0.05, live));
+    assertEquals(72, CurvePrice.halfLifeHours(200, live));
+    assertEquals(-64, CurvePrice.fold(-128, 0.05, 12L * 3_600_000, live), 1e-6);
+    assertEquals(-64, CurvePrice.fold(-128, 200, 72L * 3_600_000, live), 1e-9);
+    assertEquals(-2, CurvePrice.fold(-128, 0.05, 72L * 3_600_000, live), 1e-6);
+    var custom = new YamlConfiguration();
+    custom.set("market.curve.half-life-hours", 48.0);
+    custom.set("market.curve.half-life-cheap-hours", 6.0);
+    var edited = CurvePrice.factors(custom);
+    assertEquals(48, edited.halfLifeHours());
+    assertEquals(6, edited.halfLifeCheapHours());
+    assertEquals(-64, CurvePrice.fold(-128, 0.05, 6L * 3_600_000, edited), 1e-6);
+    assertEquals(-64, CurvePrice.fold(-128, 4000, 48L * 3_600_000, edited), 1e-9);
+  }
+
+  @Test void tradeTotalIsTheSumForOneAndForMany() {
+    assertEquals(CurvePrice.sellCents(CurvePrice.mid(200, 0), null, F), CurvePrice.sumSell(200, 0, 1, null, F));
+    assertEquals(17764901, CurvePrice.sumSell(4000, 0, 64, null, F));
+    long one = CurvePrice.sumBuy(0.05, 0, 1, F);
+    long many = CurvePrice.sumBuy(0.05, 0, 64, F);
+    assertTrue(many > one);
+    assertNotEquals(one, many);
+  }
+
   @Test void revenueLimitReadsConfig() {
     var cfg = new YamlConfiguration();
     assertEquals(150000, Market.revenueLimit(cfg));
