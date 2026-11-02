@@ -15,7 +15,7 @@ class ServerProfileTest {
   }
 
   @Test void commandsAreRestrictedWhenEconomyIsDisabled() {
-    for (String command : new String[]{"balance", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "testrun"}) {
+    for (String command : new String[]{"balance", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "testrun", "satchel"}) {
       assertFalse(ServerProfile.commandAllowed(false, command), command);
       assertTrue(ServerProfile.commandAllowed(true, command), command);
       String uppercase = command.toUpperCase(Locale.ROOT);

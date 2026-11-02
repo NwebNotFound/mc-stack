@@ -8,6 +8,9 @@ commands:
   vw:
     description: VIP-Welten verwalten
     usage: /vw create|rename|list|start|stop|join
+  satchel:
+    description: Mystery Satchels oeffnen und verwalten
+    usage: /satchel [create <name> <cp>|additem <satchel> <raritaet> [gewicht]|open <name> [1|10]]
   pvp:
     description: PvP-Warteschlange und Build-Verwaltung
     usage: /pvp queue|leave|build|arena|kit
@@ -113,6 +116,9 @@ permissions:
   craftcore.admin.npc:
     default: op
   craftcore.admin:
+    default: op
+  craftcore.satchel.admin:
+    description: Satchels anlegen und Items hinzufuegen
     default: op
   craftcore.portal.admin:
     default: op
