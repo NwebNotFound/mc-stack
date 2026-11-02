@@ -20,7 +20,6 @@ class SpawnRouteTest {
   }
   @Test void sendChannelIsTheVelocityBungeeMainChannel() {
     assertEquals("bungeecord:main", SpawnRoute.CHANNEL);
-    assertEquals("BungeeCord", SpawnRoute.LEGACY_CHANNEL);
   }
   @Test void everyLobbySpellingIsRouted() {
     for (String name : java.util.List.of("lobby", "L", "Hub", "leave", "SPAWN", "Spawn")) {

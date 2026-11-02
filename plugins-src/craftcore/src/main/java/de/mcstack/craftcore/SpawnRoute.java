@@ -17,8 +17,6 @@ final class SpawnRoute {
    * reads for {@code Connect}.
    */
   static final String CHANNEL = "bungeecord:main";
-  /** Legacy name older plugin builds still use; registered as a fallback next to {@link #CHANNEL}. */
-  static final String LEGACY_CHANNEL = "BungeeCord";
   static final String LOBBY = "lobby";
   /** Every spelling that has to lead back to the lobby, {@code /spawn} included. */
   static final List<String> LOBBY_COMMANDS = List.of("lobby", "l", "hub", "leave", "spawn");

@@ -49,10 +49,12 @@ final class LobbyRoute implements Listener {
 
   /** Same warmup the teleports use: no movement, no damage, message every second. */
   void startWarmup(Player player) {
+    boolean restarted = warmups.containsKey(player.getUniqueId());
     cancel(player);
     // /home and /lobby must not run side by side: the last command wins.
     if (Features.instance != null) Features.instance.cancelSilent(player);
     int[] left = {Math.max(1, core.getConfig().getInt("teleport-seconds", 10))};
+    if (restarted) player.sendMessage("Teleport neu gestartet.");
     player.sendMessage("Teleport in " + left[0] + " Sekunden. Stillstehen!");
     int task = Bukkit.getScheduler().scheduleSyncRepeatingTask(core, () -> {
       if (!player.isOnline()) {
@@ -74,7 +76,16 @@ final class LobbyRoute implements Listener {
       if (!Bukkit.getWorlds().isEmpty()) player.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
       return;
     }
-    Bukkit.getScheduler().runTaskAsynchronously(core, () -> markArrival(player.getUniqueId()));
+    // The mark has to be in the database before the connect: the lobby reads it on join.
+    Bukkit.getScheduler().runTaskAsynchronously(core, () -> {
+      markArrival(player.getUniqueId());
+      Bukkit.getScheduler().runTask(core, () -> sendToLobby(player));
+    });
+  }
+
+  /** Main thread: a failed proxy message says so instead of leaving the player behind silently. */
+  void sendToLobby(Player player) {
+    if (!player.isOnline()) return;
     if (!ProxyChannel.send(core, player, SpawnRoute.LOBBY)) {
       player.sendMessage("Lobby-Wechsel fehlgeschlagen. Bitte erneut versuchen.");
     }

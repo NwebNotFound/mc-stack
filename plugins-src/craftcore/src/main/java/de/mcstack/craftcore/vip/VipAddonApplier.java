@@ -31,6 +31,8 @@ public final class VipAddonApplier implements Listener {
     private final VipStore store;
     private final String worldId;
     private volatile List<String> selected = List.of();
+    /** False until the first database read finished; a join before that triggers one itself. */
+    private volatile boolean loaded;
     /** Difficulty before the peaceful addon took over; null while it is off. */
     private Difficulty beforePeaceful;
 
@@ -64,6 +66,7 @@ public final class VipAddonApplier implements Listener {
 
     private void apply(List<String> addons) {
         selected = addons;
+        loaded = true;
         if (Bukkit.getWorlds().isEmpty()) return;
         World world = Bukkit.getWorlds().get(0);
         VipAddonRules.Effects effects = VipAddonRules.world(addons);
@@ -117,6 +120,11 @@ public final class VipAddonApplier implements Listener {
 
     @EventHandler
     public void join(PlayerJoinEvent event) {
+        // A join right after boot must not wait for the five-second refresh to undo a stale grant.
+        if (!loaded) {
+            refresh();
+            return;
+        }
         applyGameMode(event.getPlayer(), selected.contains("creative"));
     }
 }

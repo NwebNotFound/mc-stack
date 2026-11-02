@@ -15,8 +15,6 @@ public final class ProxyChannel {
   /** Safe to call from several modules: an already registered channel is not registered twice. */
   public static void register(JavaPlugin plugin) {
     register(plugin, SpawnRoute.CHANNEL);
-    // Older plugin jars still send on the legacy name; keep it registered so their messages work.
-    register(plugin, SpawnRoute.LEGACY_CHANNEL);
   }
 
   private static void register(JavaPlugin plugin, String channel) {

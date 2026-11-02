@@ -35,6 +35,14 @@ class VipAddonRulesTest {
             "fremdes Kreativ bleibt unangetastet");
     }
 
+    @Test void anAdminWhoWasCreativeBeforeTheAddonIsNotTracked() {
+        VipAddonRules.Mode admin = VipAddonRules.onJoin(true, false, GameMode.CREATIVE, null);
+        assertFalse(admin.change(), "vorhandenes Kreativ (Admin) bleibt unangetastet");
+        assertFalse(admin.mark(), "ohne eigene Vergabe darf keine Markierung entstehen");
+        assertFalse(VipAddonRules.onJoin(false, false, GameMode.CREATIVE, null).change(),
+            "ein nicht markierter Admin verliert beim Abschalten nichts");
+    }
+
     @Test void keepInventoryAddonOnlyTouchesKeepInventory() {
         VipAddonRules.Effects none = VipAddonRules.world(List.of());
         VipAddonRules.Effects one = VipAddonRules.world(List.of("keep-inventory"));
