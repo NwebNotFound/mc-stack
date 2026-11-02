@@ -78,6 +78,7 @@ commands:
   verkaufen:
     description: Gegenstaende an die Bank verkaufen
     aliases: [sell]
+    usage: /sell [gui|hand [Anzahl]|<item> [Anzahl]|all [bestaetigen]]
   market:
     description: Marktpreise und Trend
 

@@ -13,7 +13,7 @@ grave-despawn-minutes: 1440
 
 market:
   sell:
-    enabled: false
+    enabled: true
     # CP pro Verzauberungsstufe; optionale Schluessel z. B. sharpness oder minecraft:sharpness.
     enchant:
       bonus-per-level: 1.0
@@ -150,7 +150,8 @@ market:
     BEACON: 1200.0
     NETHER_STAR: 1000.0
     ELYTRA: 1500.0
-  unsellable: [COBBLESTONE, COBBLED_DEEPSLATE, DIRT, COARSE_DIRT, ROOTED_DIRT, NETHERRACK, ROTTEN_FLESH, KELP, DRIED_KELP, GRAVEL, SAND]
+  # Leer: jedes im Survival erhaeltliche Item ist verkaufbar. Namen hier sperren nur Ausnahmen.
+  unsellable: []
   # Zusaetzliche Sperren neben market_locks. Gesperrt, sobald eine der beiden Quellen sperrt.
   # buy: die Bank verkauft den Artikel nicht. sell: die Bank kauft ihn nicht an.
   lock-fallback: {}

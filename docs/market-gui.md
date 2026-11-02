@@ -18,7 +18,16 @@ Preisaenderungen werden erst mit Speichern uebernommen. Nachfuellen aus der Haup
 45-48  graues Glas | 49 Alles Verkaufbare verkaufen | 50-52 graues Glas | 53 Schliessen
 ```
 
-Ein Klick verkauft ein Stueck, Umschaltklick den ganzen Stack aus dem echten Inventar. Die Schaltflaeche fuer alle verkaufbaren Items oeffnet eine Bestaetigung mit Gesamtpreis und Anzahl. Das Menue nimmt keine Items auf. Vorschau, Preise und Limits werden beim Verkauf erneut serverseitig geprueft; fehlgeschlagene Verkaeufe werden zurueckgegeben. Items mit Wert 0 Cent sind nicht verkaufbar.
+Ein Klick verkauft ein Stueck, Umschaltklick den ganzen Stack aus dem echten Inventar. Die Schaltflaeche fuer alle verkaufbaren Items oeffnet eine Bestaetigung mit Gesamtpreis und Anzahl. Das Menue nimmt keine Items auf. Vorschau, Preise und Limits werden beim Verkauf erneut serverseitig geprueft; fehlgeschlagene Verkaeufe werden zurueckgegeben. Items mit Wert 0 Cent sind nicht verkaufbar. Der Markt-Button oeffnet dieses Menue weiter.
+
+## /sell
+
+- `/sell` und `/sell gui`: Kiste zum Einlegen. Slots 0-44 nehmen Items auf, Slot 48 zeigt die Preisvorschau, Slot 49 verkauft, Slot 53 schliesst. Nicht verkaufte Items, inklusive nicht handelbarer, gehen beim Schliessen ins Inventar oder ins Abholfach.
+- `/sell hand [Anzahl]`: Item in der Haupthand, optional begrenzt.
+- `/sell <item> [Anzahl]`: passende handelbare Stacks im Inventar.
+- `/sell all` verkauft noch nichts. `/sell all bestaetigen` verkauft alle handelbaren Stacks im Inventar.
+
+Jeder Stapel laeuft durch denselben Verkauf wie das Menue, inklusive Mengenobergrenze pro Trade und Tageslimit. Was das Limit ablehnt, kommt zurueck.
 
 ## Bank-Verkaufspreis
 

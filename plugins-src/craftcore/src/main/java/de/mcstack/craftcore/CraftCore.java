@@ -234,6 +234,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       return List.of();
     }
     if(command.getName().equals("pay") && args.length==1) try { return tx(c->{ List<String> names=new ArrayList<>(); try(PreparedStatement s=c.prepareStatement("SELECT name FROM known_players ORDER BY name")){try(ResultSet r=s.executeQuery()){while(r.next()){String name=r.getString(1); if(name.toLowerCase(Locale.ROOT).startsWith(args[0].toLowerCase(Locale.ROOT))) names.add(name);}}} return names; }); } catch(Exception ex) { getLogger().warning("Pay-Vervollstaendigung: "+ex); return List.of(); }
+    if(command.getName().equals("verkaufen")) return SellModes.complete(args);
     return null;
   }
   @EventHandler public void quit(PlayerQuitEvent e) { sidebars.remove(e.getPlayer().getUniqueId()); DeliveryNotices.quit(e.getPlayer()); }
@@ -405,7 +406,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "ah": if(moduleAvailable(Auction.instance,p::sendMessage)) Auction.instance.command(p,args); break;
         case "trade": if(moduleAvailable(trade,p::sendMessage)) trade.command(p,args); break;
         case "npc": if(moduleAvailable(npcs,p::sendMessage)) npcs.command(p,args); break;
-        case "verkaufen": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.openSell(p); break;
+        case "verkaufen": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.sellCommand(p,args); break;
         case "bank": case "market": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.command(p,command.getName(),args); break;
         case "claim": case "unclaim": case "spawn": case "home": case "sethome": if(moduleAvailable(Features.instance,p::sendMessage)) Features.instance.command(p,command.getName(),args); break;
       }
