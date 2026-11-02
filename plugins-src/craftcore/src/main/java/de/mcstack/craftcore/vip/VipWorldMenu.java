@@ -1,12 +1,9 @@
 package de.mcstack.craftcore.vip;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import de.mcstack.craftcore.ProxyChannel;
 import java.util.Locale;
 import java.util.Objects;
 import org.bukkit.Bukkit;
-import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -38,13 +35,22 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
 
     public void start() {
         Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this);
-        Bukkit.getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
+        ProxyChannel.register(plugin);
         Bukkit.getPluginManager().registerEvents(this, plugin);
         Bukkit.getPluginManager().registerEvents(new VipStarGuard(), plugin);
         module.start();
         if (worldId == null || worldId.isBlank()) {
             plugin.getLogger().warning("CRAFTCORE_VIP_WORLD_ID fehlt; das In-World-Menue ist nicht verfuegbar.");
         }
+    }
+
+    /** Entry point of {@code /vip} on a VIP slot. */
+    public void openMenu(Player player) {
+        if (worldId == null || worldId.isBlank()) {
+            player.sendMessage("Diesem Server ist keine VIP-Welt zugeordnet.");
+            return;
+        }
+        gui.openWorld(player, worldId);
     }
 
     public void shutdown() { module.shutdown(); }
@@ -82,7 +88,7 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
     @EventHandler
     public void join(PlayerJoinEvent event) {
         if (worldId == null || worldId.isBlank()) return;
-        VipStarGuard.give(event.getPlayer(), VipStarGuard.KEY);
+        VipStarGuard.remove(event.getPlayer());
     }
 
     @EventHandler
@@ -98,13 +104,7 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
         public void connect(Player player, String slot) { send(player, slot); }
         public void lobby(Player player) { send(player, "lobby"); }
         private void send(Player player, String server) {
-            try {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF(server); }
-                player.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
-            } catch (IOException e) {
-                player.sendMessage("Verbindung zu " + server + " fehlgeschlagen.");
-            }
+            ProxyChannel.send(plugin, player, server);
         }
     }
 }

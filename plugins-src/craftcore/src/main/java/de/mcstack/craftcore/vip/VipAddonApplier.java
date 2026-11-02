@@ -1,7 +1,9 @@
 package de.mcstack.craftcore.vip;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
@@ -22,6 +24,8 @@ public final class VipAddonApplier implements Listener {
     private final String worldId;
     /** Players who are only in creative because of the addon, so the mode can be given back. */
     private final Set<UUID> creativeGranted = new HashSet<>();
+    /** Game mode a player had before the addon handed out creative. */
+    private final Map<UUID, GameMode> modeBeforeGrant = new HashMap<>();
     private volatile List<String> selected = List.of();
     /** Difficulty before the peaceful addon took over; null while it is off. */
     private Difficulty beforePeaceful;
@@ -52,26 +56,39 @@ public final class VipAddonApplier implements Listener {
         selected = addons;
         if (Bukkit.getWorlds().isEmpty()) return;
         World world = Bukkit.getWorlds().get(0);
+        VipAddonRules.Effects effects = VipAddonRules.world(addons);
         boolean peaceful = addons.contains("peaceful");
-        world.setGameRule(GameRule.KEEP_INVENTORY, addons.contains("keep-inventory"));
-        world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, !addons.contains("day-lock"));
-        world.setGameRule(GameRule.DO_MOB_SPAWNING, !peaceful);
-        world.setPVP(addons.contains("pvp"));
+        world.setGameRule(GameRule.KEEP_INVENTORY, effects.keepInventory());
+        world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, effects.daylightCycle());
+        world.setGameRule(GameRule.DO_MOB_SPAWNING, effects.mobSpawning());
+        world.setPVP(effects.pvp());
         Difficulty current = world.getDifficulty();
         if (peaceful && current != Difficulty.PEACEFUL) beforePeaceful = current;
         world.setDifficulty(VipAddonRules.difficulty(peaceful, beforePeaceful, current));
         if (!peaceful) beforePeaceful = null;
-        if (addons.contains("day-lock")) world.setTime(6000L);
+        if (effects.pinNoon()) world.setTime(6000L);
         applyGameMode(world, addons.contains("creative"));
     }
 
+    /**
+     * Hands creative out once per player instead of forcing it every tick: the addon used to reset
+     * every other game mode, which is why {@code /gamemode} had no effect while it was active.
+     */
     private void applyGameMode(World world, boolean creative) {
         for (Player player : world.getPlayers()) {
             UUID id = player.getUniqueId();
-            GameMode next = VipAddonRules.mode(creative, creativeGranted.contains(id), player.getGameMode());
+            if (creative) {
+                GameMode next = VipAddonRules.grant(true, creativeGranted.contains(id), player.getGameMode());
+                if (next != null) {
+                    modeBeforeGrant.put(id, player.getGameMode());
+                    player.setGameMode(next);
+                }
+                creativeGranted.add(id);
+                continue;
+            }
+            if (!creativeGranted.remove(id)) continue;
+            GameMode next = VipAddonRules.revoke(true, player.getGameMode(), modeBeforeGrant.remove(id));
             if (next != null) player.setGameMode(next);
-            if (creative) creativeGranted.add(id);
-            else creativeGranted.remove(id);
         }
     }
 
@@ -80,8 +97,10 @@ public final class VipAddonApplier implements Listener {
         Player player = event.getPlayer();
         UUID id = player.getUniqueId();
         if (creativeGranted.contains(id)) return;
-        GameMode next = VipAddonRules.mode(selected.contains("creative"), false, player.getGameMode());
-        if (next != null) player.setGameMode(next);
-        if (selected.contains("creative")) creativeGranted.add(id);
+        GameMode next = VipAddonRules.grant(selected.contains("creative"), false, player.getGameMode());
+        if (next == null) return;
+        modeBeforeGrant.put(id, player.getGameMode());
+        player.setGameMode(next);
+        creativeGranted.add(id);
     }
 }

@@ -750,8 +750,17 @@ final class Market implements Listener {
       ()->sellStack(p.getUniqueId(),key,nbt,sold,damage,enchants,config),
       result->{finishSell(p,p.getUniqueId(),key,sold,result); if(after!=null && result.status()==SellTransaction.CommitStatus.COMMITTED) after.run();});
   }
+  /**
+   * Material rules for the bank buyback. Every survival-obtainable item is sellable unless an
+   * admin names it in {@code market.unsellable}; item rules (meta, market star, price) are checked
+   * separately. Dirt, sand, gravel and tools are deliberately included.
+   */
+  static boolean sellable(org.bukkit.configuration.Configuration cfg, Material m) {
+    return m != null && SurvivalItems.obtainable(cfg, m) && PriceCatalog.eligible(cfg, m)
+        && !cfg.getStringList("market.unsellable").contains(m.name());
+  }
   private boolean canSell(ItemStack real){
-    return real!=null && VipStarGuard.sellable(real) && SurvivalItems.obtainable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType()) && !core.getConfig().getStringList("market.unsellable").contains(real.getType().name());
+    return real!=null && VipStarGuard.sellable(real) && sellable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType());
   }
   private void finishSale(String id) {
     try { core.tx(c->{
