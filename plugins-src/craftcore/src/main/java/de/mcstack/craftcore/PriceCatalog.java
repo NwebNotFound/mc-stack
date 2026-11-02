@@ -7,15 +7,12 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.*;
 
 final class PriceCatalog {
-  static boolean eligible(Material m) {
-    String n=m.name();
-    return m.isItem() && !n.endsWith("_SPAWN_EGG") && !Set.of("BEDROCK","BARRIER","LIGHT","COMMAND_BLOCK","CHAIN_COMMAND_BLOCK","REPEATING_COMMAND_BLOCK","COMMAND_BLOCK_MINECART","STRUCTURE_BLOCK","STRUCTURE_VOID","JIGSAW","DEBUG_STICK","KNOWLEDGE_BOOK","SPAWNER","TRIAL_SPAWNER","VAULT","REINFORCED_DEEPSLATE","BUDDING_AMETHYST","END_PORTAL_FRAME","PETRIFIED_OAK_SLAB").contains(n);
-  }
+  static boolean eligible(Material m) { return m != null && SurvivalItems.obtainable(m.name(), java.util.List.of()); }
   static Map<Material,Double> build(CraftCore core) {
     File file=new File(core.getDataFolder(),"prices-base.yml"); if(!file.exists()) core.saveResource("prices-base.yml",false);
     YamlConfiguration cfg=YamlConfiguration.loadConfiguration(file);
     List<Recipe> recipes=new ArrayList<>(); Bukkit.recipeIterator().forEachRemaining(recipes::add);
-    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList(), Material::isItem, PriceCatalog::category);
+    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList(), m -> m.isItem() && SurvivalItems.obtainable(core.getConfig(), m), PriceCatalog::category);
   }
   record CatalogRecipe(Material output, int amount, List<List<Material>> ingredients, boolean cooking) {
     CatalogRecipe(Material output, int amount, List<List<Material>> ingredients) { this(output,amount,ingredients,false); }
@@ -53,7 +50,7 @@ final class PriceCatalog {
   static Map<Material,Double> build(YamlConfiguration cfg, List<CatalogRecipe> recipes, java.util.function.Predicate<Material> eligible, java.util.function.Function<Material,String> categories) {
     Map<Material,Double> prices=new EnumMap<>(Material.class); Set<Material> fixed=EnumSet.noneOf(Material.class);
     var section=cfg.getConfigurationSection("base");
-    if(section!=null) for(String key:section.getKeys(false)) { Material m=Material.matchMaterial(key); double v=section.getDouble(key); if(m==null || !eligible.test(m) || !Double.isFinite(v) || v<0.01) throw new IllegalArgumentException("Ungueltiger Basispreis: "+key); prices.put(m,v); fixed.add(m); }
+    if(section!=null) for(String key:section.getKeys(false)) { Material m=Material.matchMaterial(key); double v=section.getDouble(key); if(m==null || !Double.isFinite(v) || v<0.01) throw new IllegalArgumentException("Ungueltiger Basispreis: "+key); if(!eligible.test(m)) continue; prices.put(m,v); fixed.add(m); }
     Set<Material> outputs=EnumSet.noneOf(Material.class);
     for(CatalogRecipe r:recipes) outputs.add(r.output());
     for(Material m:Material.values()) if(eligible.test(m) && !prices.containsKey(m) && !outputs.contains(m)) { double value=cfg.getDouble("fallback."+categories.apply(m),cfg.getDouble("fallback.default",10)); if(!Double.isFinite(value)||value<.01) throw new IllegalArgumentException("Ungueltiger Fallback: "+m); prices.put(m,value); fixed.add(m); }

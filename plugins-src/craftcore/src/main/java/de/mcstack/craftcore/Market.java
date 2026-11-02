@@ -78,6 +78,8 @@ final class Market implements Listener {
     if(SpawnRoute.isSurvival(System.getenv().getOrDefault("CRAFTCORE_SERVER","Server")))
       Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); WebsiteStats.snapshot(c,java.time.Instant.now()); return null; }); } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); } },1L,72000L);
     else Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
+    int dropped=core.tx(c->SurvivalItems.purge(c,name->!SurvivalItems.obtainable(name, core.getConfig().getStringList("market.unobtainable"))));
+    if(dropped>0) core.getLogger().info("Unobtainable Katalogzeilen entfernt: "+dropped);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -90,7 +92,7 @@ final class Market implements Listener {
     if(!Double.isFinite(min)||!Double.isFinite(max)||min<0||max<min)throw new IllegalArgumentException("Ungueltige Preisgrenzen: "+m);
     return new Quote(base,min,max,base*cfg.getDouble("market.pressure-factor",0.01));
   }
-  static boolean unbuyable(org.bukkit.configuration.Configuration cfg, Material m) { return m.name().startsWith("NETHERITE_") || m.name().endsWith("SHULKER_BOX") || m.name().endsWith("_SPAWN_EGG") || m == Material.ENCHANTED_BOOK || cfg.getStringList("market.unbuyable").contains(m.name()); }
+  static boolean unbuyable(org.bukkit.configuration.Configuration cfg, Material m) { return !SurvivalItems.obtainable(cfg, m) || m.name().startsWith("NETHERITE_") || m.name().endsWith("SHULKER_BOX") || m.name().endsWith("_SPAWN_EGG") || m == Material.ENCHANTED_BOOK || cfg.getStringList("market.unbuyable").contains(m.name()); }
   static long cents(org.bukkit.configuration.Configuration cfg, Material m, double current, boolean buy) {
     double floor=cfg.getDouble("market.price-floor."+m.name(),0);
     long cents=PriceModel.withFloor(PriceModel.factorQuote(current,cfg.getDouble(buy?"market.buy-factor":"market.sell-factor",buy?1.5:0.25)),floor);
@@ -164,7 +166,7 @@ final class Market implements Listener {
   private long revenueLimit() { long limit=150000L; if(limit<0) throw new IllegalArgumentException("market.daily-revenue-limit muss mindestens 0 sein"); return limit; }
   private ItemStack button(Material type,String name) { ItemStack item=new ItemStack(type); ItemMeta meta=item.getItemMeta(); meta.setDisplayName(name); item.setItemMeta(meta); return item; }
   private void open(Player p,String category,String query,int requested) throws Exception {
-    List<Material> filtered=items.keySet().stream().filter(m->(category.equals("alle") || PriceCatalog.category(m).equals(category)) && m.name().toLowerCase(Locale.ROOT).contains(query)).sorted(Comparator.comparing(Material::name)).toList();
+    List<Material> filtered=items.keySet().stream().filter(m->SurvivalItems.obtainable(core.getConfig(), m) && (category.equals("alle") || PriceCatalog.category(m).equals(category)) && m.name().toLowerCase(Locale.ROOT).contains(query)).sorted(Comparator.comparing(Material::name)).toList();
     int pages=Math.max(1,(filtered.size()+44)/45), page=Math.max(0,Math.min(requested,pages-1)); Menu menu=new Menu(category,query,page);
     Inventory inv=Bukkit.createInventory(menu,54,"Markt " + (page+1)+"/"+pages+" " + category);
     long remaining=core.tx(c->DiscordRevenue.remaining(c,p.getUniqueId().toString(),dayKey(),revenueLimit()));
@@ -190,6 +192,7 @@ final class Market implements Listener {
     return cents / maxDurability * remaining + cents % maxDurability * remaining / maxDurability;
   }
   private void sell(Player p, Material m) throws Exception {
+    if(!SurvivalItems.obtainable(core.getConfig(), m)) { p.sendMessage("Dieses Item gibt es im Survival nicht."); return; }
     PlayerInventory inv=p.getInventory(); int slot=-1;
     for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && eligible(stack)) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
@@ -413,7 +416,7 @@ final class Market implements Listener {
   private boolean isUnbuyable(Material m) { return unbuyable(core.getConfig(),m); }
   /** Bank purchase checks for order type bank_buy: same as buy(Player,Material). */
   BankBuy.Env bankEnv() { return new BankBuy.Env() {
-    private Material mat(String item) { Material m=Material.matchMaterial(item); return m!=null && items.containsKey(m) ? m : null; }
+    private Material mat(String item) { Material m=Material.matchMaterial(item); return m!=null && items.containsKey(m) && SurvivalItems.obtainable(core.getConfig(), m) ? m : null; }
     public String blocked(Connection c,String item) throws Exception { Material m=mat(item); if(m==null) return "UNKNOWN"; return buyEnabled(isUnbuyable(m),tradable(m),locked(c,m,true)) ? null : "LOCKED"; }
     public int maxStack(String item) { Material m=mat(item); return m==null ? 0 : m.getMaxStackSize(); }
     public long unitPrice(Connection c,String item) throws Exception { return price(c,mat(item),false,true).cents(); }
@@ -427,6 +430,7 @@ final class Market implements Listener {
     public void stats(Connection c,String item,int amount,long cents) throws Exception { WebsiteStats.event(c,item,amount,cents,"bank"); }
   }; }
   private void buy(Player p,Material m) throws Exception {
+    if(!SurvivalItems.obtainable(core.getConfig(), m)) { p.sendMessage("Dieses Item gibt es im Survival nicht."); return; }
     if(!buyEnabled(isUnbuyable(m),tradable(m),core.tx(c->locked(c,m,true)))) { p.sendMessage("Dieser Artikel ist nur durch Spielerhandel erhaeltlich."); return; }
     UUID player=p.getUniqueId(); String id=UUID.randomUUID().toString();
     boolean accepted=core.tx(c->{long cp=price(c,m,false,true).cents(); long balance=core.balance(c,player); if(balance<cp)return false;

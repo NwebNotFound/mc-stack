@@ -50,6 +50,7 @@ final class MarketEffective {
       Material material = Material.matchMaterial(key);
       double value = section.getDouble(key);
       if (material == null || !Double.isFinite(value) || value < 0.01) throw new IllegalArgumentException("Ungueltiger Basispreis: " + key);
+      if (!SurvivalItems.obtainable(material.name(), List.of())) continue;
       out.put(material, value);
     }
     return out;
@@ -165,6 +166,7 @@ final class MarketEffective {
     }
     try (PreparedStatement insert = connection.prepareStatement("INSERT INTO market_effective_price(item,buy_price,sell_price,base_price) VALUES(?,?,?,?)")) {
       for (var entry : quotes.entrySet()) {
+        if (!SurvivalItems.obtainable(cfg, entry.getKey())) continue;
         insert.setString(1, entry.getKey().name());
         if (entry.getValue().buy() == null) insert.setNull(2, Types.DECIMAL); else insert.setDouble(2, entry.getValue().buy());
         insert.setDouble(3, entry.getValue().sell());
