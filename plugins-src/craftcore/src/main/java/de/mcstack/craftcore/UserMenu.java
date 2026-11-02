@@ -1,9 +1,6 @@
 package de.mcstack.craftcore;
 
 import java.util.*;
-import de.mcstack.craftcore.vip.VipMenuModel;
-import de.mcstack.craftcore.vip.VipPerks;
-import de.mcstack.craftcore.vip.VipStore;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -77,37 +74,8 @@ final class UserMenu implements Listener, CommandExecutor, TabCompleter {
     for(int i=0;i<entries.size() && i<size;i++){Entry e=entries.get(i);ItemStack item=new ItemStack(e.material());ItemMeta m=item.getItemMeta();m.displayName(Component.text(e.name(),NamedTextColor.AQUA));m.lore(Arrays.stream(e.description().split(" \\| ")).map(line->Component.text(line,NamedTextColor.GRAY)).toList());item.setItemMeta(m);inv.setItem(i,item);}p.openInventory(inv);
   }
   private void openVip(Player player) {
-    UUID id=player.getUniqueId();
-    int slots=VipPerks.slots(id);
-    Inventory previous=player.getOpenInventory().getTopInventory();
-    Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
-      List<Entry> entries=new ArrayList<>();
-      try {
-        List<VipStore.World> worlds=new VipStore(plugin::connection).list(id);
-        // Leave room for the limit indicator and help book in the inventory.
-        for (var slot:VipMenuModel.slots(Math.min(slots,52),Math.min(worlds.size(),52))) {
-          switch (slot.kind()) {
-            case OCCUPIED -> {
-              var world=worlds.get(slot.worldIndex());
-              entries.add(new Entry(world.name(),Material.GRASS_BLOCK,"vw start "+world.name(),
-                  "Slot belegt | Typ: "+world.type()+" | Status: "+world.status()));
-            }
-            case FREE -> entries.add(new Entry("Freier Slot",Material.LIME_DYE,"vw create ",
-                "Welt erstellen: /vw create <name> [normal|flat|void]",true));
-            case LOCKED -> entries.add(new Entry("Gesperrter Slot",Material.BARRIER,"",slot.reason()));
-          }
-        }
-        entries.add(new Entry("VIP-Welten: Hilfe",Material.BOOK,"",
-            "VIP/MVP benötigt: 1 / 3 Slots | /vw create <name> [normal|flat|void] | /vw list | /vw start|stop|join <welt>"));
-      } catch (Exception ex) {
-        plugin.getLogger().warning("VIP-Menü: "+ex.getClass().getSimpleName());
-        entries.add(new Entry("VIP-Welten nicht verfügbar",Material.BARRIER,"","Bitte später erneut versuchen."));
-      }
-      Bukkit.getScheduler().runTask(plugin,()->{
-        Player current=Bukkit.getPlayer(id);
-        if (current==player && current.getOpenInventory().getTopInventory().equals(previous)) show(current,"vip",entries);
-      });
-    });
+    if (plugin.lobbyVip()==null) { player.sendMessage("VIP-Menue nicht verfuegbar."); return; }
+    plugin.lobbyVip().gui().openHub(player);
   }
   public boolean onCommand(CommandSender sender,Command command,String label,String[] args){if(!(sender instanceof Player p)){sender.sendMessage("[Craft] Nur im Spiel verfuegbar.");return true;}if(command.getName().equals("menu"))open(p,"menu");else help(p,args.length==0?"":args[0]);return true;}
   public List<String> onTabComplete(CommandSender s,Command c,String alias,String[] args){return c.getName().equals("help")&&args.length==1?complete(args[0],"handel","teleport","team","welt"):List.of();}

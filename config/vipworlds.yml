@@ -40,3 +40,24 @@ perks:
 # TODO: Hook fuer Rangablauf; Entscheidung zu Frage 11 steht noch aus.
 expiry:
   # Noch keine Aktion festgelegt.
+
+# Spielerlimit pro laufender Welt. Hartes Maximum: 15 (players.max wird darauf begrenzt).
+players:
+  vip: 5
+  mvp: 10
+  admin: 10
+  max: 15
+
+# Admin-Weltplaetze, wenn LuckPerms kein vipworlds.slots-Meta setzt.
+admin-slots: 3
+
+# Pro Welt waehlbare Addons (siehe scripts/vip-worlds-rework.sql).
+addons:
+  max: 3
+  catalog: [keep-inventory, peaceful, creative, day-lock, pvp]
+
+# Start-Fortschritt: Abfrageintervall, Timeout, aufeinanderfolgende Host-Fehler.
+start-poll-seconds: 2
+start-max-errors: 5
+# Vertraute Mitglieder duerfen die Welt starten.
+trusted-may-start: true

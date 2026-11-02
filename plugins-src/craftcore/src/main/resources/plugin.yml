@@ -126,6 +126,9 @@ permissions:
   craftcore.npc.set:
     description: NPCs setzen
     default: op
+  craftcore.vip.admin:
+    description: VIP-Welten verwalten und betreten
+    default: op
   craftcore.end.bypass:
     description: End-Sperre fuer Ops umgehen
     default: op
