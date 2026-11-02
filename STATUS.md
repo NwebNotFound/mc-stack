@@ -741,6 +741,20 @@ Frischer temporaerer MariaDB-Build: 103 Tests, 0 Fehler, 0 uebersprungen; beide 
 - Offen: #63 Review/Merge; Host meldet "online" schon bei laufendem Container, nicht erst wenn Paper bereit ist (Connect direkt nach Start kann fehlschlagen); Queue, Mitglieder, Backups, /vwadmin, Welttyp, Frage 11 (Ablauf), Frage 16 (Panel); Ingame-Test durch Nils.
 
 
+## 2026-11-02 - VIP-Welten-Rework (PR offen, nicht deployt)
+
+Branch `feat/vip-rework` (Worktree `C:\Users\nilsw\vip-worktree`), Basis `92ad8bd`. Nichts gemergt, deployt oder neu gestartet; Checkout, Daten, Backups und `bot/` unveraendert.
+
+- Menues: `VipGui` (Hub, Weltverwaltung, Typauswahl, Mitglieder, Addons) ersetzt die alten Chat-Hinweise. `/vw` ohne Argument und `/vip` oeffnen den Hub; alle Aktionen laufen ueber Methoden, nie ueber Befehlsstrings. Namen werden im Chat eingegeben (60 s, `/vw menu` bricht ab).
+- Start: `VipStartCoordinator` startet pro Welt genau einmal (`computeIfAbsent` + gemeinsames `CompletableFuture`), pollt `GET /vip/status` und verbindet erst nach `online`. Bossbar mit Fortschritt und Text; `no_free_slot`, `ram_budget`, `world_not_found`, Host-Fehler und Timeout beenden alle Wartenden und setzen den Status auf `stopped`.
+- Aufraeumen: `PlayerQuitEvent` entfernt Bossbar, Chat-Eingabe und Warteschlange; der letzte Wartende bricht den Start ab. Ein abgebrochener Start erreicht den Host nicht mehr.
+- In-World: `/vw` und ein Netherstern (Hotbar-Slot 8) oeffnen die Verwaltung der Welt aus `CRAFTCORE_VIP_WORLD_ID`. Einladen, kicken (entfernt das Mitglied und schickt es in die Lobby), Vertrauen umschalten.
+- Addons: Katalog `keep-inventory`, `peaceful`, `creative`, `day-lock`, `pvp`, maximal 3 pro Welt, Tabelle `vip_world_addons`. `VipAddonApplier` wendet sie auf dem VIP-Server alle 5 s an.
+- Rechte/Limits: Admins (`group.admin` oder `craftcore.vip.admin`) duerfen fremde VIP-/MVP-Welten betreten und verwalten; Admin-Slots mindestens `admin-slots` (3). Spielerlimit VIP 5, MVP 10, Admin 10, `players.max` hart auf 15 begrenzt; das Join-Gate prueft das Limit und laesst Besitzer und Admins auch in volle Welten.
+- SQL: `scripts/vip-worlds-rework.sql` (Tabelle + `GRANT` fuer `craft_vip`), `vip-worlds.sql` legt die Tabelle ebenfalls an, `vip-db-user.sql` ergaenzt die Schreibrechte. Migration noch nicht ausgefuehrt.
+- Build: `docker run --rm -v craftcore-gradle-cache:/home/gradle/.gradle -v <worktree>:/w -w /w/plugins-src/craftcore gradle:9-jdk gradle build --no-daemon` -> BUILD SUCCESSFUL, 409 Tests, 0 Fehler (13 uebersprungen). Neu: `VipLimitsTest`, `VipConfigTest`, `VipStartProgressTest`, `VipStartCoordinatorTest` (9 Faelle inkl. Nebenlaeufigkeit und Timeout), `VipAddonsTest`, `VipMemberRulesTest`, `VipStoreMembersTest`.
+- Offen: Migration und Deploy, Ingame-Test mit echtem Client (GUIs, Bossbar, Einladen/Kicken), Admin-Sicht auf fremde Welten im Hub (nur per `/vw join <name>`), `creative`-Addon setzt den Spielmodus nur beim Join, Presence auf VIP-Slots, Website-Queue und `/lobby`-Velocity-Plugin (separater PR).
+
 ## TODO
 
 - ParkourBridge: move() kehrt fruehzeitig zurueck, wenn sich der Y-Wert nicht aendert (Y-Early-Return). Beim ebenen Hineinlaufen in eine Wasserstroemung wird daher der Wasser-Reset nicht ausgeloest. Spaeter pruefen, ob die Wasserpruefung vor diesem Early-Return stattfinden sollte.

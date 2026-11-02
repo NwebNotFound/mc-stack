@@ -7,9 +7,12 @@ import java.util.*;
 public final class VipStore {
     @FunctionalInterface public interface ConnectionSource { Connection open() throws SQLException; }
     public record World(String id, String name, String status, String slot, String type) {}
+    public record Entry(String id, UUID owner, String name, String type, String status, String slot) {}
+    public record Member(UUID player, String name, String role) {}
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
     static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) VALUES (?,?,?,?,'stopped',?)";
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
+    static final String FIND_WORLD = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE id=? AND status<>'deleted'";
     static final String RENAME_WORLD = "UPDATE vip_worlds SET name=? WHERE id=? AND owner=? AND status<>'deleted'";
     static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=?";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
@@ -18,6 +21,18 @@ public final class VipStore {
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
     static final String STOP_IDLE_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='idle' WHERE world_id=? AND stopped_at IS NULL";
+
+    static final String LIST_MEMBERS = "SELECT m.player,m.role,p.name FROM vip_world_members m LEFT JOIN known_players p ON p.uuid=m.player WHERE m.world_id=? ORDER BY m.added_at";
+    static final String COUNT_MEMBERS = "SELECT COUNT(*) FROM vip_world_members WHERE world_id=?";
+    static final String INSERT_MEMBER = "INSERT INTO vip_world_members (world_id,player,role,added_at) VALUES (?,?,?,?)";
+    static final String DELETE_MEMBER = "DELETE FROM vip_world_members WHERE world_id=? AND player=?";
+    static final String SET_MEMBER_ROLE = "UPDATE vip_world_members SET role=? WHERE world_id=? AND player=?";
+    static final String LIST_ADDONS = "SELECT addon FROM vip_world_addons WHERE world_id=?";
+    static final String DELETE_ADDONS = "DELETE FROM vip_world_addons WHERE world_id=?";
+    static final String INSERT_ADDON = "INSERT INTO vip_world_addons (world_id,addon,added_at) VALUES (?,?,?)";
+    static final String SET_STARTED = "UPDATE vip_worlds SET status='running',slot=?,last_started_at=? WHERE id=? AND status<>'deleted'";
+    static final String FIND_PLAYER = "SELECT uuid FROM known_players WHERE name=?";
+    static final String FIND_BY_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE name=? AND status<>'deleted' LIMIT 1";
 
     private final ConnectionSource source;
     private final Clock clock;
@@ -40,6 +55,89 @@ public final class VipStore {
         }
     }
     public Optional<World> find(UUID owner, String name) throws SQLException { return list(owner).stream().filter(w->w.name().equalsIgnoreCase(name)).findFirst(); }
+    public Optional<Entry> findById(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_WORLD)) {
+            s.setString(1,id);
+            try (ResultSet r=s.executeQuery()) {
+                if (!r.next()) return Optional.empty();
+                return Optional.of(new Entry(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),r.getString(6)));
+            }
+        }
+    }
+    public List<Member> members(String worldId) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_MEMBERS)) {
+            s.setString(1,worldId);
+            try (ResultSet r=s.executeQuery()) {
+                List<Member> members=new ArrayList<>();
+                while(r.next()) members.add(new Member(UUID.fromString(r.getString(1)),r.getString(3),r.getString(2)));
+                return members;
+            }
+        }
+    }
+    public int memberCount(String worldId) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(COUNT_MEMBERS)) {
+            s.setString(1,worldId); try (ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
+        }
+    }
+    public void addMember(String worldId, UUID player, String role) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(INSERT_MEMBER)) {
+            s.setString(1,worldId); s.setString(2,player.toString()); s.setString(3,role); s.setLong(4,clock.millis()); s.executeUpdate();
+        }
+    }
+    public boolean removeMember(String worldId, UUID player) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(DELETE_MEMBER)) {
+            s.setString(1,worldId); s.setString(2,player.toString()); return s.executeUpdate()>0;
+        }
+    }
+    public boolean setMemberRole(String worldId, UUID player, String role) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_MEMBER_ROLE)) {
+            s.setString(1,role); s.setString(2,worldId); s.setString(3,player.toString()); return s.executeUpdate()>0;
+        }
+    }
+    public List<String> addons(String worldId) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_ADDONS)) {
+            s.setString(1,worldId);
+            try (ResultSet r=s.executeQuery()) { List<String> addons=new ArrayList<>(); while(r.next()) addons.add(r.getString(1)); return addons; }
+        }
+    }
+    public void setAddons(String worldId, List<String> addons) throws SQLException {
+        long now=clock.millis();
+        try (Connection c=source.open()) { c.setAutoCommit(false); try {
+            try (PreparedStatement s=c.prepareStatement(DELETE_ADDONS)) { s.setString(1,worldId); s.executeUpdate(); }
+            try (PreparedStatement s=c.prepareStatement(INSERT_ADDON)) {
+                for (String addon : addons) { s.setString(1,worldId); s.setString(2,addon); s.setLong(3,now); s.addBatch(); }
+                s.executeBatch();
+            }
+            c.commit();
+        } catch(SQLException e) { c.rollback(); throw e; } }
+    }
+    /** Marks a world running after the host confirmed the slot, and opens a run row. */
+    public void started(String id, String slot) throws SQLException {
+        long now=clock.millis();
+        try (Connection c=source.open()) { c.setAutoCommit(false); try {
+            try (PreparedStatement s=c.prepareStatement(SET_STARTED)) {
+                s.setString(1,slot); s.setLong(2,now); s.setString(3,id);
+                if (s.executeUpdate()!=1) throw new SQLException("Welt nicht gefunden");
+            }
+            try (PreparedStatement s=c.prepareStatement(INSERT_RUN)) { s.setString(1,id); s.setString(2,slot); s.setLong(3,now); s.executeUpdate(); }
+            c.commit();
+        } catch(SQLException e) { c.rollback(); throw e; } }
+    }
+    public Optional<UUID> player(String name) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_PLAYER)) {
+            s.setString(1,name);
+            try (ResultSet r=s.executeQuery()) { return r.next() ? Optional.of(UUID.fromString(r.getString(1))) : Optional.empty(); }
+        }
+    }
+    public Optional<Entry> findByName(String name) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_BY_NAME)) {
+            s.setString(1,name);
+            try (ResultSet r=s.executeQuery()) {
+                if (!r.next()) return Optional.empty();
+                return Optional.of(new Entry(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),r.getString(6)));
+            }
+        }
+    }
     public void rename(UUID owner, String id, String name) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(RENAME_WORLD)) { s.setString(1,name); s.setString(2,id); s.setString(3,owner.toString()); s.executeUpdate(); }
     }

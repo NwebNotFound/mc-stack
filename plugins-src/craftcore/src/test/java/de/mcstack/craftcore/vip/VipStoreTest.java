@@ -15,13 +15,23 @@ class VipStoreTest {
         try (Statement s = c.createStatement()) {
             s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status VARCHAR(16), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
             s.execute("CREATE TABLE vip_world_runs (world_id VARCHAR(36), slot VARCHAR(16), started_at BIGINT, stopped_at BIGINT, stop_reason VARCHAR(32))");
+            s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role VARCHAR(16), added_at BIGINT)");
+            s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT)");
+            s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
         }
         return c;
     }
 
     @Test void sqlConstantsHaveExpectedParameters() throws Exception {
-        Map<String, Integer> expected = Map.of("COUNT_WORLDS", 1, "INSERT_WORLD", 5, "LIST_WORLDS", 1,
-                "RENAME_WORLD", 3, "SET_STATUS", 3, "SET_RUNNING", 3, "INSERT_RUN", 3, "SET_STOPPED", 1, "STOP_RUNS", 2, "STOP_IDLE_RUNS", 2);
+        Map<String, Integer> expected = Map.ofEntries(
+                Map.entry("COUNT_WORLDS", 1), Map.entry("INSERT_WORLD", 5), Map.entry("LIST_WORLDS", 1),
+                Map.entry("RENAME_WORLD", 3), Map.entry("SET_STATUS", 3), Map.entry("SET_RUNNING", 3),
+                Map.entry("INSERT_RUN", 3), Map.entry("SET_STOPPED", 1), Map.entry("STOP_RUNS", 2),
+                Map.entry("STOP_IDLE_RUNS", 2), Map.entry("FIND_WORLD", 1), Map.entry("LIST_MEMBERS", 1),
+                Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
+                Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
+                Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
+                Map.entry("FIND_BY_NAME", 1));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

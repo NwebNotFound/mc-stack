@@ -29,6 +29,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private String password, server;
   private boolean economyEnabled;
   private de.mcstack.craftcore.vip.VipWorldGate vipWorldGate;
+  private de.mcstack.craftcore.vip.LobbyVip lobbyVip;
+  private de.mcstack.craftcore.vip.VipWorldMenu vipWorldMenu;
   private Economy economy;
   private Trade trade;
   private LaunchPads launchPads;
@@ -50,6 +52,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private CitizensNpcs citizensNpcs;
   private de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
   de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp() { return lobbyPvp; }
+  de.mcstack.craftcore.vip.LobbyVip lobbyVip() { return lobbyVip; }
   private void startCitizensNpcs() {
     if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
   }
@@ -85,7 +88,10 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if (server.startsWith("vipworld-")) {
       try { Class.forName("org.mariadb.jdbc.Driver"); } catch (ClassNotFoundException | LinkageError e) { getLogger().warning("MariaDB-Treiber fehlt; VIP-Zugang nur mit Berechtigung."); }
       vipWorldGate=new de.mcstack.craftcore.vip.VipWorldGate(this, () -> DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=2000&socketTimeout=2000", ServerProfile.dbUser(System.getenv()), password), System.getenv("CRAFTCORE_VIP_WORLD_ID"));
-      vipWorldGate.start(); new de.mcstack.craftcore.vip.VipIdleStop(this).start(); return;
+      vipWorldGate.start(); new de.mcstack.craftcore.vip.VipIdleStop(this).start();
+      new de.mcstack.craftcore.vip.VipAddonApplier(this, this::connection).start();
+      vipWorldMenu=new de.mcstack.craftcore.vip.VipWorldMenu(this, this::connection); vipWorldMenu.start();
+      return;
     }
     if (!economyEnabled) {
       getLogger().info("PvP-Profil: Economy-Module deaktiviert");
@@ -121,7 +127,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       new Features(this).start();
       launchPads=new LaunchPads(this); launchPads.start();
       portals=new Portals(this); portals.start();
-      if ("lobby".equalsIgnoreCase(server)) { lobbyPvp=new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection); lobbyPvp.start(); new de.mcstack.craftcore.vip.LobbyVip(this, this::connection).start(); }
+      if ("lobby".equalsIgnoreCase(server)) { lobbyPvp=new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection); lobbyPvp.start(); lobbyVip=new de.mcstack.craftcore.vip.LobbyVip(this, this::connection); lobbyVip.start(); }
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();
@@ -163,7 +169,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
-  @Override public void onDisable() { if(presence!=null)presence.shutdown(); if(vipWorldGate!=null)vipWorldGate.stop(); menuReturns.shutdown(); if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
+  @Override public void onDisable() { if(presence!=null)presence.shutdown(); if(vipWorldGate!=null)vipWorldGate.stop(); if(lobbyVip!=null)lobbyVip.shutdown(); if(vipWorldMenu!=null)vipWorldMenu.shutdown(); menuReturns.shutdown(); if(Market.instance!=null)Market.instance.shutdown(); if(deathEvents!=null)deathEvents.shutdown(); if(launchPads!=null)launchPads.shutdown(); if(playerStats!=null)playerStats.shutdown(); if(inventorySync!=null)inventorySync.shutdown(); if(motivation!=null)motivation.shutdown(); if(teamInvites!=null)teamInvites.shutdown(); if(trade!=null)trade.shutdown(); getServer().getServicesManager().unregisterAll(this); }
   private OfflinePlayer resolve(Object value) { if(value instanceof OfflinePlayer p)return p; if(value instanceof String s) return Bukkit.getOfflinePlayer(s); throw new IllegalArgumentException("Spieler fehlt"); }
   private Object vault(String method,Object[] args) throws Exception {
     if(args==null)args=new Object[0];

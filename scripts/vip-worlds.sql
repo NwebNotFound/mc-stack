@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS craftcore.vip_world_queue (
   status ENUM('waiting','started','cancelled') NOT NULL,
   KEY (status, priority, queued_at)
 );
+CREATE TABLE IF NOT EXISTS craftcore.vip_world_addons (
+  world_id CHAR(36) NOT NULL,
+  addon VARCHAR(32) NOT NULL,
+  added_at BIGINT NOT NULL,
+  PRIMARY KEY (world_id, addon),
+  FOREIGN KEY (world_id) REFERENCES craftcore.vip_worlds(id) ON DELETE CASCADE
+);
 
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW craftcore.v_vip_worlds AS
 SELECT w.id, w.owner, p.name AS owner_name, w.name, w.status, w.visibility, w.slot, w.last_started_at
