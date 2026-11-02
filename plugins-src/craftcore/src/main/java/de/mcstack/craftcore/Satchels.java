@@ -21,8 +21,16 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.FurnaceSmeltEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.inventory.PrepareSmithingEvent;
+import org.bukkit.event.inventory.SmithItemEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.inventory.CraftingInventory;
+import org.bukkit.inventory.SmithingInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -138,6 +146,7 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
       meta.displayName(Component.text(satchel.name(), NamedTextColor.AQUA));
       List<Component> lore = new ArrayList<>();
       lore.add(Component.text("Preis: " + Money.format(satchel.priceCents()) + " je Zug", NamedTextColor.GOLD));
+      lore.add(Component.text("Odds sind Basisgewichte. SR nach " + satchel.pitySr() + ", SSR nach " + satchel.pitySsr() + ".", NamedTextColor.GRAY));
       lore.add(Component.text("Links: 1 Zug   Rechts: 10 Zuege", NamedTextColor.GRAY));
       for (SatchelOdds.Share share : odds.get(i)) {
         if (share.weight() <= 0) continue;
@@ -155,8 +164,8 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
     if (!busy.add(player.getUniqueId())) { player.sendMessage("Ein Satchel wird schon geoeffnet."); return; }
     UUID id = player.getUniqueId();
     Bukkit.getScheduler().runTaskAsynchronously(core, () -> {
-      Purchase purchase;
-      try { purchase = core.tx(c -> purchase(c, id, name, count, new Random())); }
+      SatchelStore.Buy purchase;
+      try { purchase = core.tx(c -> SatchelStore.buy(c, id.toString(), name, count, new Random())); }
       catch (Exception ex) {
         busy.remove(id);
         core.getLogger().warning("Satchel-Kauf: " + ex.getClass().getSimpleName());
@@ -167,42 +176,54 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
     });
   }
 
-  private Purchase purchase(java.sql.Connection c, UUID player, String name, int count, Random rng) throws SQLException {
-    var found = SatchelStore.find(c, name);
-    if (found.isEmpty() || !found.get().enabled()) return Purchase.fail("Satchel ist nicht offen.");
-    SatchelStore.Satchel satchel = found.get();
-    List<SatchelStore.Item> items = SatchelStore.items(c, name);
-    if (items.isEmpty()) return Purchase.fail("Dieser Satchel hat noch keine Items.");
-    long cost = Math.multiplyExact(satchel.priceCents(), count);
-    if (!EconomyStore.change(c, player.toString(), -cost)) return Purchase.fail("Nicht genug CP.");
-    List<SatchelOdds.Entry> entries = entries(items);
-    SatchelOdds.Pity pity = SatchelStore.lockPity(c, player.toString(), name);
-    List<SatchelOdds.Outcome> rolls = SatchelOdds.pull(entries, pity, count, satchel.pitySr(), satchel.pitySsr(), rng);
-    SatchelStore.savePity(c, player.toString(), name, rolls.get(rolls.size() - 1).pity());
-    List<byte[]> bytes = new ArrayList<>();
-    List<String> rarities = new ArrayList<>();
-    for (SatchelOdds.Outcome roll : rolls) {
-      SatchelStore.Item item = items.stream().filter(row -> row.id() == roll.entry().id()).findFirst().orElseThrow();
-      bytes.add(item.bytes());
-      rarities.add(item.rarity());
-    }
-    return new Purchase(true, "", bytes, rarities, satchel.priceCents());
+  private void finish(Player player, UUID id, SatchelStore.Buy purchase) {
+    busy.remove(id);
+    if (!purchase.ok()) { if (player.isOnline()) player.sendMessage(purchase.message()); return; }
+    if (!player.isOnline()) return;
+    List<ItemStack> rewards = deliver(player, purchase.claims());
+    if (rewards.isEmpty()) return;
+    player.sendMessage("Satchel geoeffnet. Verkauf der Belohnung ist auf " + Money.format(purchase.claims().get(0).capCents()) + " je Stueck begrenzt.");
+    animate(player, rewards, purchase.claims().stream().map(SatchelStore.Claim::rarity).toList());
   }
 
-  private void finish(Player player, UUID id, Purchase purchase) {
-    busy.remove(id);
-    if (!player.isOnline()) return;
-    if (!purchase.ok()) { player.sendMessage(purchase.message()); return; }
-    List<ItemStack> rewards = new ArrayList<>();
-    for (int i = 0; i < purchase.bytes().size(); i++) {
-      ItemStack item = ItemStack.deserializeBytes(purchase.bytes().get(i));
-      SatchelItems.stamp(item, purchase.capCents());
-      rewards.add(item);
+  private List<ItemStack> deliver(Player player, List<SatchelStore.Claim> claims) {
+    List<ItemStack> given = new ArrayList<>();
+    for (SatchelStore.Claim claim : claims) {
+      boolean won;
+      try { won = core.tx(c -> SatchelStore.take(c, claim.id(), player.getUniqueId().toString())); }
+      catch (Exception ex) { core.getLogger().warning("Satchel-Abholung: " + ex.getClass().getSimpleName()); continue; }
+      if (!won) continue;
+      if (!player.isOnline()) {
+        try { core.tx(c -> { SatchelStore.insertClaim(c, UUID.randomUUID().toString(), player.getUniqueId().toString(), claim.rarity(), claim.bytes(), claim.capCents()); return null; }); }
+        catch (Exception ex) { core.getLogger().severe("Satchel-Abholung nicht zurueckgelegt: " + claim.id() + " " + ex); }
+        continue;
+      }
+      ItemStack item = ItemStack.deserializeBytes(claim.bytes());
+      SatchelItems.stamp(item, claim.capCents());
       var left = player.getInventory().addItem(item);
-      left.values().forEach(drop -> player.getWorld().dropItem(player.getLocation(), drop));
+      if (!left.isEmpty()) {
+        try { core.tx(c -> { for (ItemStack rest : left.values()) SatchelStore.insertClaim(c, UUID.randomUUID().toString(), player.getUniqueId().toString(), claim.rarity(), rest.serializeAsBytes(), claim.capCents()); return null; }); }
+        catch (Exception ex) { core.getLogger().severe("Satchel-Rest nicht gespeichert: " + ex); }
+      }
+      given.add(item);
     }
-    player.sendMessage("Satchel geoeffnet. Verkauf der Belohnung ist auf " + Money.format(purchase.capCents()) + " je Stueck begrenzt.");
-    animate(player, rewards, purchase.rarities());
+    return given;
+  }
+
+  @EventHandler public void join(PlayerJoinEvent event) {
+    Player player = event.getPlayer();
+    UUID id = player.getUniqueId();
+    Bukkit.getScheduler().runTaskAsynchronously(core, () -> {
+      List<SatchelStore.Claim> claims;
+      try { claims = core.tx(c -> SatchelStore.openClaims(c, id.toString())); }
+      catch (Exception ex) { core.getLogger().warning("Satchel-Abholung: " + ex.getClass().getSimpleName()); return; }
+      if (claims.isEmpty()) return;
+      Bukkit.getScheduler().runTask(core, () -> {
+        if (!player.isOnline()) return;
+        List<ItemStack> given = deliver(player, claims);
+        if (!given.isEmpty()) player.sendMessage("Satchel-Belohnung abgeholt. Verkauf ist auf den Zugpreis begrenzt.");
+      });
+    });
   }
 
   private void animate(Player player, List<ItemStack> rewards, List<String> rarities) {
@@ -301,6 +322,45 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
     return List.of();
   }
 
+  @EventHandler(ignoreCancelled = true) public void prepareCraft(PrepareItemCraftEvent event) {
+    if (SatchelCraft.usesCapped(tagged(event.getInventory().getMatrix()))) event.getInventory().setResult(null);
+  }
+
+  @EventHandler(ignoreCancelled = true) public void craft(CraftItemEvent event) {
+    if (!(event.getInventory() instanceof CraftingInventory crafting) || !SatchelCraft.usesCapped(tagged(crafting.getMatrix()))) return;
+    event.setCancelled(true);
+    if (event.getWhoClicked() instanceof Player player) player.sendMessage("Satchel-Belohnungen kann man nicht verarbeiten.");
+  }
+
+  @EventHandler(ignoreCancelled = true) public void prepareSmith(PrepareSmithingEvent event) {
+    if (smithTagged(event.getInventory())) event.setResult(null);
+  }
+
+  @EventHandler(ignoreCancelled = true) public void smith(SmithItemEvent event) {
+    if (!smithTagged(event.getInventory())) return;
+    event.setCancelled(true);
+    if (event.getWhoClicked() instanceof Player player) player.sendMessage("Satchel-Belohnungen kann man nicht verarbeiten.");
+  }
+
+  @EventHandler(ignoreCancelled = true) public void smelt(FurnaceSmeltEvent event) {
+    if (SatchelItems.tagged(event.getSource())) event.setCancelled(true);
+  }
+
+  private static boolean smithTagged(SmithingInventory inventory) {
+    return SatchelCraft.usesCapped(SatchelItems.tagged(inventory.getInputEquipment()), SatchelItems.tagged(inventory.getInputMineral()), templateTagged(inventory));
+  }
+
+  private static boolean templateTagged(SmithingInventory inventory) {
+    try { return SatchelItems.tagged(inventory.getInputTemplate()); }
+    catch (NoSuchMethodError ex) { return false; }
+  }
+
+  private static boolean[] tagged(ItemStack[] items) {
+    boolean[] flags = new boolean[items.length];
+    for (int i = 0; i < items.length; i++) flags[i] = SatchelItems.tagged(items[i]);
+    return flags;
+  }
+
   @EventHandler public void click(InventoryClickEvent event) {
     if (event.getView().getTopInventory().getHolder() instanceof SpinHolder) { event.setCancelled(true); return; }
     if (!(event.getView().getTopInventory().getHolder() instanceof ListHolder holder)) return;
@@ -313,10 +373,6 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
 
   @EventHandler public void drag(InventoryDragEvent event) {
     if (event.getView().getTopInventory().getHolder() instanceof ListHolder || event.getView().getTopInventory().getHolder() instanceof SpinHolder) event.setCancelled(true);
-  }
-
-  private record Purchase(boolean ok, String message, List<byte[]> bytes, List<String> rarities, long capCents) {
-    static Purchase fail(String message) { return new Purchase(false, message, List.of(), List.of(), 0); }
   }
 
   private static final class ListHolder implements InventoryHolder {
