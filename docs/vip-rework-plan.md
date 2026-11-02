@@ -27,7 +27,7 @@ The website contract is [vip-api.md](vip-api.md). The website enqueues VIP comma
 
 ### In-world menu
 
-On `vipworld-*`, the same `/vw` command and a nether star (when hotbar slot 8 is empty) open status, members, settings, and addons for the world in `CRAFTCORE_VIP_WORLD_ID`. Mutations require the owner. Members can open status. The world server applies settings and rule-addons to loaded worlds. `scripts/vip-db-user.sql` gains the writes `craft_vip` needs for members, settings, and addons. Presence recording starts on VIP slots so `players` in the API matches who is online.
+On `vipworld-*`, the same `/vw` command and a nether star (when hotbar slot 8 is empty) open status, members, settings, addons, and the visibility toggle for the world in `CRAFTCORE_VIP_WORLD_ID`. `/vip invite <name>` and `/vip uninvite <name>` call the same member actions. Manage, invite, and uninvite require the owner or an admin. A trusted invite may start the world from the menu and may not manage it. The world server applies settings and rule-addons to loaded worlds. Switching the world to `private` sends every online player who is not the owner, an admin, or invited to the lobby. `scripts/vip-db-user.sql` gains the writes `craft_vip` needs for members, settings, and addons. Presence recording starts on VIP slots so `players` in the API matches who is online.
 
 ### Addons
 
@@ -52,13 +52,15 @@ The sidebar timer starts on lobby, survival, PvP, and VIP. `/sidebar an|aus` sta
 
 ### Access, caps, RAM
 
-`VipLimits` resolves slots and the player cap from meta `vipworlds.slots`, then `vipworld-slots`, the admin flag, and `config/vipworlds.yml` (`players.vip: 5`, `players.mvp: 10`, `players.admin: 10`, `admin-slots: 3`). Those keys sit at the top level so the host YAML reader ignores them. The join gate allows the owner, members, public worlds, and the existing bypass. A non-owner at the cap is kicked. Host `budget_ok` is unchanged.
+`VipLimits` resolves slots and the player cap from meta `vipworlds.slots`, then `vipworld-slots`, the admin flag, and `config/vipworlds.yml` (`players.vip: 5`, `players.mvp: 10`, `players.admin: 10`, `admin-slots: 3`). Those keys sit at the top level so the host YAML reader ignores them. The join gate allows the owner, admins, invited players, and, when `visibility` is `friends`, players on the owner's friends list. A non-owner at the cap is kicked. Host `budget_ok` is unchanged.
 
 ### Website queue
 
 mc-stack polls `GET /api/mc-vip-commands/pending` and acks `POST /api/mc-vip-commands/ack` with `x-ingest-token`, same item/ack shape as shop orders. Details, action payloads, and the frozen host bodies are [vip-api.md](vip-api.md).
 
-On execute, mc-stack reads the UUID from `mc_links` for that `discord_id`, requires rank `vip`, `mvp`, or `admin`, and requires owner or member as the action demands. Any miss acks `denied` and does not change the world. `request_id` is unique per `discord_id`; a repeat of the same pair returns the ack already stored. An item still pending 600 seconds after `created_at` acks `expired` and is not executed. Free-text fields (`info`, `name`) lose `§` color codes and newlines, then go into the plugin methods the GUI uses. They are never placed on a command line (`dispatchCommand`, RCON, or chat commands).
+On execute, mc-stack reads the UUID from `mc_links` for that `discord_id` and requires rank `vip`, `mvp`, or `admin`. Admins may use and manage worlds. Each admin action is stored with the admin's name and the target owner's name, or the action is not applied. A trusted invite may start the world and may not manage, invite, uninvite, or delete. `request_id` plus `discord_id` is the ack key. `world_id` is a UUID. Every timestamp is epoch milliseconds. Only mc-stack sets `expired`, on poll, when `created_at` is at least 600000 ms old. Free-text fields lose every `\p{Cc}` character and every `§` formatting code, then go into the plugin methods the GUI uses. They are never placed on a command line.
+
+`visibility` is `friends` (default) or `private`. `friends` lets players on the owner's friends list join. That list is the friends system, not the trusted flag. `private` lets only invited players join. Owner and admins always join. The world server checks this on join. Changing to `private` sends everyone else on that world to the lobby. In game the commands are `/vip invite <name>` and `/vip uninvite <name>`, plus the visibility toggle in the in-world menu. The sync `POST /api/mc-vip-worlds` carries `vip_worlds` (with `visibility` and `invites`) and `vip_admin_log`. An absent key leaves the website copy unchanged. An empty array clears it.
 
 ### Challenges
 
@@ -81,13 +83,13 @@ Survival only. The period rules stay: Europe/Berlin, reset at 05:00, weekly key 
 | `KILL_HOSTILE` | Hostile mobs |
 | `KILL_PASSIVE` | Passive animals |
 | `CRAFT` | Items crafted |
-| `PLACE_BLOCK` | Blocks placed |
+| `PLACE_BLOCK` | Blocks placed minus blocks of that place-task broken again |
 | `WALK_END` | Horizontal blocks in the End, on foot |
 | `RIDE` | Horizontal blocks in a vehicle, not while flying |
 | `BIOME` | Distinct biomes this period (one flag row per biome) |
-| `PLAYER_TRADE` | Completed player-to-player trades |
+| `PLAYER_TRADE` | One count per distinct partner per day, only when the two Minecraft accounts are linked to different Discord accounts |
 
-Daily and weekly pools each contain at least one task from mining, farming, mobs, exploration, crafting, fishing, building, trading, and travel, so a player is not offered three copies of the same action. `ChallengeBars` (the bar text, and which three lines the sidebar shows) is pure and unit-tested.
+Daily and weekly pools each contain at least one task from mining, farming, mobs, exploration, crafting, fishing, building, trading, and travel, so a player is not offered three copies of the same action. `MINE_ORE` and `MINE_STONE` ignore blocks a player placed (tracked per chunk, for example in chunk PDC). `PLACE_BLOCK` progress is net: placed blocks increase it, breaking those placed blocks decreases it, and it does not go below 0. `PLAYER_TRADE` counts only a partner whose Discord link is different from the player's, at most once per partner per day. `ChallengeBars` (the bar text, and which three lines the sidebar shows) is pure and unit-tested.
 
 ## Follow-up
 
