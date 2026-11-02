@@ -115,8 +115,12 @@ market:
   daily-buy-limit: 512
   # Bankkurse bewegen sich je Stack um 0,3 %, maximal 20 %; Halbwertszeit 72 Stunden.
   daily-buy-limits: {}
-  # Gesamte Verkaufserloese pro Spieler und Markttag in CP.
+  # Gesamte Verkaufserloese pro Spieler und Markttag in CP. Market.revenueLimit liest diesen Schluessel.
   daily-revenue-limit: 1500.0
+  curve:
+    # Halbwertszeit in Stunden. Unter 1 CP Quote-Basis gilt der kurze Wert.
+    half-life-hours: 72
+    half-life-cheap-hours: 12
   tier1-after: 64
   tier1-factor: 0.5
   tier2-after: 256

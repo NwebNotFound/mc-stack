@@ -22,6 +22,7 @@ final class Market implements Listener {
   private final Map<Material, Quote> items = new LinkedHashMap<>();
   private Map<Material,Double> recipeCosts = Map.of();
   private Map<Material,Long> minimumPurchases = Map.of();
+  private List<PriceCatalog.CatalogRecipe> curveRecipes = List.of();
   record Quote(double base, double min, double max, double pressure) {}
   record Price(long cents, double current, String trend) {}
   static final class Menu implements InventoryHolder {
@@ -67,17 +68,36 @@ final class Market implements Listener {
       recipeCosts=RecipeCost.derive(minimumPurchases,recipes);
     }
     this.minimumPurchases=minimumPurchases;
+    this.curveRecipes=List.copyOf(recipes);
     core.tx(c->{MarketEffective.refresh(c,core.getConfig(),MarketEffective.bases(core),recipes);return null;});
     { var f=new java.io.File(core.getDataFolder(),"prices-base.yml"); var pricesCfg=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(f); priced=PriceCatalog.known(pricesCfg,recipes); java.time.Instant eff=PriceMeta.effectiveFromOrPlaceholder(pricesCfg,core.getLogger()); PriceMeta.storeSafely(core,eff); core.getLogger().info("Preis-Stichtag effective_from="+(eff.equals(PriceMeta.PLACEHOLDER)?"nicht gesetzt (Platzhalter)":eff.toString())+", buyback_caps="+BuybackCaps.enabled(core.getConfig())); core.getLogger().info("Markt: "+priced.size()+" Items mit eigenem Preis, "+items.keySet().stream().filter(x->!priced.contains(x)).count()+" auf Fallback (gesperrt="+core.getConfig().getBoolean("market.lock-fallback",true)+")"); }
     for(Material dm:List.of(Material.IRON_INGOT,Material.RAW_IRON,Material.IRON_BLOCK,Material.GOLD_INGOT)) if(items.containsKey(dm)) core.getLogger().info("Rezeptkosten "+dm+": "+recipeCosts.get(dm)+" ct via "+RecipeCost.path(dm));
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_price_factors (material VARCHAR(64) PRIMARY KEY, sell_factor DOUBLE NOT NULL, buy_factor DOUBLE NOT NULL, updated BIGINT NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS discord_links (uuid CHAR(36) PRIMARY KEY, discord_id VARCHAR(20) NULL, INDEX discord_lookup (discord_id))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_link_revenue (owner VARCHAR(40) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(owner,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS market_prices (material VARCHAR(64) PRIMARY KEY, price DOUBLE NOT NULL, updated BIGINT NOT NULL, trend VARCHAR(8) NOT NULL)"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_daily (player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(player,item,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_revenue_daily (player CHAR(36) NOT NULL, day_key VARCHAR(10) NOT NULL, cents BIGINT NOT NULL, PRIMARY KEY(player,day_key))"); core.exec(c,"CREATE TABLE IF NOT EXISTS bank_journal (id CHAR(36) PRIMARY KEY, player CHAR(36) NOT NULL, item VARCHAR(64) NOT NULL, amount INT NOT NULL, cp BIGINT NOT NULL, status VARCHAR(24) NOT NULL, INDEX bank_pending (status,player))"); return null;});
-    core.tx(c->{DynamicPrice.migrate(c);BankBuy.migrate(c);BuybackCaps.ensureSchema(c);return null;});
-    core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); for(Material m:items.keySet()) price(c,m,false,false); return null;});
+    core.tx(c->{DynamicPrice.migrate(c);CurvePrice.migrate(c);BankBuy.migrate(c);BuybackCaps.ensureSchema(c);return null;});
+    core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); long now=System.currentTimeMillis(); for(Material m:items.keySet()) persistCurve(c,m,now); return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
-    if(SpawnRoute.isSurvival(System.getenv().getOrDefault("CRAFTCORE_SERVER","Server")))
-      Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); WebsiteStats.snapshot(c,java.time.Instant.now()); return null; }); } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); } },1L,72000L);
-    else Bukkit.getScheduler().runTaskTimerAsynchronously(core,()->{ try { core.tx(c->{ for(Material m:items.keySet()) price(c,m,false,false); return null; }); } catch(Exception e) { core.getLogger().warning("Marktkurse: "+e.getMessage()); } },72000L,72000L);
+    Bukkit.getScheduler().runTaskTimerAsynchronously(core,this::snapshotCurves,1L,72000L);
+  }
+  private void snapshotCurves() {
+    try { core.tx(c->{
+      try(Statement q=c.createStatement(); ResultSet r=q.executeQuery("SELECT GET_LOCK('craftcore-market-snapshot', 0)")) { if(!r.next()||r.getInt(1)!=1) return null; }
+      try { long now=System.currentTimeMillis(); for(Material m:items.keySet()) persistCurve(c,m,now); WebsiteStats.snapshot(c,java.time.Instant.now()); }
+      finally { try(Statement q=c.createStatement()) { q.execute("SELECT RELEASE_LOCK('craftcore-market-snapshot')"); } }
+      return null;
+    }); } catch(Exception e) { core.getLogger().warning("Markt-Snapshot: "+e.getMessage()); }
+  }
+  /** Fold recovery into the row and publish the catalog. Not used by GUI reads. */
+  private void persistCurve(Connection c, Material m, long now) throws SQLException {
+    double base=items.get(m).base();
+    CurvePrice.Factors factors=CurvePrice.factors(core.getConfig());
+    CurvePrice.Row row=CurvePrice.lock(c,m.name(),now);
+    double net=CurvePrice.folded(row,base,now,factors);
+    CurvePrice.save(c,m.name(),net,now);
+    Long cap=sellCap(c,m,now,false);
+    CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+    long sell=Math.min(cent.sell(),sellConfig(m).maxSell());
+    WebsiteStats.catalog(c,m.name(),cent.buy(),sell,base,now);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -133,15 +153,101 @@ final class Market implements Listener {
     return price(c,m,trade,buy,sellConfig(m));
   }
   Price price(Connection c, Material m, boolean trade, boolean buy, SellConfig config) throws SQLException {
+    return price(c,m,trade,buy,config,1);
+  }
+  Price price(Connection c, Material m, boolean trade, boolean buy, SellConfig config, int qty) throws SQLException {
+    if(trade && (qty<1 || qty>CurvePrice.MAX_QTY)) throw new IllegalArgumentException("qty");
     long now=System.currentTimeMillis();
-    double f=DynamicPrice.current(c,m.name(),now);
-    if(trade) f=DynamicPrice.trade(c,m.name(),buy?-1:1,m.getMaxStackSize(),now);
-    long sell=safeSell(Math.min(config.maxSell(),Math.min(
-      DynamicPrice.apply(config.baseSell(),f,false),
-      DynamicPrice.apply(config.baseBuy(),DynamicPrice.floor(),true))),config.recipeCost());
-    long purchase=Math.max(config.minimumPurchase(),Math.max(DynamicPrice.apply(config.baseBuy(),f,true),BankPrice.minimumBuy(sell)));
-    WebsiteStats.catalog(c,m.name(),purchase,sell,config.base(),now);
-    return new Price(buy?purchase:sell,config.base()*f,trade?(buy?"auf":"ab"):"-");
+    double base=config.base();
+    CurvePrice.Factors factors=CurvePrice.factors(core.getConfig());
+    if(!trade) {
+      CurvePrice.Row row=CurvePrice.read(c,m.name());
+      double net=CurvePrice.folded(row,base,now,factors);
+      Long cap=sellCap(c,m,now,false);
+      CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+      long sell=Math.min(cent.sell(),config.maxSell());
+      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net),"-");
+    }
+    List<String> names=new ArrayList<>();
+    names.add(m.name());
+    for(String extra:capNames(m)) if(!names.contains(extra)) names.add(extra);
+    Collections.sort(names);
+    Map<String,CurvePrice.Row> locked=new LinkedHashMap<>();
+    for(String name:names) locked.put(name,CurvePrice.lock(c,name,now));
+    double net=CurvePrice.folded(locked.get(m.name()),base,now,factors);
+    Long cap=sellCap(c,m,now,true);
+    long total=0;
+    for(int i=0;i<qty;i++) {
+      double step=buy ? net+i : net-i;
+      CurvePrice.Cent cent=CurvePrice.cents(base,step,cap,factors);
+      long unit=buy ? cent.buy() : Math.min(cent.sell(),config.maxSell());
+      total=Math.addExact(total,unit);
+    }
+    double end=buy ? net+qty : net-qty;
+    CurvePrice.save(c,m.name(),end,now);
+    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
+    long first=buy ? CurvePrice.cents(base,net,cap,factors).buy() : Math.min(CurvePrice.cents(base,net,cap,factors).sell(),config.maxSell());
+    return new Price(qty==1 ? first : total, CurvePrice.mid(base,end), buy?"auf":"ab");
+  }
+  private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config) throws SQLException {
+    long now=System.currentTimeMillis();
+    double base=config.base();
+    CurvePrice.Factors factors=CurvePrice.factors(core.getConfig());
+    List<String> names=new ArrayList<>();
+    names.add(m.name());
+    for(String extra:capNames(m)) if(!names.contains(extra)) names.add(extra);
+    Collections.sort(names);
+    for(String name:names) CurvePrice.lock(c,name,now);
+    double net=CurvePrice.folded(CurvePrice.read(c,m.name()),base,now,factors);
+    Long cap=sellCap(c,m,now,true);
+    long total=0;
+    for(int i=0;i<amount;i++) {
+      long unit=Math.min(CurvePrice.sellCents(CurvePrice.mid(base,net-i),cap,factors),config.maxSell());
+      total=Math.addExact(total,sellBreakdown(m,unit,enchants,damage,config.pricing()).total());
+    }
+    double end=net-amount;
+    CurvePrice.save(c,m.name(),end,now);
+    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
+    return total;
+  }
+  private List<String> capNames(Material out) {
+    List<String> names=new ArrayList<>();
+    for(PriceCatalog.CatalogRecipe recipe:curveRecipes) {
+      if(recipe.output()!=out || recipe.amount()<=0 || selfCopy(recipe)) continue;
+      for(List<Material> slot:recipe.ingredients()) for(Material option:slot) if(items.containsKey(option) && !unbuyable(core.getConfig(),option)) names.add(option.name());
+    }
+    return names;
+  }
+  private static boolean selfCopy(PriceCatalog.CatalogRecipe recipe) {
+    for(List<Material> slot:recipe.ingredients()) if(slot.contains(recipe.output())) return true;
+    return false;
+  }
+  /** Current bank-buy of the cheapest executable recipe, or null when none exists. */
+  private Long sellCap(Connection c, Material out, long now, boolean locked) throws SQLException {
+    Long cap=null;
+    CurvePrice.Factors factors=CurvePrice.factors(core.getConfig());
+    for(PriceCatalog.CatalogRecipe recipe:curveRecipes) {
+      if(recipe.output()!=out || recipe.amount()<=0 || selfCopy(recipe)) continue;
+      long cost=0; boolean ok=true;
+      for(List<Material> slot:recipe.ingredients()) {
+        long best=Long.MAX_VALUE;
+        for(Material option:slot) {
+          if(!items.containsKey(option) || unbuyable(core.getConfig(),option)) continue;
+          double base=items.get(option).base();
+          CurvePrice.Row row=locked ? CurvePrice.lock(c,option.name(),now) : CurvePrice.read(c,option.name());
+          double net=CurvePrice.folded(row,base,now,factors);
+          best=Math.min(best,CurvePrice.buyCents(CurvePrice.mid(base,net),factors));
+        }
+        if(best==Long.MAX_VALUE) { ok=false; break; }
+        cost+=best;
+      }
+      if(!ok) continue;
+      long per=cost/recipe.amount();
+      cap=cap==null ? per : Math.min(cap,per);
+    }
+    return cap;
   }
 
   static long safeSell(long cents, Double recipeCost) {
@@ -161,7 +267,12 @@ final class Market implements Listener {
     open(p,"alle",query,0);
   }
   private String dayKey() { return DailyRevenue.dayKey(java.time.Instant.now(),java.time.ZoneId.of(core.getConfig().getString("market.reset-zone","Europe/Berlin")),core.getConfig().getInt("market.reset-hour",5)); }
-  private long revenueLimit() { long limit=150000L; if(limit<0) throw new IllegalArgumentException("market.daily-revenue-limit muss mindestens 0 sein"); return limit; }
+  private long revenueLimit() { return revenueLimit(core.getConfig()); }
+  static long revenueLimit(org.bukkit.configuration.Configuration cfg) {
+    double cp=cfg==null ? 1500 : cfg.getDouble("market.daily-revenue-limit",1500);
+    if(!Double.isFinite(cp) || cp<=0) cp=1500;
+    return Money.cents(cp);
+  }
   private ItemStack button(Material type,String name) { ItemStack item=new ItemStack(type); ItemMeta meta=item.getItemMeta(); meta.setDisplayName(name); item.setItemMeta(meta); return item; }
   private void open(Player p,String category,String query,int requested) throws Exception {
     List<Material> filtered=items.keySet().stream().filter(m->(category.equals("alle") || PriceCatalog.category(m).equals(category)) && m.name().toLowerCase(Locale.ROOT).contains(query)).sorted(Comparator.comparing(Material::name)).toList();
@@ -350,14 +461,14 @@ final class Market implements Listener {
         try {
           SellTransaction.run(c,key,tx->{
             String day=DailyRevenue.dayKey(java.time.Instant.now(),config.zone(),config.resetHour()), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
-            long unit=sellBreakdown(material,price(tx,material,false,false,config).cents(),enchants,damage,config.pricing()).total();
-            if(unit<=0) throw new SellLimit();
-            cp[0]=total(unit,amount);
-            if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,config.revenueLimit()),unit,amount)<amount) throw new SellLimit();
+            if(amount<1 || amount>CurvePrice.MAX_QTY) throw new SellLimit();
+            cp[0]=commitSell(tx,material,amount,enchants,damage,config);
+            if(cp[0]<=0) throw new SellLimit();
+            if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,config.revenueLimit()),cp[0],1)<1) throw new SellLimit();
             for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,config.perDay(),owner,material,day)) throw new SellLimit();
             if(cp[0]>0 && !DiscordRevenue.reserve(tx,owner,day,cp[0],config.revenueLimit())) throw new SellLimit();
             core.exec(tx,"INSERT INTO bank_journal(id,player,item,amount,cp,status) VALUES(?,?,?,?,?,?)",key,uuid.toString(),material.name(),amount,cp[0],"PENDING");
-            BankJournal.finishSale(tx,key,m->price(tx,material,true,false,config));
+            BankJournal.finishSale(tx,key,m->{});
             WebsiteStats.event(tx,material.name(),amount,cp[0],"bank");
             core.exec(tx,"UPDATE sell_pending SET cp=?, resolution='COMMITTED' WHERE idem_key=?",cp[0],key);
             balance[0]=core.balance(tx,uuid); return null;
