@@ -150,7 +150,8 @@ market:
     BEACON: 1200.0
     NETHER_STAR: 1000.0
     ELYTRA: 1500.0
-  # Leer: jedes im Survival erhaeltliche Item ist verkaufbar. Namen hier sperren nur Ausnahmen.
+  # Absichtlich leer: Erde, Bruchstein, Sand und Werkzeug sind verkaufbar.
+  # Die Kurve, das Tageslimit und Verkauf <= Kauf/2 begrenzen den Erloes. Namen hier sind nur Ausnahmen.
   unsellable: []
   # Zusaetzliche Sperren neben market_locks. Gesperrt, sobald eine der beiden Quellen sperrt.
   # buy: die Bank verkauft den Artikel nicht. sell: die Bank kauft ihn nicht an.

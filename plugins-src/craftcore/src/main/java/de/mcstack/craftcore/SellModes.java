@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.bukkit.Material;
+import org.bukkit.event.inventory.InventoryAction;
 
 /** Parsing, tab completion, and stack selection for /sell. No inventory I/O. */
 final class SellModes {
@@ -12,6 +13,7 @@ final class SellModes {
   record Slot(int index, String material, int amount) {}
   record Piece(int index, String material, int amount) {}
 
+  static final long SELL_ALL_TTL_MS = 30_000L;
   static final int DEPOSIT_SLOTS = 45;
   static final int PREVIEW_SLOT = 48;
   static final int CONFIRM_SLOT = 49;
@@ -106,6 +108,24 @@ final class SellModes {
       left -= take;
     }
     return out;
+  }
+
+  /** A confirm command is valid only inside the preview window. */
+  static boolean sellAllOpen(Long issuedAtMillis, long nowMillis) {
+    if (issuedAtMillis == null) return false;
+    long age = nowMillis - issuedAtMillis;
+    return age >= 0 && age <= SELL_ALL_TTL_MS;
+  }
+
+  /** Double-click collect, and any click on the button row, can pull glass, wool, or the barrier. */
+  static boolean pullsButtons(InventoryAction action, int rawSlot, int topSize) {
+    if (action == InventoryAction.COLLECT_TO_CURSOR) return true;
+    return rawSlot >= DEPOSIT_SLOTS && rawSlot < topSize;
+  }
+
+  /** The slot still holds the same material and meta, with enough items left. */
+  static boolean sameOffer(boolean present, boolean sameType, boolean sameMeta, int have, int need) {
+    return present && sameType && sameMeta && have >= need && need >= 1;
   }
 
   /** Deposit slots go back to the player. Control buttons do not. */
