@@ -119,7 +119,7 @@ public final class VipWorldGate implements Listener {
             ByteArrayOutputStream bytes=new ByteArrayOutputStream();
             try (DataOutputStream out=new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF("lobby"); }
             player.sendPluginMessage(plugin,"BungeeCord",bytes.toByteArray());
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             player.kick(Component.text("Du wurdest aus dieser VIP-Welt entfernt."));
         }
     }
