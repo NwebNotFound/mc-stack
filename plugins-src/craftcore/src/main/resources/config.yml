@@ -135,6 +135,8 @@ market:
     ref-unique: 4
     unique-items: [DRAGON_EGG]
     period-ticks: 1200
+    # Crafting demand: 1 + weight * decayedConsumption / ref, then multiplied into s and clamped.
+    demand-weight: 1.0
   tier1-after: 64
   tier1-factor: 0.5
   tier2-after: 256

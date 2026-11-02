@@ -469,3 +469,15 @@ preisMid = m(net) * s
 Gezählt wird asynchron: Inventar und Enderkiste beim Join und Quit, plus ein periodischer Lauf nur über gerade online Spieler (`period-ticks` Default 1200). Die Kopie der Slots passiert auf dem Server-Thread, das Schreiben in `market_supply` danach asynchron. Dazu der Marktbestand aus offenen `auctions` und `ah_journal` (Spalte `material`). Kein Chunk-Scan, keine Kisten in der Welt.
 
 Verkauf bleibt `<= Kauf / 2`, weil Kauf und Verkauf denselben `preisMid` verwenden und `cappedSell` weiter gilt. Der Rezeptdeckel liest die knappen Kaufpreise der Zutaten, dadurch bleibt `Menge * Verkauf(hi * smax) <= Summe Kauf(lo * smin)`. Das Tageslimit bleibt `market.daily-revenue-limit`.
+
+### Craft-Nachfrage
+
+`CraftItemEvent` zählt verbrauchte Zutaten, Shift-Klick inklusive: so oft, wie die kleinste belegte Zutat reicht und das Ergebnis ins Inventar passt. Jede belegte Zelle verbraucht ein Stück pro Durchgang. Die Zählung passiert auf dem Server-Thread, das Schreiben asynchron.
+
+Der gespeicherte Verbrauch fällt mit derselben Halbwertszeit wie die Kurve (`12 h` unter 1 CP, sonst `72 h`): `demand * 2^(-Δt / H)`. Eingefaltet wird er vor der Klemme:
+
+```text
+s = clamp( (ref / (smoothed + 1)) ^ k * (1 + demand-weight * decayed / ref) , smin, smax )
+```
+
+`demand-weight` Default 1, Schlüssel `market.scarcity.demand-weight`. Ein unbekannter Bestand (`smoothed < 0`) lässt den Bestandsteil bei 1; eine Zeile, die nur Nachfrage trägt, zählt nicht als Bestand 0. Fehlt die Nachfrage, ist der zweite Faktor 1. `market_supply.demand` und `demand_updated` bleiben bei der Bestands-EMA stehen. Einzigartige Items nutzen weiter `unique-smax`. Viel Craften von Bruchstein kann den Faktor höchstens auf 3 ziehen (Einzigartiges auf 8). Der Rezeptdeckel benutzt dabei den erhöhten Kaufpreis der Zutat, deshalb bleibt Steinverkauf `<=` Bruchsteinkauf, und `Verkauf <= Kauf / 2` gilt auf demselben Mid. Das Tageslimit bleibt `market.daily-revenue-limit`.

@@ -110,7 +110,10 @@ final class Market implements Listener {
     WebsiteStats.catalog(c,m.name(),cent.buy(),sell,base,now);
   }
   private CurvePrice.Cent priced(Material material, double base, double net, Long cap, CurvePrice.Factors factors) {
-    return CurvePrice.centsAt(CurvePrice.mid(base, net) * MarketSupply.multiplier(material.name(), base, Scarcity.settings(core.getConfig())), cap, factors);
+    Scarcity.Settings scarcity = Scarcity.settings(core.getConfig());
+    double half = CurvePrice.halfLifeHours(base, factors);
+    double scale = MarketSupply.multiplier(material.name(), base, scarcity, half, System.currentTimeMillis());
+    return CurvePrice.centsAt(CurvePrice.mid(base, net) * scale, cap, factors);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -179,7 +182,7 @@ final class Market implements Listener {
       Long cap=sellCap(c,m,now,false);
       CurvePrice.Cent cent=priced(m,base,net,cap,factors);
       long sell=Math.min(cent.sell(),config.maxSell());
-      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig())),"-");
+      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig()),CurvePrice.halfLifeHours(base,factors),now),"-");
     }
     List<String> names=new ArrayList<>();
     names.add(m.name());
@@ -200,7 +203,7 @@ final class Market implements Listener {
     CurvePrice.save(c,m.name(),end,now);
     CurvePrice.Cent after=priced(m,base,end,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
-    return new Price(total, CurvePrice.mid(base,end)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig())), buy?"auf":"ab");
+    return new Price(total, CurvePrice.mid(base,end)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig()),CurvePrice.halfLifeHours(base,factors),now), buy?"auf":"ab");
   }
   private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config) throws SQLException {
     long now=System.currentTimeMillis();
@@ -267,6 +270,11 @@ final class Market implements Listener {
     return Math.max(1,capped);
   }
   boolean hasPrice(Material m) { return items.containsKey(m); }
+  Double basePrice(String name) {
+    Material material = org.bukkit.Material.matchMaterial(name);
+    if (material == null || !items.containsKey(material)) return null;
+    return items.get(material).base();
+  }
   private long bankCents(Material m,double current,boolean buy) {
     long value=cents(core.getConfig(),m,current,buy);
     if(buy) return Math.max(1,value);

@@ -8,7 +8,7 @@ import org.bukkit.configuration.Configuration;
 /** Smooth supply factor applied on top of the trade curve. Unknown supply stays at 1. */
 final class Scarcity {
   record Settings(boolean enabled, double k, double smin, double smax, double uniqueSmax, double emaAlpha,
-                  double refCheap, double refMid, double refRare, double refUnique, Set<String> unique) {}
+                  double refCheap, double refMid, double refRare, double refUnique, double demandWeight, Set<String> unique) {}
 
   private Scarcity() {}
 
@@ -23,12 +23,14 @@ final class Scarcity {
     if (uniqueSmax < smax) uniqueSmax = smax;
     if (k < 0) k = 0;
     if (alpha <= 0 || alpha > 1) alpha = 0.25;
+    double weight = cfg == null ? 1 : cfg.getDouble("market.scarcity.demand-weight", 1);
+    if (!Double.isFinite(weight) || weight < 0) weight = 1;
     Set<String> unique = new HashSet<>();
     if (cfg != null) for (String name : cfg.getStringList("market.scarcity.unique-items")) unique.add(name.toUpperCase(Locale.ROOT));
     if (unique.isEmpty()) unique.add("DRAGON_EGG");
     return new Settings(cfg == null || cfg.getBoolean("market.scarcity.enabled", true), k, smin, smax, uniqueSmax, alpha,
       num(cfg, "market.scarcity.ref-cheap", 4096), num(cfg, "market.scarcity.ref-mid", 256),
-      num(cfg, "market.scarcity.ref-rare", 16), num(cfg, "market.scarcity.ref-unique", 4), Set.copyOf(unique));
+      num(cfg, "market.scarcity.ref-rare", 16), num(cfg, "market.scarcity.ref-unique", 4), weight, Set.copyOf(unique));
   }
 
   private static double num(Configuration cfg, String key, double fallback) {
@@ -58,8 +60,25 @@ final class Scarcity {
   }
 
   static double factor(double base, double smoothedSupply, Settings settings, boolean unique) {
+    return factor(base, smoothedSupply, 0, settings, unique);
+  }
+
+  /** Half-life decay, same shape as the trade curve: amount * 2^(-elapsed / halfLife). */
+  static double decay(double amount, long elapsedMs, double halfLifeHours) {
+    if (elapsedMs <= 0 || amount == 0 || halfLifeHours <= 0) return amount;
+    return amount * Math.pow(0.5, elapsedMs / (halfLifeHours * 3_600_000d));
+  }
+
+  static double demandBoost(double decayedDemand, double reference, double weight) {
+    if (weight <= 0 || decayedDemand <= 0 || reference <= 0) return 1;
+    return 1 + weight * decayedDemand / reference;
+  }
+
+  static double factor(double base, double smoothedSupply, double decayedDemand, Settings settings, boolean unique) {
     if (!settings.enabled()) return 1;
     double cap = unique ? settings.uniqueSmax() : settings.smax();
-    return clamp(raw(reference(base, settings, unique), smoothedSupply, settings.k()), settings.smin(), cap);
+    double ref = reference(base, settings, unique);
+    double supplyPart = smoothedSupply < 0 ? 1 : raw(ref, smoothedSupply, settings.k());
+    return clamp(supplyPart * demandBoost(decayedDemand, ref, settings.demandWeight()), settings.smin(), cap);
   }
 }
