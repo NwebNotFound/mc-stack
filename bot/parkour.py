@@ -139,6 +139,21 @@ def rank(raw, course=None):
     return [(i + 1, e[2], e[0], e[3]) for i, e in enumerate(out)]
 
 
+def is_new_record(prev, leader):
+    """True, wenn #mc-chat einen neuen Kursrekord melden soll.
+
+    prev: letzter Leader (rang, name, ms, uuid), None (Kurs hatte keine Zeit)
+    oder "unset" (Bot-Start, nie posten). leader: aktueller Leader oder None.
+    Nur eine strikt kleinere Zeit — oder die erste Zeit — zaehlt. Ein UUID-Wechsel
+    ohne schnellere Zeit (Zeile geloescht oder versteckt) ist kein Rekord.
+    """
+    if prev == "unset" or not leader:
+        return False
+    if prev is None:
+        return True
+    return leader[2] < prev[2]
+
+
 def status_courses(env_value):
     """PARKOUR_STATUS_COURSES='*,cave_rush' -> ['*', 'cave_rush']; leer -> ['*'] (bisheriges Verhalten)."""
     out = []

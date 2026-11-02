@@ -605,9 +605,9 @@ class Bot(discord.Client):
         leaders = self.__dict__.setdefault("pk_leaders", {})
         leader = rows[0] if rows else None
         prev = leaders.get(course, "unset")
-        if prev != "unset" and leader and (prev is None or prev[3] != leader[3] or prev[2] != leader[2]):
+        if prev != "unset" and parkour.is_new_record(prev, leader):
             chat = self.get_channel(int(self.cfg["CHAT_CHANNEL_ID"]))
-            if chat and (prev is None or prev[3] != leader[3]):
+            if chat:
                 where = f" auf **{discord.utils.escape_markdown(name)}**" if name else ""
                 try:
                     await chat.send(f"-# \U0001F3C1 Neuer Parkour-Rekord{where}: **{discord.utils.escape_markdown(leader[1])}** in **{stats_card.fmt_ms(leader[2])}**", allowed_mentions=discord.AllowedMentions.none())
