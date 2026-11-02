@@ -80,8 +80,11 @@ final class CurvePrice {
   }
 
   static Cent cents(double base, double net, Long sellCap, Factors factors) {
-    double m = mid(base, net);
-    return new Cent(buyCents(m, factors), sellCents(m, sellCap, factors));
+    return centsAt(mid(base, net), sellCap, factors);
+  }
+
+  static Cent centsAt(double pricedMid, Long sellCap, Factors factors) {
+    return new Cent(buyCents(pricedMid, factors), sellCents(pricedMid, sellCap, factors));
   }
 
   /** Sum of the pre-step sell cents for qty units, starting at net and stepping down. */

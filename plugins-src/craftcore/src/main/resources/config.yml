@@ -121,6 +121,20 @@ market:
     # Halbwertszeit in Stunden. Unter 1 CP Quote-Basis gilt der kurze Wert.
     half-life-hours: 72
     half-life-cheap-hours: 12
+  scarcity:
+    enabled: true
+    # s = clamp((ref / (supply + 1)) ^ k, smin, smax). Unique items use unique-smax.
+    k: 0.5
+    smin: 0.5
+    smax: 3.0
+    unique-smax: 8.0
+    ema-alpha: 0.25
+    ref-cheap: 4096
+    ref-mid: 256
+    ref-rare: 16
+    ref-unique: 4
+    unique-items: [DRAGON_EGG]
+    period-ticks: 1200
   tier1-after: 64
   tier1-factor: 0.5
   tier2-after: 256

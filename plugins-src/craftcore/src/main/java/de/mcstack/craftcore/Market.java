@@ -77,6 +77,7 @@ final class Market implements Listener {
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); return null;});
     long boot=System.currentTimeMillis(); for(Material m:curveOrder()) core.tx(c->{persistCurve(c,m,boot);return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
+    MarketSupply.start(core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
     Bukkit.getScheduler().runTaskTimerAsynchronously(core,this::snapshotCurves,1L,72000L);
   }
@@ -104,9 +105,12 @@ final class Market implements Listener {
     double net=CurvePrice.folded(row,base,now,factors);
     CurvePrice.save(c,m.name(),net,now);
     Long cap=sellCap(c,m,now,false);
-    CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+    CurvePrice.Cent cent=priced(m,base,net,cap,factors);
     long sell=Math.min(cent.sell(),sellConfig(m).maxSell());
     WebsiteStats.catalog(c,m.name(),cent.buy(),sell,base,now);
+  }
+  private CurvePrice.Cent priced(Material material, double base, double net, Long cap, CurvePrice.Factors factors) {
+    return CurvePrice.centsAt(CurvePrice.mid(base, net) * MarketSupply.multiplier(material.name(), base, Scarcity.settings(core.getConfig())), cap, factors);
   }
   // Anteil des Basiskurses, zu dem Rezeptzutaten fuer die Ankaufsgrenze bewertet werden.
   // Frueher fest min(Mindestkurs, 25 % Basis) => Ankauf effektiv hart auf 20 % des Kaufpreises gedeckelt.
@@ -173,9 +177,9 @@ final class Market implements Listener {
       CurvePrice.Row row=CurvePrice.read(c,m.name());
       double net=CurvePrice.folded(row,base,now,factors);
       Long cap=sellCap(c,m,now,false);
-      CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+      CurvePrice.Cent cent=priced(m,base,net,cap,factors);
       long sell=Math.min(cent.sell(),config.maxSell());
-      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net),"-");
+      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig())),"-");
     }
     List<String> names=new ArrayList<>();
     names.add(m.name());
@@ -188,15 +192,15 @@ final class Market implements Listener {
     long total=0;
     for(int i=0;i<qty;i++) {
       double step=buy ? net+i : net-i;
-      CurvePrice.Cent cent=CurvePrice.cents(base,step,cap,factors);
+      CurvePrice.Cent cent=priced(m,base,step,cap,factors);
       long unit=buy ? cent.buy() : Math.min(cent.sell(),config.maxSell());
       total=Math.addExact(total,unit);
     }
     double end=buy ? net+qty : net-qty;
     CurvePrice.save(c,m.name(),end,now);
-    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    CurvePrice.Cent after=priced(m,base,end,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
-    return new Price(total, CurvePrice.mid(base,end), buy?"auf":"ab");
+    return new Price(total, CurvePrice.mid(base,end)*MarketSupply.multiplier(m.name(),base,Scarcity.settings(core.getConfig())), buy?"auf":"ab");
   }
   private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config) throws SQLException {
     long now=System.currentTimeMillis();
@@ -211,12 +215,12 @@ final class Market implements Listener {
     Long cap=sellCap(c,m,now,true);
     long total=0;
     for(int i=0;i<amount;i++) {
-      long unit=Math.min(CurvePrice.sellCents(CurvePrice.mid(base,net-i),cap,factors),config.maxSell());
+      long unit=Math.min(priced(m,base,net-i,cap,factors).sell(),config.maxSell());
       total=Math.addExact(total,sellBreakdown(m,unit,enchants,damage,config.pricing()).total());
     }
     double end=net-amount;
     CurvePrice.save(c,m.name(),end,now);
-    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    CurvePrice.Cent after=priced(m,base,end,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
     return total;
   }
@@ -246,7 +250,7 @@ final class Market implements Listener {
           double base=items.get(option).base();
           CurvePrice.Row row=locked ? CurvePrice.lock(c,option.name(),now) : CurvePrice.read(c,option.name());
           double net=CurvePrice.folded(row,base,now,factors);
-          best=Math.min(best,CurvePrice.buyCents(CurvePrice.mid(base,net),factors));
+          best=Math.min(best,priced(option,base,net,null,factors).buy());
         }
         if(best==Long.MAX_VALUE) { ok=false; break; }
         cost+=best;

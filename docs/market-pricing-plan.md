@@ -452,3 +452,20 @@ Keine dieser Dateien wird in der Plan-PR angefasst.
 - [ ] **Schritt 5.** Ein Commit pro Schritt, Message mit dem Verhalten (`market: ein Stück bewegt den Mid`, `market: Quote und Fill getrennt`).
 
 Akzeptanz: die Tests aus Abschnitt 9 sind grün, 10000 Bruchstein, Erde oder Sand bleiben unter 180000 Cent, und ein wiederholter Snapshot plus `maintain` bewegt weder `quote_price` noch `avg_price` einer abgeschlossenen Stunde.
+
+## 11. Knappheit (separater PR, nicht #108)
+
+Der Handels-Mid bleibt `m(net)`. Darüber liegt ein Bestandsfaktor, für alle Items inklusive unkaufbarer:
+
+```text
+s = clamp( (ref / (smoothed + 1)) ^ k , smin, smax )
+preisMid = m(net) * s
+```
+
+`ref` hängt an der Quote-Basis (`ref-cheap` unter 1 CP, `ref-mid` bis 50 CP, `ref-rare` darüber). Einzigartige Items (`market.scarcity.unique-items`, Default `DRAGON_EGG`) nutzen `ref-unique` und die höhere Klemme `unique-smax` (Default 8 statt 3). Defaults: `k = 0.5`, `smin = 0.5`, `smax = 3`. Ein unbekannter Bestand ist `s = 1`.
+
+`smoothed` ist ein EMA (`ema-alpha` Default 0.25). Der erste Messwert wird übernommen, jeder weitere rutscht nur um alpha, damit ein Join den Kurs nicht springen lässt.
+
+Gezählt wird asynchron: Inventar und Enderkiste beim Join und Quit, plus ein periodischer Lauf nur über gerade online Spieler (`period-ticks` Default 1200). Die Kopie der Slots passiert auf dem Server-Thread, das Schreiben in `market_supply` danach asynchron. Dazu der Marktbestand aus offenen `auctions` und `ah_journal` (Spalte `material`). Kein Chunk-Scan, keine Kisten in der Welt.
+
+Verkauf bleibt `<= Kauf / 2`, weil Kauf und Verkauf denselben `preisMid` verwenden und `cappedSell` weiter gilt. Der Rezeptdeckel liest die knappen Kaufpreise der Zutaten, dadurch bleibt `Menge * Verkauf(hi * smax) <= Summe Kauf(lo * smin)`. Das Tageslimit bleibt `market.daily-revenue-limit`.
