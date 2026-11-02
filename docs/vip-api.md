@@ -1,333 +1,105 @@
 # VIP management API
 
-Contract for the website (Cloud). The game stack serves these routes. The website calls this document, not the internal lobby routes.
+Contract for the website rework. The website writes VIP commands into its D1 queue. mc-stack polls that queue with the ingest token and executes them. The website does not call the Minecraft host, and it does not send RCON or chat commands.
 
-Base URL is the existing host service (`tools/pvp-host-service`, `PVP_HOST_BIND` / `PVP_HOST_PORT`, default `127.0.0.1:25599`). Publish it only through the existing Cloudflare Tunnel on a dedicated hostname such as `vip-api.<domain>`, with Cloudflare Access in front. The browser never sees the tokens. A server-side worker calls the tunnel.
+Internal lobby routes at the bottom stay as they are. Only the lobby plugin calls them.
 
-`Content-Type` of every JSON body is `application/json; charset=utf-8`. Clients branch on HTTP status and `error.code`. `error.message` is German display text and can change.
+## Queue
 
-## Auth
+Same shape as shop orders (`mc-shop-orders`): header `x-ingest-token: $MC_INGEST_TOKEN`, JSON `{ "items": [ ... ] }` on the poll, `{ "acks": [ ... ] }` on the ack.
 
-Every `/api/v1/vip` route requires both headers:
-
-| Header | Value |
+| Call | Path |
 |---|---|
-| `X-VIP-Api-Token` | `VIP_API_TOKEN` from the host environment. Distinct from `VIP_HOST_TOKEN` / `X-VIP-Token`. |
-| `X-Discord-Id` | Discord snowflake of the logged-in user, `^[0-9]{1,20}$`. |
+| Poll | `GET /api/mc-vip-commands/pending` |
+| Ack | `POST /api/mc-vip-commands/ack` |
 
-The edge also requires the Cloudflare Access service token (`CF-Access-Client-Id`, `CF-Access-Client-Secret`). The origin checks the two headers above. A missing or wrong API token is `401`. A missing or malformed Discord id is `401`.
+Base URL is `MC_WEB_API`, default `https://nwebnotfound.dev/api`. A missing ingest token means mc-stack does not poll.
 
-The origin resolves `X-Discord-Id` through `craftcore.discord_links.discord_id` to a Minecraft UUID. No row, or a null UUID, is `403 not_linked`. Rank, slot count, and player cap are computed on the server from LuckPerms and `config/vipworlds.yml`. Body fields named `rank`, `slots`, `playerLimit`, or `admin` are ignored.
+### Pending item
 
-When `VIP_API_TOKEN` or `CRAFTCORE_DB_HOST` is unset, every management route returns `503 api_disabled`. The internal lobby routes keep working.
+```json
+{
+  "request_id": "vip-7f1e-start",
+  "discord_id": "123456789012345678",
+  "created_at": 1793500000,
+  "action": "start",
+  "world_id": "7f1e0000-0000-4000-8000-000000000010",
+  "info": "optional note"
+}
+```
 
-Limits, per Discord id: 30 requests per minute on reads, 5 per minute on `POST /worlds/{id}/start` and `POST /worlds/{id}/stop`. Over the limit: `429` and `Retry-After` in seconds.
+`created_at` is unix seconds. `request_id` matches `^[A-Za-z0-9_-]{1,64}$`. It is unique per `discord_id`: the same pair is one command, and a later poll of that pair returns the ack already decided. A different Discord user may use the same `request_id` string. mc-stack stores the decision under `(discord_id, request_id)`.
 
-## Ranks and limits
+`discord_id` is a snowflake, `^[0-9]{1,20}$`. `action` is one of `create`, `rename`, `start`, `stop`, `settings`, `invite`, `kick`, `trust`, `addons`. Extra fields depend on the action and are listed below. Unknown fields are ignored. A UUID or rank inside the item is not trusted.
 
-The server returns the numbers. The website displays them.
+### Ack
 
-Resolved from the player's primary LuckPerms group and meta `vipworlds.slots` (fallback meta key `vipworld-slots`, which the rank setup script still writes):
+```json
+{
+  "acks": [
+    { "id": "vip-7f1e-start", "discord_id": "123456789012345678", "status": "denied", "reason": "not_owner" }
+  ]
+}
+```
+
+| status | When |
+|---|---|
+| `done` | The action was applied |
+| `denied` | The execution-time checks failed. The world is unchanged |
+| `expired` | `created_at` is 600 seconds or older and the command was still pending. It is not executed |
+| `failed` | Checks passed and the host or the database then failed |
+
+`reason` on `denied` is `not_linked`, `no_rank`, `not_owner`, `not_member`, `name_taken`, `no_free_slot`, `invalid_name`, `invalid_type`, `invalid_setting`, `invalid_addon`, `invalid_role`, `invalid_player`, `is_owner`, `player_not_found`, `member_not_found`, `world_not_found`, or `addon_limit`. `reason` on `failed` is `ram_budget` or `host_unavailable`. `expired` and `done` send an empty reason.
+
+## Checks at execution
+
+mc-stack checks again when it runs the item. Values copied into D1 at enqueue time are not enough.
+
+1. **Discord link.** The Minecraft UUID comes from `mc_links` for that `discord_id`. No row is `denied` / `not_linked`. If the item also contains `mc_uuid`, it must equal that UUID or the ack is `denied` / `not_linked`.
+2. **Rank.** The linked UUID must currently be `vip`, `mvp`, or `admin`. Anything else is `denied` / `no_rank`. Admins count as allowed. Slot and player caps are in the rank table below.
+3. **Owner or member.** `create` needs a free slot for that rank. Every other action needs the linked UUID to own the world, except `start` of a world where they are a member (join-only: the member ack is `done` only when the world is already `running`; a member cannot start or stop it). Mutations (`rename`, `stop`, `settings`, `invite`, `kick`, `trust`, `addons`) require the owner. A failed check is `denied` / `not_owner` or `not_member`.
+
+A public world does not make the caller an owner.
 
 | Who | World slots | Players in one running world |
 |---|---|---|
-| `vip` | meta, normally 1 | 5 |
+| `vip` | meta `vipworlds.slots`, normally 1 (fallback meta key `vipworld-slots`) | 5 |
 | `mvp` (meta slots >= 3) | meta, normally 3 | 10 |
-| `admin` (`group.admin` or `craftcore.admin`) | max(meta, `admin-slots` from config, default 3) | 10 |
-| anyone else | 0 | 0 |
+| `admin` | max(meta, `admin-slots` from `config/vipworlds.yml`, default 3) | 10 |
 
-`admin-slots`, `players.vip`, `players.mvp`, and `players.admin` live in `config/vipworlds.yml`. RAM stays in the `ram` block of that file. A start is refused with `503 ram_budget` when the host budget check fails. Survival's reserved RAM is unchanged.
+`players.vip`, `players.mvp`, and `players.admin` in that file are 5, 10, and 10. RAM stays in the `ram` block. A start the budget refuses is `failed` / `ram_budget`. Survival's reserved RAM is unchanged. The owner and admins may be in a full world. Everyone else is refused at login when the online count has reached `playerLimit`.
 
-A new world stores `playerLimit` from the owner's rank at create time. Later rank changes do not shrink a world that is already full until the next successful start, which refreshes the stored cap. Admins join over the cap. The owner joins over the cap. Everyone else is kicked at login when `online >= playerLimit`.
+## Free text
 
-## Status values
+`info`, `name`, and any other free-text field is sanitized before it is shown in game or stored as a display string:
 
-`stopped`, `starting`, `running`, `stopping`, `error`. `queued` is reserved and is not returned by this rework. `deleted` worlds are omitted.
+- Remove each `§` and the formatting character after it.
+- Remove CR and LF.
+- Trim, then cap at 120 characters (`name` still has to match the name rule after that).
 
-Slot status on the runtime endpoint uses the internal vocabulary: `online`, `starting`, `sleeping`, `offline`.
+The sanitized string is an argument to the plugin API (the same methods the chest GUI calls). It is never concatenated into an RCON line, a chat command, or `dispatchCommand`.
 
-## Errors
+## Action payloads
 
-```json
-{ "error": { "code": "no_free_slot", "message": "Alle Slots belegt." } }
-```
+World names are 3–24 characters from `[A-Za-z0-9_-]`. Types are `normal`, `flat`, `void`. Roles are `member` and `builder` (`trust` sets `builder`). Visibility is `private` or `public`.
 
-| HTTP | code | When |
+Settings keys: `gamemode` (`survival`, `creative`, `adventure`), `difficulty` (`peaceful`, `easy`, `normal`, `hard`), `pvp`, `keepInventory`, `mobGriefing`, `doDaylightCycle` (booleans), `visibility`. Omitted keys stay as stored. Defaults for a new world: survival, normal, pvp false, keepInventory false, mobGriefing true, doDaylightCycle true, visibility private. A running world re-reads settings about once a second. A stopped world applies them on the next start.
+
+Addon ids, max 3, all `type: rule`: `keep-inventory`, `peaceful`, `creative`, `day-lock`, `pvp`. They override the matching setting while selected. `addons` replaces the whole set. `[]` clears it.
+
+| action | Fields | Notes |
 |---|---|---|
-| 400 | `invalid_json` | Body is missing or not a JSON object |
-| 400 | `invalid_name` | Name is not 3–24 of `[A-Za-z0-9_-]` |
-| 400 | `invalid_type` | Type is not `normal`, `flat`, or `void` |
-| 400 | `invalid_setting` | Unknown settings key or value |
-| 400 | `invalid_addon` | Addon id is not in the catalog |
-| 400 | `invalid_role` | Role is not `member` or `builder` |
-| 400 | `invalid_player` | Invite body has neither `name` nor `uuid` |
-| 400 | `is_owner` | Kick or role change targets the owner |
-| 401 | `missing_token` | API token header absent or wrong |
-| 401 | `missing_identity` | Discord id header absent or not a snowflake |
-| 403 | `not_linked` | Discord id has no Minecraft UUID |
-| 403 | `no_rank` | Create while resolved slots are 0 |
-| 403 | `not_owner` | Mutation by someone other than the owner |
-| 404 | `world_not_found` | Unknown id, or not owned by the caller |
-| 404 | `player_not_found` | Name is not in `known_players` |
-| 404 | `member_not_found` | Kick or role change for a player who is not a member |
-| 409 | `name_taken` | This owner already has that name |
-| 409 | `no_free_slot` | Every configured slot is `online` or `starting`, or `max-running` is reached |
-| 409 | `already_member` | Invite of a current member |
-| 409 | `addon_limit` | Selection is longer than `addons.max` (default 3) |
-| 429 | `rate_limited` | Per-Discord limit |
-| 503 | `ram_budget` | Host RAM budget refuses another world |
-| 503 | `host_unavailable` | Docker or the host status call failed |
-| 503 | `api_disabled` | Token or database host is not configured |
-| 503 | `rank_unavailable` | LuckPerms rank could not be read |
+| `create` | `name`, `type` (default `normal`), optional `info` | Stores `playerLimit` from the rank at this moment |
+| `rename` | `world_id`, `name` | Owner |
+| `start` | `world_id` | Owner. Already running is `done`. No free slot is `denied` / `no_free_slot`. RAM refusal is `failed` / `ram_budget` |
+| `stop` | `world_id` | Owner. Already stopped is `done` |
+| `settings` | `world_id`, `settings` object | Owner. Unknown key or value is `denied` / `invalid_setting` |
+| `invite` | `world_id`, `name` or `uuid`, optional `role` (default `member`) | Owner. Name is resolved in `known_players` |
+| `kick` | `world_id`, `uuid` | Owner. The owner row cannot be kicked (`is_owner`) |
+| `trust` | `world_id`, `uuid` | Owner. Sets role `builder` |
+| `addons` | `world_id`, `addons` array of ids | Owner |
 
-Messages for the codes the game also shows in chat:
-
-| code | message |
-|---|---|
-| `invalid_name` | Der Name muss 3 bis 24 Zeichen lang sein und darf nur Buchstaben, Zahlen, _ und - enthalten. |
-| `no_rank` | Du hast keinen freien VIP-Weltplatz. |
-| `name_taken` | Du hast bereits eine Welt mit diesem Namen. |
-| `no_free_slot` | Alle Slots belegt. |
-| `ram_budget` | Gerade kein RAM frei. |
-| `host_unavailable` | VIP-Host nicht erreichbar, bitte spaeter erneut versuchen. |
-| `world_not_found` | Deine VIP-Welt wurde nicht gefunden. |
-
-## Worlds
-
-### `GET /api/v1/vip/me`
-
-```json
-{
-  "uuid": "1b2c3d4e-0000-4000-8000-000000000001",
-  "discordId": "123456789012345678",
-  "rank": "mvp",
-  "admin": false,
-  "slots": { "total": 3, "used": 1 },
-  "playerLimit": 10,
-  "worlds": [
-    {
-      "id": "7f1e0000-0000-4000-8000-000000000010",
-      "name": "Insel",
-      "type": "normal",
-      "status": "running",
-      "visibility": "private",
-      "slot": "vipworld-2",
-      "playerLimit": 10,
-      "players": 2,
-      "addons": ["keep-inventory"],
-      "createdAt": 1793500000000,
-      "lastStartedAt": 1793501000000
-    }
-  ]
-}
-```
-
-`rank` is `admin`, `mvp`, `vip`, or `none`. `slots.used` counts non-deleted worlds. `players` is the number of `player_presence` rows with `online=true` for that slot name, or `0` when `slot` is null. Timestamps are epoch milliseconds. `lastStartedAt` is null before the first successful start.
-
-`playerLimit` on `/me` is the cap that a newly created world would store. Each world object carries the cap stored for that world.
-
-### `GET /api/v1/vip/runtime`
-
-Capacity for the panel. RAM totals stay on the server.
-
-```json
-{
-  "maxRunning": 2,
-  "running": 1,
-  "budgetOk": true,
-  "playerLimits": { "vip": 5, "mvp": 10, "admin": 10 },
-  "adminSlots": 3,
-  "addonMax": 3,
-  "slots": [
-    { "slot": "vipworld-1", "status": "online", "worldId": "7f1e0000-0000-4000-8000-000000000010" },
-    { "slot": "vipworld-2", "status": "offline", "worldId": null }
-  ]
-}
-```
-
-`running` counts slots whose status is `online` or `starting`. `budgetOk` is the host check for starting one more world.
-
-### `POST /api/v1/vip/worlds`
-
-```json
-{ "name": "Bergdorf", "type": "normal" }
-```
-
-`type` defaults to `normal` when omitted. `201`:
-
-```json
-{
-  "id": "c4d20000-0000-4000-8000-000000000020",
-  "name": "Bergdorf",
-  "type": "normal",
-  "status": "stopped",
-  "visibility": "private",
-  "slot": null,
-  "playerLimit": 10,
-  "players": 0,
-  "addons": [],
-  "createdAt": 1793502000000,
-  "lastStartedAt": null
-}
-```
-
-### `GET /api/v1/vip/worlds/{id}`
-
-Same object as one `worlds[]` entry. `{id}` is the world UUID.
-
-### `PATCH /api/v1/vip/worlds/{id}`
-
-Rename, visibility, or both.
-
-```json
-{ "name": "Hafen", "visibility": "public" }
-```
-
-`200` returns the world object. Visibility is `private` or `public`. A public world can be joined by any player up to `playerLimit`. Only the owner can change it.
-
-### `POST /api/v1/vip/worlds/{id}/start`
-
-No body. Idempotent when the world is already up: `200` and `"status": "running"`. A new start is `202`:
-
-```json
-{
-  "id": "c4d20000-0000-4000-8000-000000000020",
-  "name": "Bergdorf",
-  "type": "normal",
-  "status": "starting",
-  "visibility": "private",
-  "slot": "vipworld-1",
-  "playerLimit": 10,
-  "players": 0,
-  "addons": [],
-  "createdAt": 1793502000000,
-  "lastStartedAt": null,
-  "progress": {
-    "phase": "starting",
-    "server": "vipworld-1",
-    "message": "VIP-Welt startet auf vipworld-1"
-  }
-}
-```
-
-`progress.phase` is `starting`, `ready`, or `failed`. `progress.server` is the Velocity server name (`vipworld-1`, `vipworld-2`, or `vipworld-3`). The in-game client connects the player when the phase becomes `ready`. The website only displays `progress`.
-
-`409 no_free_slot` and `503 ram_budget` are error envelopes. The world stays `stopped`. There is no queue body.
-
-### `POST /api/v1/vip/worlds/{id}/stop`
-
-No body. `200` with `"status": "stopping"` and the slot that was stopped. Stopping an already stopped world returns `200` with `"status": "stopped"` and `"slot": null`.
-
-### `GET /api/v1/vip/worlds/{id}/status`
-
-The world object plus `progress`. `progress` is null while `status` is `stopped`. While `starting`, phase is `starting` and the message is `VIP-Welt startet auf vipworld-1`. While `running`, phase is `ready` and the message is `Bereit auf vipworld-1`. A start that was accepted and then failed (timeout, host dropped, world folder rejected) stores `status=error`; phase is `failed` and the message is `VIP-Host nicht erreichbar, bitte spaeter erneut versuchen.`, `Start dauert zu lange. Versuch es gleich nochmal.`, or `VIP-Welt konnte nicht gestartet werden.` Slot and RAM refusals are the `409` and `503` responses on start, not an `error` world status.
-
-## Members
-
-Owner only. Roles are `member` and `builder`. `builder` is the trust role (settings and build tools inside the world). Both roles can join. The owner is not a row in this list.
-
-### `GET /api/v1/vip/worlds/{id}/members`
-
-```json
-{
-  "worldId": "c4d20000-0000-4000-8000-000000000020",
-  "members": [
-    { "uuid": "aaaaaaaa-0000-4000-8000-0000000000aa", "name": "Steve", "role": "builder", "addedAt": 1793503000000 }
-  ]
-}
-```
-
-`name` is null when the UUID is not in `known_players`.
-
-### `POST /api/v1/vip/worlds/{id}/members`
-
-```json
-{ "name": "Steve", "role": "member" }
-```
-
-`uuid` may be sent instead of `name`. `role` defaults to `member`. `201` returns the member object. Inviting the owner is `400 is_owner`.
-
-### `PATCH /api/v1/vip/worlds/{id}/members/{uuid}`
-
-```json
-{ "role": "builder" }
-```
-
-`200` returns the member object. This is the trust action.
-
-### `DELETE /api/v1/vip/worlds/{id}/members/{uuid}`
-
-`204` with an empty body.
-
-## Settings
-
-Allowlist: `gamemode` (`survival`, `creative`, `adventure`), `difficulty` (`peaceful`, `easy`, `normal`, `hard`), `pvp` (boolean), `keepInventory`, `mobGriefing`, `doDaylightCycle` (booleans), `visibility` (`private`, `public`).
-
-### `GET /api/v1/vip/worlds/{id}/settings`
-
-Defaults filled in:
-
-```json
-{
-  "worldId": "c4d20000-0000-4000-8000-000000000020",
-  "gamemode": "survival",
-  "difficulty": "normal",
-  "pvp": false,
-  "keepInventory": false,
-  "mobGriefing": true,
-  "doDaylightCycle": true,
-  "visibility": "private"
-}
-```
-
-### `PUT /api/v1/vip/worlds/{id}/settings`
-
-Partial. Omitted keys stay as they are. `200` returns the full settings object. The world server re-reads these rows about once a second while the slot is running and applies them there. A stopped world applies them the next time it starts.
-
-## Addons
-
-V1 addons are `type: rule`. They are selected per world, stored in `vip_world_addons`, and applied by CraftCore on the world server. They are not downloadable jars. `type: plugin` is reserved and is not in the catalog. The same ids are toggled from the in-game GUI.
-
-| id | Effect |
-|---|---|
-| `keep-inventory` | `keepInventory=true` |
-| `peaceful` | difficulty `peaceful` |
-| `creative` | gamemode `creative` |
-| `day-lock` | `doDaylightCycle=false` |
-| `pvp` | world PvP on |
-
-Addon effects override the matching settings keys while the addon is selected. Removing the addon leaves the underlying setting.
-
-### `GET /api/v1/vip/addons`
-
-```json
-{
-  "max": 3,
-  "addons": [
-    { "id": "keep-inventory", "name": "Keep Inventory", "description": "Behalte Items beim Tod", "type": "rule" },
-    { "id": "peaceful", "name": "Peaceful", "description": "Keine feindlichen Monster", "type": "rule" },
-    { "id": "creative", "name": "Creative", "description": "Kreativmodus", "type": "rule" },
-    { "id": "day-lock", "name": "Tageslicht aus", "description": "Zeit steht still", "type": "rule" },
-    { "id": "pvp", "name": "PvP", "description": "Spieler koennen sich treffen", "type": "rule" }
-  ]
-}
-```
-
-### `GET /api/v1/vip/worlds/{id}/addons`
-
-```json
-{ "worldId": "c4d20000-0000-4000-8000-000000000020", "addons": ["keep-inventory"] }
-```
-
-### `PUT /api/v1/vip/worlds/{id}/addons`
-
-Replaces the selection. Order is ignored. Duplicates are collapsed.
-
-```json
-{ "addons": ["keep-inventory", "peaceful"] }
-```
-
-`200` returns the stored id list. An empty array clears addons.
+`start` does not return a queue position. The in-game client shows boss bar and action bar progress and connects the player when the slot is ready. The website only learns `done`, `denied`, or `failed`.
 
 ## Internal lobby routes
 
