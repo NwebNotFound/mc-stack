@@ -29,23 +29,34 @@ public final class VipAddonRules {
         return addons != null && addons.contains(id);
     }
 
-    /**
-     * Game mode the creative addon grants when it is switched on. It is granted once per player:
-     * an already granted player keeps the mode they pick, so {@code /gamemode} keeps working while
-     * the addon is active. Spectator and creative are left alone.
-     */
-    public static GameMode grant(boolean creativeAddon, boolean alreadyGranted, GameMode current) {
-        if (!creativeAddon || alreadyGranted || current == null) return null;
-        return current == GameMode.CREATIVE || current == GameMode.SPECTATOR ? null : GameMode.CREATIVE;
+    /** What the applier has to do with one player's game mode. */
+    public record Mode(boolean change, GameMode target, boolean mark, boolean clear) {
+        public static Mode none() { return new Mode(false, null, false, false); }
     }
 
     /**
-     * Game mode given back when the creative addon is switched off. Only modes the addon handed out
-     * are touched, and the mode from before the grant comes back.
+     * Game mode decision for one player, used on join and by the five-second refresh.
+     *
+     * <p>The creative addon grants creative <em>once</em> and records it (the applier keeps the mark
+     * in the player data container, so a restart does not lose it). A marked player keeps every mode
+     * they pick afterwards, which is what makes {@code /gamemode} work while the addon is active.
+     * With the addon switched off, a marked player still in creative gets the mode from before the
+     * grant back - also after a restart or a relog.</p>
+     *
+     * @param marked  the player was given creative by the addon
+     * @param current game mode the player has right now
+     * @param before  game mode the player had before the grant, may be null
      */
-    public static GameMode revoke(boolean grantedByAddon, GameMode current, GameMode before) {
-        if (!grantedByAddon || current != GameMode.CREATIVE) return null;
-        return before == null || before == GameMode.CREATIVE ? GameMode.SURVIVAL : before;
+    public static Mode onJoin(boolean creativeAddon, boolean marked, GameMode current, GameMode before) {
+        if (creativeAddon) {
+            if (marked) return Mode.none();
+            if (current == GameMode.CREATIVE || current == GameMode.SPECTATOR) return Mode.none();
+            return new Mode(true, GameMode.CREATIVE, true, false);
+        }
+        if (!marked) return Mode.none();
+        if (current != GameMode.CREATIVE) return new Mode(false, null, false, true);
+        GameMode back = before == null || before == GameMode.CREATIVE ? GameMode.SURVIVAL : before;
+        return new Mode(true, back, false, true);
     }
 
     /**

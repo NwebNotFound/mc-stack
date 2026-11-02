@@ -23,11 +23,20 @@ class LegacyUnsellableTest {
     assertTrue(config.getStringList("market.unsellable").isEmpty());
   }
 
-  @Test void adminListSurvives() {
+  @Test void adminEntriesNextToTheLegacyListSurvive() {
     YamlConfiguration config = new YamlConfiguration();
-    config.set("market.unsellable", List.of("SAND", "DIRT"));
+    config.set("market.unsellable", List.of("SAND", "BEDROCK", "DIRT", "ELYTRA"));
+    assertTrue(ResourceSync.clearLegacyUnsellable(config));
+    assertEquals(List.of("BEDROCK", "ELYTRA"), config.getStringList("market.unsellable"),
+      "eigene Sperren bleiben, nur die Altlasten fallen weg");
     assertFalse(ResourceSync.clearLegacyUnsellable(config));
-    assertEquals(List.of("SAND", "DIRT"), config.getStringList("market.unsellable"));
+  }
+
+  @Test void listWithoutLegacyNamesIsKeptUntouched() {
+    YamlConfiguration config = new YamlConfiguration();
+    config.set("market.unsellable", List.of("BEDROCK", "ELYTRA"));
+    assertFalse(ResourceSync.clearLegacyUnsellable(config));
+    assertEquals(List.of("BEDROCK", "ELYTRA"), config.getStringList("market.unsellable"));
   }
 
   @Test void shippedConfigIsAlreadyEmpty() {

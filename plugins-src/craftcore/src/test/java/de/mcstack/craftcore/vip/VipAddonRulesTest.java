@@ -9,21 +9,30 @@ import org.junit.jupiter.api.Test;
 
 /** Every addon has its own verifiable effect, and removing creative or peaceful gives the state back. */
 class VipAddonRulesTest {
-    @Test void creativeAddonGrantsCreativeOnceAndLeavesGamemodeAlone() {
-        assertEquals(GameMode.CREATIVE, VipAddonRules.grant(true, false, GameMode.SURVIVAL));
-        assertNull(VipAddonRules.grant(true, true, GameMode.SURVIVAL),
+    @Test void creativeAddonGrantsOnceAndKeepsGamemodeWorking() {
+        VipAddonRules.Mode first = VipAddonRules.onJoin(true, false, GameMode.SURVIVAL, null);
+        assertTrue(first.change());
+        assertEquals(GameMode.CREATIVE, first.target());
+        assertTrue(first.mark(), "die Vergabe muss am Spieler gespeichert werden");
+        assertEquals(VipAddonRules.Mode.none(), VipAddonRules.onJoin(true, true, GameMode.SURVIVAL, GameMode.SURVIVAL),
             "nach dem Aktivieren muss /gamemode wirken, nicht zurueckgesetzt werden");
-        assertNull(VipAddonRules.grant(true, true, GameMode.ADVENTURE));
-        assertNull(VipAddonRules.grant(true, false, GameMode.SPECTATOR), "Spectator bleibt unangetastet");
-        assertNull(VipAddonRules.grant(false, false, GameMode.SURVIVAL), "ohne Addon wird nichts gesetzt");
+        assertEquals(VipAddonRules.Mode.none(), VipAddonRules.onJoin(true, false, GameMode.SPECTATOR, null),
+            "Spectator bleibt unangetastet");
+        assertEquals(VipAddonRules.Mode.none(), VipAddonRules.onJoin(false, false, GameMode.SURVIVAL, null),
+            "ohne Addon und ohne Markierung passiert nichts");
     }
 
-    @Test void removingCreativeGivesTheModeBack() {
-        assertEquals(GameMode.SURVIVAL, VipAddonRules.revoke(true, GameMode.CREATIVE, GameMode.SURVIVAL));
-        assertEquals(GameMode.ADVENTURE, VipAddonRules.revoke(true, GameMode.CREATIVE, GameMode.ADVENTURE));
-        assertEquals(GameMode.SURVIVAL, VipAddonRules.revoke(true, GameMode.CREATIVE, null));
-        assertNull(VipAddonRules.revoke(true, GameMode.SURVIVAL, GameMode.SURVIVAL), "kein fremdes Kreativ zuruecksetzen");
-        assertNull(VipAddonRules.revoke(false, GameMode.CREATIVE, GameMode.SURVIVAL));
+    @Test void removingCreativeGivesTheModeBackEvenAfterARestart() {
+        VipAddonRules.Mode back = VipAddonRules.onJoin(false, true, GameMode.CREATIVE, GameMode.ADVENTURE);
+        assertTrue(back.change(), "nach einem Neustart ist nur noch die Markierung da");
+        assertEquals(GameMode.ADVENTURE, back.target());
+        assertTrue(back.clear());
+        assertEquals(GameMode.SURVIVAL, VipAddonRules.onJoin(false, true, GameMode.CREATIVE, null).target());
+        VipAddonRules.Mode left = VipAddonRules.onJoin(false, true, GameMode.SURVIVAL, GameMode.SURVIVAL);
+        assertFalse(left.change(), "wer selbst aus Kreativ raus ist, wird nicht angefasst");
+        assertTrue(left.clear(), "nur die Markierung wird aufgeraeumt");
+        assertEquals(VipAddonRules.Mode.none(), VipAddonRules.onJoin(false, false, GameMode.CREATIVE, null),
+            "fremdes Kreativ bleibt unangetastet");
     }
 
     @Test void keepInventoryAddonOnlyTouchesKeepInventory() {
@@ -68,7 +77,7 @@ class VipAddonRulesTest {
         for (VipAddons.Addon addon : VipAddons.CATALOG) {
             boolean changesWorld = !VipAddonRules.world(List.of(addon.id())).equals(none);
             boolean changesMode = addon.id().equals("creative")
-                && VipAddonRules.grant(true, false, GameMode.SURVIVAL) != null;
+                && VipAddonRules.onJoin(true, false, GameMode.SURVIVAL, null).change();
             boolean changesDifficulty = addon.id().equals("peaceful");
             assertTrue(changesWorld || changesMode || changesDifficulty, "Addon ohne Wirkung: " + addon.id());
         }

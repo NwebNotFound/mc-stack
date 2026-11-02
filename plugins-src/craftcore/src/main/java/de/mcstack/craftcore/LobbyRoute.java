@@ -50,6 +50,8 @@ final class LobbyRoute implements Listener {
   /** Same warmup the teleports use: no movement, no damage, message every second. */
   void startWarmup(Player player) {
     cancel(player);
+    // /home and /lobby must not run side by side: the last command wins.
+    if (Features.instance != null) Features.instance.cancelSilent(player);
     int[] left = {Math.max(1, core.getConfig().getInt("teleport-seconds", 10))};
     player.sendMessage("Teleport in " + left[0] + " Sekunden. Stillstehen!");
     int task = Bukkit.getScheduler().scheduleSyncRepeatingTask(core, () -> {
@@ -72,18 +74,21 @@ final class LobbyRoute implements Listener {
       if (!Bukkit.getWorlds().isEmpty()) player.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());
       return;
     }
-    markArrival(player.getUniqueId());
-    ProxyChannel.send(core, player, SpawnRoute.LOBBY);
+    Bukkit.getScheduler().runTaskAsynchronously(core, () -> markArrival(player.getUniqueId()));
+    if (!ProxyChannel.send(core, player, SpawnRoute.LOBBY)) {
+      player.sendMessage("Lobby-Wechsel fehlgeschlagen. Bitte erneut versuchen.");
+    }
   }
 
   /**
    * Tells the lobby that this join is a lobby command, so it lands on the lobby spawn instead of
-   * the logout position. Best effort: a server without the shared market tables simply skips it.
+   * the logout position. Runs off the main thread; a server without the shared tables skips it.
    */
   private void markArrival(UUID id) {
     try {
-      long expires = System.currentTimeMillis() + 30_000L;
+      long now = System.currentTimeMillis(), expires = now + 30_000L;
       core.tx(c -> {
+        core.exec(c, "DELETE FROM spawn_transfers WHERE expires<?", now);
         core.exec(c, "REPLACE INTO spawn_transfers(uuid,expires) VALUES (?,?)", id.toString(), expires);
         return null;
       });
@@ -97,20 +102,25 @@ final class LobbyRoute implements Listener {
     if (task != null) Bukkit.getScheduler().cancelTask(task);
   }
 
-  @EventHandler
+  @EventHandler(ignoreCancelled = true)
   public void move(PlayerMoveEvent event) {
     if (!warmups.containsKey(event.getPlayer().getUniqueId())) return;
     Location from = event.getFrom(), to = event.getTo();
     if (to == null || from == null) return;
-    if (!Objects.equals(from.getWorld(), to.getWorld())
-        || WarmupMove.blockChanged(from.getBlockX(), from.getBlockY(), from.getBlockZ(),
-            to.getBlockX(), to.getBlockY(), to.getBlockZ())) {
+    if (breaksWarmup(Objects.equals(from.getWorld(), to.getWorld()),
+        WarmupMove.blockChanged(from.getBlockX(), from.getBlockY(), from.getBlockZ(),
+            to.getBlockX(), to.getBlockY(), to.getBlockZ()))) {
       cancel(event.getPlayer());
       event.getPlayer().sendMessage("Teleport abgebrochen.");
     }
   }
 
-  @EventHandler
+  /** A world change or a changed block breaks the warmup; looking around does not. */
+  static boolean breaksWarmup(boolean sameWorld, boolean blockChanged) {
+    return !sameWorld || blockChanged;
+  }
+
+  @EventHandler(ignoreCancelled = true)
   public void damage(EntityDamageEvent event) {
     if (!(event.getEntity() instanceof Player player) || !warmups.containsKey(player.getUniqueId())) return;
     cancel(player);

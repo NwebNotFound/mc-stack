@@ -113,8 +113,12 @@ public final class VipWorldGate implements Listener {
     }
     private void remove(Player player) {
         player.sendMessage(Component.text("Du wurdest aus dieser VIP-Welt entfernt."));
-        ProxyChannel.send(plugin, player, "lobby");
+        if (kickAfterRemoval(ProxyChannel.send(plugin, player, "lobby"))) {
+            player.kick(Component.text("Du wurdest aus dieser VIP-Welt entfernt."));
+        }
     }
+    /** A member who cannot be sent to the lobby must not stay inside the world. */
+    public static boolean kickAfterRemoval(boolean sent) { return !sent; }
     @EventHandler(priority=EventPriority.HIGHEST)
     public void login(PlayerLoginEvent event) {
         Decision decision=decisions.remove(event.getPlayer().getUniqueId());

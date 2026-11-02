@@ -15,6 +15,7 @@ public final class ProxyChannel {
   /** Safe to call from several modules: an already registered channel is not registered twice. */
   public static void register(JavaPlugin plugin) {
     register(plugin, SpawnRoute.CHANNEL);
+    // Older plugin jars still send on the legacy name; keep it registered so their messages work.
     register(plugin, SpawnRoute.LEGACY_CHANNEL);
   }
 
@@ -24,18 +25,31 @@ public final class ProxyChannel {
     }
   }
 
-  /** Sends a player to another backend of the network. */
-  public static void send(JavaPlugin plugin, Player player, String server) {
+  /**
+   * Sends a player to another backend.
+   *
+   * @return false when the proxy message could not be sent; the caller decides what happens next
+   *         (kick, retry or a chat hint).
+   */
+  public static boolean send(JavaPlugin plugin, Player player, String server) {
     try {
-      send(plugin, player, SpawnRoute.connect(server));
+      return send(plugin, player, SpawnRoute.connect(server));
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
-      player.sendMessage("Verbindung zu " + server + " fehlgeschlagen.");
+      return false;
     }
   }
 
-  public static void send(JavaPlugin plugin, Player player, byte[] payload) {
-    register(plugin);
-    player.sendPluginMessage(plugin, SpawnRoute.CHANNEL, payload);
+  /** @return false when Bukkit refused the message, e.g. an unregistered channel. */
+  public static boolean send(JavaPlugin plugin, Player player, byte[] payload) {
+    try {
+      register(plugin);
+      player.sendPluginMessage(plugin, SpawnRoute.CHANNEL, payload);
+      return true;
+    } catch (RuntimeException e) {
+      plugin.getLogger().warning("Proxy-Nachricht fehlgeschlagen: " + e.getClass().getSimpleName()
+          + (e.getMessage() == null ? "" : " " + e.getMessage()));
+      return false;
+    }
   }
 }

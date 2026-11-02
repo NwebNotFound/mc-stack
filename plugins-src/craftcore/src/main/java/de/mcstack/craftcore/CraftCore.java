@@ -55,6 +55,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   de.mcstack.craftcore.vip.LobbyVip lobbyVip() { return lobbyVip; }
   /** /lobby, /l, /hub, /leave and /spawn; exists on every backend, independent of the modules. */
   private LobbyRoute lobbyRoute;
+  LobbyRoute lobbyRoute() { return lobbyRoute; }
   private void startCitizensNpcs() {
     if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
   }
