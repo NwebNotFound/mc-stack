@@ -13,9 +13,9 @@ class VipStoreTest {
     private Connection database() throws SQLException {
         Connection c = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         try (Statement s = c.createStatement()) {
-            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status VARCHAR(16), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
+            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status ENUM('stopped','queued','starting','running','stopping','error','deleted'), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
             s.execute("CREATE TABLE vip_world_runs (world_id VARCHAR(36), slot VARCHAR(16), started_at BIGINT, stopped_at BIGINT, stop_reason VARCHAR(32))");
-            s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role VARCHAR(16), added_at BIGINT)");
+            s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role ENUM('member','builder','trusted') NOT NULL, added_at BIGINT)");
             s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT)");
             s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
         }
@@ -31,7 +31,7 @@ class VipStoreTest {
                 Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
                 Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
                 Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
-                Map.entry("FIND_BY_NAME", 1));
+                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

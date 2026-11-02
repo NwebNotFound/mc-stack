@@ -32,7 +32,8 @@ public final class VipStore {
     static final String INSERT_ADDON = "INSERT INTO vip_world_addons (world_id,addon,added_at) VALUES (?,?,?)";
     static final String SET_STARTED = "UPDATE vip_worlds SET status='running',slot=?,last_started_at=? WHERE id=? AND status<>'deleted'";
     static final String FIND_PLAYER = "SELECT uuid FROM known_players WHERE name=?";
-    static final String FIND_BY_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE name=? AND status<>'deleted' LIMIT 1";
+    static final String FIND_OWNERS_BY_NAME = "SELECT owner FROM vip_worlds WHERE name=? AND status<>'deleted'";
+    static final String FIND_BY_OWNER_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE owner=? AND name=? AND status<>'deleted'";
 
     private final ConnectionSource source;
     private final Clock clock;
@@ -130,8 +131,19 @@ public final class VipStore {
         }
     }
     public Optional<Entry> findByName(String name) throws SQLException {
-        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_BY_NAME)) {
+        List<UUID> owners = ownersOf(name);
+        return owners.size() == 1 ? findByOwnerName(owners.get(0), name) : Optional.empty();
+    }
+    /** Every owner that has a world with that name; more than one is ambiguous for admins. */
+    public List<UUID> ownersOf(String name) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_OWNERS_BY_NAME)) {
             s.setString(1,name);
+            try (ResultSet r=s.executeQuery()) { List<UUID> owners=new ArrayList<>(); while(r.next()) owners.add(UUID.fromString(r.getString(1))); return owners; }
+        }
+    }
+    public Optional<Entry> findByOwnerName(UUID owner, String name) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_BY_OWNER_NAME)) {
+            s.setString(1,owner.toString()); s.setString(2,name);
             try (ResultSet r=s.executeQuery()) {
                 if (!r.next()) return Optional.empty();
                 return Optional.of(new Entry(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),r.getString(6)));

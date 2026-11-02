@@ -13,8 +13,8 @@ class VipStoreMembersTest {
     private Connection database() throws SQLException {
         Connection c = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         try (Statement s = c.createStatement()) {
-            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status VARCHAR(16), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
-            s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role VARCHAR(16), added_at BIGINT, PRIMARY KEY (world_id, player))");
+            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status ENUM('stopped','queued','starting','running','stopping','error','deleted'), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
+            s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role ENUM('member','builder','trusted') NOT NULL, added_at BIGINT, PRIMARY KEY (world_id, player))");
             s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT, PRIMARY KEY (world_id, addon))");
             s.execute("CREATE TABLE vip_world_runs (world_id VARCHAR(36), slot VARCHAR(16), started_at BIGINT, stopped_at BIGINT, stop_reason VARCHAR(32))");
             s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
@@ -114,6 +114,36 @@ class VipStoreMembersTest {
                 s.setString(1, owner.toString()); s.setString(2, "Nils"); s.executeUpdate();
             }
             assertEquals(owner, store.player("Nils").orElseThrow());
+        }
+    }
+
+    @Test void roleColumnAcceptsTrustedAndRejectsUnknownRoles() throws Exception {
+        try (Connection c = database()) {
+            String url = c.getMetaData().getURL();
+            VipStore store = new VipStore(() -> DriverManager.getConnection(url), advancing(new AtomicLong(EPOCH)));
+            UUID owner = UUID.randomUUID();
+            UUID friend = UUID.randomUUID();
+            store.create(owner, "insel", "normal");
+            String id = store.list(owner).get(0).id();
+            store.addMember(id, friend, "trusted");
+            assertEquals("trusted", store.members(id).get(0).role(), "das ENUM der Migration muss 'trusted' annehmen");
+            assertThrows(SQLException.class, () -> store.addMember(id, UUID.randomUUID(), "owner"),
+                "unbekannte Rollen muessen wie in MariaDB am ENUM scheitern");
+        }
+    }
+
+    @Test void nameLookupIsUnambiguousForAdmins() throws Exception {
+        try (Connection c = database()) {
+            String url = c.getMetaData().getURL();
+            VipStore store = new VipStore(() -> DriverManager.getConnection(url), advancing(new AtomicLong(EPOCH)));
+            UUID first = UUID.randomUUID();
+            UUID second = UUID.randomUUID();
+            store.create(first, "insel", "normal");
+            store.create(second, "insel", "flat");
+            assertEquals(2, store.ownersOf("insel").size());
+            assertTrue(store.findByName("insel").isEmpty(), "gleicher Name bei zwei Besitzern ist mehrdeutig");
+            assertEquals(first, store.findByOwnerName(first, "insel").orElseThrow().owner());
+            assertEquals("flat", store.findByOwnerName(second, "insel").orElseThrow().type());
         }
     }
 }

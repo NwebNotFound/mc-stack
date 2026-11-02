@@ -5,7 +5,9 @@ ALTER USER 'craft_vip'@'%' IDENTIFIED BY '@VIP_DB_PASSWORD@';
 GRANT SELECT ON craftcore.vip_worlds TO 'craft_vip'@'%';
 GRANT SELECT ON craftcore.vip_world_members TO 'craft_vip'@'%';
 GRANT INSERT, DELETE ON craftcore.vip_world_members TO 'craft_vip'@'%';
+GRANT UPDATE (role) ON craftcore.vip_world_members TO 'craft_vip'@'%';
 GRANT SELECT, INSERT, DELETE ON craftcore.vip_world_addons TO 'craft_vip'@'%';
+GRANT UPDATE (name, status, slot, last_started_at) ON craftcore.vip_worlds TO 'craft_vip'@'%';
 GRANT SELECT, INSERT, UPDATE ON craftcore.vip_world_runs TO 'craft_vip'@'%';
 GRANT SELECT ON craftcore.known_players TO 'craft_vip'@'%';
 

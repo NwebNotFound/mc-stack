@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS craftcore.vip_worlds (
 CREATE TABLE IF NOT EXISTS craftcore.vip_world_members (
   world_id CHAR(36) NOT NULL,
   player CHAR(36) NOT NULL,
-  role ENUM('member','builder') NOT NULL,
+  role ENUM('member','builder','trusted') NOT NULL,
   added_at BIGINT NOT NULL,
   PRIMARY KEY (world_id, player),
   FOREIGN KEY (world_id) REFERENCES craftcore.vip_worlds(id) ON DELETE CASCADE
