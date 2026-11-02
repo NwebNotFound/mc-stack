@@ -77,7 +77,11 @@ final class ResourceSync {
     if (!merged && !migrated) return false;
     // Keep the pre-migration file separately: the generic .bak is overwritten by every later sync.
     if (migrated) {
-      Files.copy(file.toPath(), file.toPath().resolveSibling(file.getName() + ".bak-legacy-unsellable"),
+      // Timestamped so a second migration run cannot overwrite the pre-migration state.
+      String stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+          .format(java.time.LocalDateTime.now());
+      Files.copy(file.toPath(),
+          file.toPath().resolveSibling(file.getName() + ".bak-legacy-unsellable-" + stamp),
           StandardCopyOption.REPLACE_EXISTING);
     }
     backup(file);

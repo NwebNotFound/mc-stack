@@ -35,6 +35,11 @@ public final class ProxyChannel {
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
       return false;
+    } catch (RuntimeException e) {
+      // An unregistered channel or a refused messenger throws here; the caller still gets false.
+      plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: "
+          + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage()));
+      return false;
     }
   }
 
