@@ -4,7 +4,7 @@
 
 **Ziel:** Der Bankkurs jedes Items hängt an den Rezepten, bewegt sich bei jedem einzelnen Kauf und Verkauf (auch im Stapel) entlang einer Exponentialkurve, bleibt zwischen Item-Unter- und Obergrenze und läuft langsam zum Basispreis zurück. Kauf/Verkauf und jedes Rezept bleiben ohne Gewinn. Die stündlichen Preissnapshots hören auf zu springen.
 
-**Architektur:** Eine Zeile `market_curve` pro Item hält `net` (Käufe minus Verkäufe) und `updated`. Der Mid-Kurs ist `Basis * exp(net / Tiefe)`, geklemmt auf die Item-Grenzen. Kauf- und Verkaufscent kommen aus den heutigen Faktoren (`buy-factor` 1.5, `sell-factor` 0.75, `max-sell-ratio` 0.5). Ein Rezeptdeckel, wie ihn `Market.safeSell` mit `RecipeCost` schon heute auf den Ankauf legt, bleibt verbindlich und wird gegen die Untergrenze der Zutaten gerechnet. Lesende Kursabfragen schreiben nichts. Handel, Kontostand, `net` und das Handel-Event liegen in einer Transaktion. Die Historie trennt Angebots-Kurs und Abschluss-Durchschnitt.
+**Architektur:** Eine Zeile `market_curve` pro Item hält `net` (Käufe minus Verkäufe) und `updated`. Der Mid-Kurs ist `Basis * exp(net / Tiefe)`, geklemmt auf `0.25b` bis `1.2b`. Die Tiefe ist kurz für Massenblöcke und länger für seltene Items. Kauf- und Verkaufscent kommen aus den heutigen Faktoren (`buy-factor` 1.5, `sell-factor` 0.75, `max-sell-ratio` 0.5). Der Rezeptdeckel begrenzt den Verkauf auf die aktuellen Kaufpreise der Zutaten. Lesende Kursabfragen schreiben nichts. Handel, Kontostand, `net` und das Handel-Event liegen in einer Transaktion. Die Historie trennt Angebots-Kurs und Abschluss-Durchschnitt.
 
 **Technik:** CraftCore, MariaDB, JUnit, `prices-base.yml` (Rohwerte in CP), `config.yml` Abschnitt `market`, Rezeptliste `plugins-src/craftcore/src/test/resources/recipes-26.1.tsv` (1741 Zeilen, minecraft-data 26.1).
 
@@ -12,8 +12,9 @@
 
 - Rohpreise in `plugins-src/craftcore/src/main/resources/prices-base.yml` bleiben die Quelle. Diese Plan-PR ändert sie nicht.
 - `market.base-factor` = 0.5, `market.buy-factor` = 1.5, `market.sell-factor` = 0.75, `market.max-sell-ratio` = 0.5.
-- Dynamische Standardbandbreite bleibt 0.8 bis 1.2 um die Quote-Basis, Halbwertszeit 72 Stunden. Engere Werte in `market.min-price` / `market.max-price` gelten (Bruchstein und Stein sind fest).
-- Tiefe `D = 64000/3` (21333.333… Stück). Das ist `volume-scale / strength` = 64 / 0.003 und trifft die heutige Kommentarzeile „je Stack 0,3 %“: `exp(0.003) - 1 = 0.30045 %` pro 64 Stück.
+- Verkaufsuntergrenze der Kurve ist `lo = 0.25 * b`, Obergrenze `hi = 1.2 * b`, für jedes Item. `market.min-price` / `market.max-price` klemmen die Kurve nicht mehr: Bruchstein und Stein stehen dort auf einem Punkt (`0.05` bzw. `0.10`) und würden sonst fest bleiben. Halbwertszeit 72 Stunden.
+- Tiefe hängt an der Quote-Basis, nicht an einem globalen `D = 64000/3`. Das alte `D` bleibt nur als Vergleich in den Tabellen. Normativ: `b < 1` → `D = 128` (zwei Stacks), `1 ≤ b < 50` → `D = 250`, `b ≥ 50` → `D = 400`. Ein Trade bewegt den Mid um `exp(1/D) - 1`: 0.778 % bei Massenblöcken, 0.400 % in der Mitte, 0.250 % bei Diamant und Netherit.
+- Ein Trade nimmt höchstens 2304 Stück an (`36 * 64`, ein Inventar ohne Shulker-Inhalt). Die Schleife läuft im Speicher, nicht als SQL pro Stück.
 - 1 CP = 100 Cent. Auszahlung und Abbuchung in ganzen Cent, Summe über die Stückkurve, nicht ein Kurs mal Menge.
 - `market.unsellable` (darunter Bruchstein, Erde, Sand) bleibt. Die Szenarien rechnen den Ankauf trotzdem, damit die Kurve auch ohne diese Sperre keine Diamant- oder Netheritausrüstung finanziert.
 - Kein Gewinn heißt Erlös ≤ Kosten. Gleichstand ist kein Gewinn.
@@ -96,79 +97,119 @@ Abklingzeit einmal pro Transaktion, nicht pro Stück, und nur schreibend in der 
 net   = net * 2^(-Δt_ms / (72 * 3600 * 1000))
 ```
 
-Mid in CP:
+Mid in CP. `D` nach Quote-Basis:
 
 ```text
-D = 64000 / 3
-m(net) = min(hi, max(lo, b * exp(net / D)))
+D(b) = 128   wenn b < 1          -- Massenblöcke, zwei Stacks bis zur e-Faltung
+D(b) = 250   wenn 1 ≤ b < 50
+D(b) = 400   wenn b ≥ 50         -- Diamant, Netherit
+lo   = 0.25 * b
+hi   = 1.2 * b
+m(net) = min(hi, max(lo, b * exp(net / D(b))))
 ```
 
-`lo` und `hi` sind `market.min-price.<ITEM>` und `market.max-price.<ITEM>`, sonst `0.8 * b` und `1.2 * b`. Es gilt `lo <= b <= hi`. Bruchstein und Stein haben `lo = hi = b`, der Mid klebt, `net` zählt trotzdem jedes Stück.
+`market.min-price` und `market.max-price` gelten für diese Kurve nicht. Bruchstein (`min = max = 0.05`) und Stein (`0.10`) wären sonst fest; Sand wäre bei `0.08`–`0.12` eingeklemmt und käme nie auf `0.25b`.
 
-Stückpreise in Cent:
+Stückpreise in Cent. Liegen Kauf und Verkauf nach dem Runden gleichauf, ist der Kauf mindestens ein Cent darüber (`BankPrice.minimumBuy` verlangt heute schon `sell + 1`):
 
 ```text
-Kauf(m) = max(1, floor(m * 100 * 1.5))
-Rohverkauf(m) = min(floor(m * 100 * 0.75), cappedSell(Kauf(m), 0.5))
-Verkauf(m) = min(Rohverkauf(m), floor(Rezeptdeckel))    -- Deckel nur wenn endlich
+Kauf0(m) = max(1, floor(m * 100 * 1.5))
+Rohverkauf(m) = max(1, min(floor(m * 100 * 0.75), cappedSell(Kauf0(m), 0.5)))
+Kauf(m) = max(Kauf0(m), Rohverkauf(m) + 1)
+Verkauf(m) = min(Rohverkauf(m), Rezeptdeckel)
 ```
 
-`Rezeptdeckel` ist der heutige `RecipeCost`-Wert, Saat aber `Kauf(lo)` je kaufbarem Item (Cent als Double), dann Relaxation `Summe der günstigsten Zutat je Slot / Ausgabemenge` über alle registrierten Rezepte. Unkaufbare Zutaten bleiben `+∞` und sperren diese Kette. `Market.safeSell` bleibt die Anwendung des Deckels.
+`cappedSell` bleibt `bp = 5000`. `Rezeptdeckel` ist das Minimum über die ausführbaren Rezepte von `floor(Summe der aktuellen Kaufpreise der günstigsten kaufbaren Zutat je Slot / Ausgabemenge)`. Zutatenzeilen werden in derselben Transaktion gesperrt, Reihenfolge der Item-Namen. Ein statischer Deckel auf `Kauf(lo)` würde den Basisverkauf von 779 Rezeptprodukten unter den heutigen Kurs drücken (Stein von 7 auf 2 Cent, weil Bruchstein an `lo` nur noch 2 Cent kostet), obwohl am Basis-`net` kein Gewinn entsteht. Deshalb liest der Deckel den **aktuellen** Kauf. An der Ecke (jede Zutat bei `lo`, Produkt bei `hi`) fällt er auf den Floor-Kauf zurück; dort hält die Ungleichung.
 
-Massenverkauf von `q` Stück, Start-`net` nach der Abklingzeit, in einer Transaktion:
+Massenverkauf von `q` Stück, `1 ≤ q ≤ 2304`, Start-`net` nach der Abklingzeit, Summe im Speicher, ein `UPDATE`:
 
 ```text
 Erlös = Σ_{i=0}^{q-1} Verkauf( m(net - i) )
 net  := net - q
 ```
 
-Massenkauf:
+Massenkauf analog mit `Kauf` und `net := net + q`. `q > 2304` lehnt der Trade ab, ohne `net` zu ändern. 2304 ist ein Spielerinventar (36 Slots à 64). Shulker-Inhalte verkauft das Verkaufsmenü nicht mit. Die 10.000er-Tabellen sind aufeinanderfolgende Trades ohne Zeitverzug, nicht eine Transaktion: `10000 = 4 * 2304 + 784`, die Summe ist dieselbe.
+
+Der Spieler bekommt oder zahlt den Kurs vor dem Schritt dieses Stücks. Die Summe ist die Summe der Einzeltrades.
+
+### Warum `D = 64000/3` zu träge ist
+
+Das ist `64 / 0.003` und trifft die heutige Zeile „0,3 % je Stack“: ein Stück bewegt den Mid um `exp(3/64000) - 1 = 0.004687 %`, 64 Stück um 0.300 %. Bruchstein ist zusätzlich fest (`lo = hi`), der Mid bewegt sich gar nicht. Ein Diamant-Verkauf ändert den Ankauf von 15000 auf 14999 Cent. Das ist ein Cent auf 150 CP, kein sichtbarer Schritt. `D = 64` (ein Stack) läge bei 1.55 % pro Stück und wäre für Massenblöcke nur eine Rampe von etwa 89 Verkäufen bis zum Floor `0.25b`; danach klebt der Kurs. `D = 128` ist das langsame Ende von „ein bis zwei Stacks“: ein Stück 0.778 % (knapp über dem Beispiel 0.5 %, der Mid ist bei 3-Cent-Items das sichtbare Signal), 64 Stück 39.35 %, der Floor kommt erst nach `128 * ln(4) = 177.4` Verkäufen. Seltene Items mit `D = 400` liegen bei 0.250 % pro Stück, also in der Spanne 0.1–0.5 %, und 64 Stück sind 14.79 % abwärts bzw. 17.35 % aufwärts.
+
+„Kurs nach N“ ist der Quote bei `net = ±N`, also der Preis des nächsten Stücks. Start ist immer `net = 0`.
+
+### Vergleich: altes `D = 64000/3`, altes Band
+
+Bruchstein fest bei `b`. Erde `0.8b`–`1.2b` ohne Config-Pin wäre `0.04`–`0.06`, Sand `0.08`–`0.12`, Diamant `160`–`240`, Netheritbarren `3200`–`4800`. Kein Rezeptdeckel in diesen Vergleichszahlen (die fünf Items haben keinen, der den Basisverkauf senkt).
+
+Massenblöcke, altes Modell:
+
+| Item | Seite | nach 1 | nach 64 | nach 640 | nach 10.000 |
+| --- | --- | --- | --- | --- | --- |
+| Bruchstein | Verkauf | 0.050000 CP, Kauf 7 / Verkauf 3, ±0 % | unverändert | unverändert | unverändert |
+| Bruchstein | Kauf | unverändert | unverändert | unverändert | unverändert |
+| Erde | Verkauf | 0.049998 CP, 7 / 3, −0.0047 % | 0.049850, 7 / 3, −0.300 % | 0.048522, 7 / 3, −2.96 % | 0.040000, 6 / 3, −20 % |
+| Erde | Kauf | 0.050002, 7 / 3, +0.0047 % | 0.050150, 7 / 3, +0.300 % | 0.051523, 7 / 3, +3.05 % | 0.060000, 9 / 4, +20 % |
+| Sand | Verkauf | 0.099995, 14 / 7, −0.0047 % | 0.099700, 14 / 7, −0.300 % | 0.097045, 14 / 7, −2.96 % | 0.080000, 12 / 6, −20 % |
+| Sand | Kauf | 0.100005, 15 / 7, +0.0047 % | 0.100300, 15 / 7, +0.300 % | 0.103045, 15 / 7, +3.05 % | 0.120000, 18 / 9, +20 % |
+
+Teure Items, altes Modell:
+
+| Item | Seite | nach 1 | nach 64 | nach 640 | nach 10.000 |
+| --- | --- | --- | --- | --- | --- |
+| Diamant | Verkauf | 199.990625 CP, 29998 / 14999, −0.0047 % | 199.400899, 29910 / 14955, −0.300 % | 194.089107, 29113 / 14556, −2.96 % | 160, 24000 / 12000, −20 % |
+| Diamant | Kauf | 200.009375, 30001 / 15000, +0.0047 % | 200.600901, 30090 / 15045, +0.300 % | 206.090907, 30913 / 15456, +3.05 % | 240, 36000 / 18000, +20 % |
+| Netheritbarren | Verkauf | 3999.812504, 599971 / 299985, −0.0047 % | 3988.017982, 598202 / 299101, −0.300 % | 3881.782134, 582267 / 291133, −2.96 % | 3200, 480000 / 240000, −20 % |
+| Netheritbarren | Kauf | 4000.187504, 600028 / 300014, +0.0047 % | 4012.018018, 601802 / 300901, +0.300 % | 4121.818136, 618272 / 309136, +3.05 % | 4800, 720000 / 360000, +20 % |
+
+Kauf und Verkauf in der Zelle sind Cent. Der erste Diamant-Verkauf zahlt noch 15000 Cent; danach steht der Quote auf 14999.
+
+### Neue Kurve
+
+Bruchstein, `b = 0.05`, `D = 128`, `lo = 0.0125`, `hi = 0.06`. Basisquote Kauf 7 / Verkauf 3 Cent. Ein Verkauf setzt den Mid auf `0.05 * exp(-1/128) = 0.049611` (−0.778 %). Der Centpreis bleibt 7 / 3, weil das Centgitter gröber ist als der Schritt. Der Verkauf fällt bei Stück 29 (Index 29, Mid 0.039863) auf 2 Cent und bei Stück 81 auf 1 Cent. An `lo` ist `floor(0.0125 * 75) = 0`, der Mindestverkauf ist 1 Cent, der Kauf wird 2 Cent.
+
+Diamant, `b = 200`, `D = 400`, `lo = 50`, `hi = 240`:
 
 ```text
-Kosten = Σ_{i=0}^{q-1} Kauf( m(net + i) )
-net   := net + q
+m(0) = 200, Kauf 30000, Verkauf 15000
+m(-1) = 200 * exp(-1/400) = 199.500624, Kauf 29925, Verkauf 14962
+m(+1) = 200.500626, Kauf 30075, Verkauf 15037
 ```
 
-Der Spieler bekommt oder zahlt den Kurs **vor** dem Schritt dieses Stücks. Danach gilt der neue `net`. Die Summe ist in Cent exakt die Summe der Einzeltrades. Stapel dürfen nicht mit `sold = ±1` abgekürzt werden.
+Der erste Verkauf zahlt 15000 Cent und hinterlässt 14962. Das sind 38 Cent auf 150 CP, nicht ein Cent.
 
-Ein Stück ändert `net` immer um 1. Der Centpreis ändert sich, sobald der Mid eine Centgrenze kreuzt. Bei Diamant ist das jedes Stück, bei Bruchstein nie, weil das Band die Breite 0 hat.
+Netheritbarren, `b = 4000`, `D = 400`, `lo = 1000`, `hi = 4800`. Erster Verkauf 300000 Cent, Quote danach 299250 Cent (Mid 3990.012490). Floor nach `400 * ln(4) = 554.52` Verkäufen, Verkauf dann 75000 Cent = 750 CP.
 
-### Beispielwerte
+Erholung vom Floor: `net` halbiert, Mid ist `b * sqrt(0.25) = 0.5 b`. Diamant: Mid 100 CP, Verkauf 7500 Cent, Kauf 15000 Cent.
 
-Diamant, `b = 200`, `lo = 160`, `hi = 240`, Start `net = 0`:
+### Massenblöcke, neue Kurve
 
-```text
-m(0)  = 200
-Kauf  = floor(200 * 150) = 30000 Cent = 300 CP
-Verkauf = floor(200 * 75) = 15000 Cent = 150 CP
+`D = 128`, `lo = 0.25b`, `hi = 1.2b`. Zellen: Mid in CP, Kaufcent / Verkaufscent, Änderung des Mids gegen `b`.
 
-m(-1) = 200 * exp(-3/64000) = 199.99062522
-Verkauf des nächsten Stücks = floor(199.99062522 * 75) = 14999 Cent
+| Item | Seite | nach 1 | nach 64 | nach 640 | nach 10.000 |
+| --- | --- | --- | --- | --- | --- |
+| Bruchstein | Verkauf | 0.049611, 7 / 3, −0.778 % | 0.030327, 4 / 2, −39.35 % | 0.0125, 2 / 1, −75 % | 0.0125, 2 / 1, −75 % |
+| Bruchstein | Kauf | 0.050392, 7 / 3, +0.784 % | 0.060000, 9 / 4, +20 % | 0.060000, 9 / 4, +20 % | 0.060000, 9 / 4, +20 % |
+| Erde | Verkauf | 0.049611, 7 / 3, −0.778 % | 0.030327, 4 / 2, −39.35 % | 0.0125, 2 / 1, −75 % | 0.0125, 2 / 1, −75 % |
+| Erde | Kauf | 0.050392, 7 / 3, +0.784 % | 0.060000, 9 / 4, +20 % | 0.060000, 9 / 4, +20 % | 0.060000, 9 / 4, +20 % |
+| Sand | Verkauf | 0.099222, 14 / 7, −0.778 % | 0.060653, 9 / 4, −39.35 % | 0.025, 3 / 1, −75 % | 0.025, 3 / 1, −75 % |
+| Sand | Kauf | 0.100784, 15 / 7, +0.784 % | 0.120000, 18 / 9, +20 % | 0.120000, 18 / 9, +20 % | 0.120000, 18 / 9, +20 % |
 
-m(+1) = 200 * exp(+3/64000) = 200.00937522
-Kauf des nächsten Stücks = floor(200.00937522 * 150) = 30001 Cent
-```
+64 Käufe von Bruchstein oder Erde liegen schon an der Decke (`128 * ln(1.2) = 23.35` Käufe). Der Floor stoppt den Verkauf ab Stück 178. Sand verliert beim ersten Verkauf einen Kaufcent (15 auf 14), der Verkaufscent bleibt 7 bis der Mid die nächste Grenze kreuzt.
 
-Netheritbarren, `b = 4000`, `lo = 3200`, `hi = 4800`:
+### Diamant und Netheritbarren, neue Kurve
 
-```text
-Verkauf bei net 0     = 300000 Cent = 3000 CP
-Verkauf bei net -1    = 299985 Cent = 2999.85 CP
-Mid nach 64 Verkäufen = 3988.204925 CP, dieses Stück 299115 Cent
-Untergrenze erreicht nach D * ln(4000/3200) = 4760.40 Verkäufen, Mid 3200, Verkauf 240000 Cent = 2400 CP
-```
+`D = 400`, `lo = 0.25b`, `hi = 1.2b`.
 
-Erholung, Diamant an der Untergrenze (`net = -4760.39576137`, Mid 160, Verkauf 12000 Cent). Nach 72 Stunden ist `net` halbiert, der Mid ist das geometrische Mittel:
+| Item | Seite | nach 1 | nach 64 | nach 640 | nach 10.000 |
+| --- | --- | --- | --- | --- | --- |
+| Diamant | Verkauf | 199.500624, 29925 / 14962, −0.250 % | 170.428758, 25564 / 12782, −14.79 % | 50, 7500 / 3750, −75 % | 50, 7500 / 3750, −75 % |
+| Diamant | Kauf | 200.500626, 30075 / 15037, +0.250 % | 234.702174, 35205 / 17602, +17.35 % | 240, 36000 / 18000, +20 % | 240, 36000 / 18000, +20 % |
+| Netheritbarren | Verkauf | 3990.012490, 598501 / 299250, −0.250 % | 3408.575156, 511286 / 255643, −14.79 % | 1000, 150000 / 75000, −75 % | 1000, 150000 / 75000, −75 % |
+| Netheritbarren | Kauf | 4010.012510, 601501 / 300750, +0.250 % | 4694.043484, 704106 / 352053, +17.35 % | 4800, 720000 / 360000, +20 % | 4800, 720000 / 360000, +20 % |
 
-```text
-m = 200 * sqrt(160/200) = 200 * sqrt(0.8) = 178.88543820 CP
-Verkauf = floor(178.88543820 * 75) = 13416 Cent = 134.16 CP
-Kauf    = floor(178.88543820 * 150) = 26832 Cent
-```
+64 Diamant-Käufe bleiben unter der Decke (234.70 < 240). 640 Verkäufe liegen auf dem Floor.
 
-Erde an der Untergrenze (Mid 0.04 nach 4761 Verkäufen) läuft nach 72 Stunden auf Mid `0.044721`. Verkauf bleibt 3 Cent, weil das Centgitter gröber ist als das Band 0.04–0.06. Der gespeicherte Mid hat sich bewegt. Das ist der Nachweis für billige Blöcke: `net` und Mid ändern sich pro Stück, der ausgezahlte Centpreis erst an der Grenze.
-
-Bruchstein: `lo = hi = 0.05`, Mid bleibt 0.05, Kauf 7 Cent, Verkauf 3 Cent, für jedes `net`.
 
 ## 4. Kein Gewinn über Rezepte und über Kauf/Verkauf
 
@@ -180,59 +221,45 @@ Bruchstein: `lo = hi = 0.05`, Mid bleibt 0.05, Kauf 7 Cent, Verkauf 3 Cent, für
 Σ Verkauf(m(n - i))  <  Σ Kauf(m(n - q + i))     für i = 0..q-1
 ```
 
-Der Spread `Verkauf <= Kauf / 2` und die Gegenbewegung der Kurve tragen das. Gerechnete Fälle, Start `net = 0`:
+Der Spread und die Gegenbewegung tragen das. Gerechnete Fälle mit dem neuen `D` und `lo = 0.25b`, Start `net = 0`:
 
 | Trade | Erlös Cent | Rückkauf Cent | Differenz |
 | --- | ---: | ---: | ---: |
-| 1 Diamant | 15000 | 29998 | −14998 |
-| 64 Diamanten | 958552 | 1917045 | −958493 |
-| 64 Netheritbarren | 19171644 | 38341526 | −19169882 |
-| 10000 Erde | 30000 | 61471 | −31471 |
-| 10000 Sand | 61472 | 124523 | −63051 |
-| 10000 Bruchstein | 30000 | 70000 | −40000 |
+| 1 Diamant | 15000 | 29925 | −14925 |
+| 64 Diamanten | 888212 | 1772024 | −883812 |
+| 64 Netheritbarren | 17764901 | 35441120 | −17676219 |
+| 10000 Erde | 10110 | 20284 | −10174 |
+| 10000 Sand | 10459 | 30812 | −20353 |
+| 10000 Bruchstein | 10110 | 20284 | −10174 |
 
-**Rezeptschleife an den Ecken.** Der teuerste ausführbare Fall ist: Produkt an `hi` verkaufen, jede Zutat an `lo` kaufen, und die Bank verkauft jede Zutat (`unbuyable` ist leer für diesen Slot). Ohne Deckel scheitert das an 96 ausführbaren Rezepten (87 normal, 8 Zerlegen, 1 Umfärben), weil `1.2 / 0.8 = 1.5` die knappe statische Marge auffrisst. Größtes Beispiel: Endstab, 4 Stück, Ecken-Erlös 2340 Cent gegen Ecken-Kosten 1945 Cent. Am Basis-Mid (`lo = hi = b`) bleibt die heutige Prüfung mit Toleranz `Slots + Menge` Cent grün; die Ecke ist das neue Loch.
+**Rezeptschleife an den Ecken.** Der ausführbare Fall: Produkt an `hi` verkaufen, jede Zutat an `lo` kaufen, jeder Slot hat eine kaufbare Zutat, das Produkt ist nicht `unsellable`, keine Selbstkopie. Das Band `0.25` gegen `1.2` ist `4.8` fach; mal dem Spread `0.5` bleibt ein Faktor `2.4` über einer knappen Rezeptmarge. Ohne Deckel ist die Kontrolle nicht leer. Konkrete Zeile: `RAW_GOLD` x9 aus `RAW_GOLD_BLOCK`, Erlös 7281 Cent gegen Kauf des Blocks an `lo` 3037 Cent. Mit Deckel `floor(Summe Kauf(lo) / Menge)` hat dieselbe Schleife 1652 Rezepte und 0 Verletzungen. Der Test ruft `Verkauf` auf, nicht eine abgeschriebenen Ungleichung.
 
-Der Deckel schließt es. Saat `Kauf(lo)`, Relaxation wie `RecipeCost` über alle Rezeptklassen. Danach ist `Menge * Verkauf(hi) <= Summe der Floor-Käufe` für jede ausführbare Kette, inklusive der 96. Der Test ruft `Verkauf` und `Kauf` auf, nicht eine Kopie der Ungleichung. Ohne Deckel ist die Ungleichung falsch; der Deckel ist Teil der Formel, nicht ein optionaler Schutz.
+Der Deckel im Betrieb liest die **aktuellen** Kaufpreise, nicht einen eingefrorenen Floor. Bei `net = 0` liegt er damit auf dem Basis-Kauf. Der heutige `safeSell`-Saatwert `Kauf` an `0.8b` (Bambustür 27 Cent bei Rohverkauf 135) ist nicht der neue Vertrag: der würde am Start den Basisverkauf von Hunderten Items senken, obwohl Basis gegen Basis schon ohne diesen Saatwert hält. Sobald eine Zutat Richtung `lo` läuft, sinkt der Deckel mit.
 
-Der Deckel bindet am Basis-Verkauf schon heute, sobald `floor(Rezeptkosten) < Rohverkauf(b)`. Die Relaxation über Ketten trifft 119 Items in der TSV-Liste. Beispiele, die der neue Code nicht „freigeben“ darf:
+Selbstkopien bleiben außen vor. Umfärben und Zerlegen laufen mit, sobald jeder Slot eine kaufbare Option hat.
 
-| Item | Rohverkauf am Basis-Mid | Rezeptdeckel (floor) |
-| --- | ---: | ---: |
-| BAMBOO_DOOR | 135 Cent | 27 Cent |
-| BAMBOO_RAFT | 337 Cent | 67 Cent |
-| END_ROD | 487 Cent | 426 Cent |
-| CHISELED_RED_SANDSTONE | 240 Cent | 48 Cent |
+Stein aus Bruchstein, am Start: Verkauf Stein 7 Cent, Kauf Bruchstein 7 Cent, kein Gewinn. An der Ecke kostet Bruchstein 2 Cent, der Deckel zieht den Steinverkauf auf 2 Cent. Der Rohwert-Faktor 1.3 überlebt das nicht als Bankmarge; die Kette bleibt ohne Gewinn.
 
-Bruchstein (Deckel 6, Verkauf 3), Erde (6 und 3) und Sand (12, Verkauf am Hoch 9) bleiben auf der Kurve. Diamant- und Netheritausrüstung haben keinen endlichen Deckel, weil die Zutaten unkaufbar sind.
-
-Selbstkopien (das Produkt steht selbst in einem Slot) bleiben außen vor, wie in `RecipeArbitrageTest`. Umfärben und Zerlegen (`class` `recolor` und `uncraft`) laufen mit, sofern kein Slot nur unkaufbare Optionen hat.
-
-Netheritbrust, Schmiedevorlage, wenn die Bank die Teile verkaufte (tut sie nicht, alle drei Zutaten sind `unbuyable`):
+Netheritbrust, wenn die Bank die Teile verkaufte. Am Basis-Mid unverändert:
 
 ```text
-Basis: Kauf der Teile = 240000 + 600000 + 210007 = 1050007 Cent
-       Verkauf der Brust = 525003 Cent
-       Marge 525004 Cent
-
-Ecke:  Kauf der Teile an lo = 192000 + 480000 + 168006 = 840006 Cent
-       Verkauf der Brust an hi = 630004 Cent
-       Marge 210002 Cent
+1600 + 4000 + 1400.05 = 7000.05
+Kauf der Teile = 240000 + 600000 + 210007 = 1050007 Cent
+Verkauf der Brust = 525003 Cent
+Marge 525004 Cent
 ```
 
-Schmelzen Ancient Debris → Schrott: Verkauf Schrott an `hi` = 87750 Cent, Kauf Debris an `lo` = 90000 Cent, Marge 2250 Cent. Debris ist unkaufbar, die Zahlen sind die Kurvengrenze.
-
-Stein aus Bruchstein: beide Mids fest, Verkauf Stein 7 Cent, Kauf Bruchstein 7 Cent. Erlös = Kosten, kein Gewinn. Der Rohwert-Faktor 1.3 (Stein 0.20 gegen Bruchstein 0.10) ist durch Spread und festes Band auf 7 Cent zusammengedrückt.
+An der neuen Ecke (`lo = 0.25b`, Brust an `hi`) wäre der Kauf der Teile `60000 + 150000 + 52501 = 262501` Cent und der Verkauf der Brust 630004 Cent. Das ist ein Gewinn von 367503 Cent. Die drei Zutaten stehen in `unbuyable`, die Schleife ist nicht ausführbar. Der Test stellt genau das fest: Diamantbrust, Netheritbarren und Vorlage bleiben unkaufbar. Wer eine davon freigibt, muss den Deckel für die Schmiederezepte mitziehen, bevor der Floor `0.25b` gilt.
 
 ## 5. Atomare Updates
 
 `CraftCore.tx` hält bereits `GET_LOCK('craftcore-write', 5)`. Das bleibt die äußere Serialisierung von Kontostand und Markt.
 
-In derselben Transaktion, für einen Handel von `q` Stück:
+In derselben Transaktion, für einen Handel von `q` Stück. `q` außerhalb `1..2304` bricht vor dem ersten Schreiben ab.
 
-1. `SELECT net, updated FROM market_curve WHERE item = ? FOR UPDATE`. Fehlende Zeile: `INSERT` mit `net = 0`, `updated = now`, danach noch einmal sperren.
+1. `INSERT IGNORE INTO market_curve(item, net, updated) VALUES(?, 0, ?)`, danach `SELECT net, updated FROM market_curve WHERE item = ? FOR UPDATE`. Zwei gleichzeitige Erst-Trades treffen so den Primary Key nicht: einer legt die Zeile an, der andere ignoriert den Insert und wartet auf der Sperre. Ein vorheriges `SELECT` plus `INSERT` ohne `IGNORE` wirft die zweite Transaktion auf den PK.
 2. `net` um die Halbwertszeit falten, `updated = now`.
-3. Cent-Summe in Speicher über die `q` Schritte rechnen. Kein SQL pro Stück.
+3. Cent-Summe in Speicher über die `q` Schritte rechnen. Kein SQL pro Stück. 2304 Schritte bleiben in derselben Transaktion; 10.000 Stück sind mehrere Trades.
 4. Kontostand, Tageslimit, `bank_journal` wie heute.
 5. `UPDATE market_curve SET net = ?, updated = ?`.
 6. `market_catalog` mit Kauf und Verkauf **am neuen** Mid überschreiben.
@@ -254,89 +281,88 @@ Bestehende Zeilen: wo `volume_qty = 0`, `quote_price = avg_price` einmalig setze
 
 ## 7. Szenario: 10.000 Bruchstein, Erde, Sand
 
-Verkauf von 10.000 Stück in **einem** Trade. „Von der Basis“ startet bei `net = 0`. „Von der Decke“ startet bei dem `net`, an dem `m = hi` (Bruchstein: Decke = Basis). Vergleich gegen den **günstigsten** Bankkauf der Ausrüstung, also jedes Teil an seinem `lo`. Diesen Kauf bietet die Bank für Diamant und Netherit heute nicht an (`unbuyable`); die Cent sind die Untergrenze der Formel, der leichteste Fall, den die Erlöse trotzdem nicht erreichen.
+Aufeinanderfolgende Verkäufe ohne Zeitverzug, nicht ein SQL-Lauf. „Von der Basis“ startet bei `net = 0`. „Von der Decke“ startet bei `net = D * ln(1.2)`, also `m = hi`. Vergleich gegen den Bankkauf der Ausrüstung an `lo = 0.25b`. Diesen Kauf bietet die Bank für Diamant und Netherit nicht an (`unbuyable`); es ist die billigste Formelgrenze.
 
-Ausrüstung, Kauf an `lo`:
+Ausrüstung, Kauf an `lo`, neue Untergrenze. In Klammern der alte Kauf an `0.8b` bzw. am Config-Floor:
 
-| Set | Teile | Cent | CP |
-| --- | --- | ---: | ---: |
-| Diamantrüstung | Helm, Brust, Hose, Stiefel | 576000 | 5760.00 |
-| Diamantausrüstung | Rüstung + Schwert, Spitzhacke, Axt, Schaufel | 792063 | 7920.63 |
-| Netheritrüstung | Helm, Brust, Hose, Stiefel | 3168024 | 31680.24 |
-| Netheritausrüstung | Rüstung + Schwert, Spitzhacke, Axt, Schaufel | 5976111 | 59761.11 |
-
-Einzelne Rüstungsteile an `lo`, Kauf: Diamanthelm 120000, Brust 192000, Hose 168000, Stiefel 96000 Cent. Netherithelm 768006, Brust 840006, Hose 816006, Stiefel 744006 Cent.
-
-Erlös der 10.000 Stück:
-
-| Start | Bruchstein | Erde | Sand |
+| Set | Cent neu | CP neu | CP alt |
 | --- | ---: | ---: | ---: |
-| Basis, Kurve | 30000 Cent = 300.00 CP | 30000 Cent = 300.00 CP | 61472 Cent = 614.72 CP |
-| Decke, Kurve | 300.00 CP | 32513 Cent = 325.13 CP | 67876 Cent = 678.76 CP |
-| Jedes Stück an der Decke, Kurve ignoriert | 300.00 CP (3 Cent) | 400.00 CP (4 Cent) | 900.00 CP (9 Cent) |
+| Diamantrüstung | 180000 | 1800.00 | 5760.00 |
+| Diamantausrüstung | 247517 | 2475.17 | 7920.63 |
+| Netheritrüstung | 990004 | 9900.04 | 31680.24 |
+| Netheritausrüstung | 1867529 | 18675.29 | 59761.11 |
 
-Anteile am günstigsten Set (Diamantrüstung 5760 CP), Kurve von der Decke: Bruchstein 5.21 %, Erde 5.64 %, Sand 11.78 %. Gegen Netheritrüstung 31680.24 CP: 0.95 %, 1.03 %, 2.14 %.
+Einzelteile an `lo`, Kauf neu: Diamanthelm 37500, Brust 60000, Hose 52500, Stiefel 30000 Cent. Netherithelm 240001, Brust 262501, Hose 255001, Stiefel 232501 Cent.
 
-Selbst die ignorierte Kurve (jedes Stück zum Decken-Cent) bleibt darunter: Sand 900 CP sind 15.63 % der Diamantrüstung. Stückzahl an der Decke, bis der Erlös die Diamantrüstung an `lo` träfe: Bruchstein 192000, Erde 144000, Sand 64000. 10000 reichen nicht.
+Erlös der 10.000 Stück, neue Kurve, und der alte Erlös daneben:
 
-Sand von der Basis: die ersten 1472 Stück zu 7 Cent, danach 6 Cent, ab Stück 4761 liegt der Mid auf 0.08 und der Verkauf bleibt 6 Cent. Erde von der Basis bleibt durchgehend 3 Cent (Untergrenze `floor(0.04 * 75) = 3`). Erde von der Decke: 2513 Stück zu 4 Cent, Rest zu 3 Cent, Summe 32513 Cent. Bruchstein ist fest bei 3 Cent.
+| Start | Bruchstein neu | Erde neu | Sand neu | alt (Bruchstein / Erde / Sand) |
+| --- | ---: | ---: | ---: | --- |
+| Basis, Kurve | 10110 Cent = 101.10 CP | 10110 Cent = 101.10 CP | 10459 Cent = 104.59 CP | 300.00 / 300.00 / 614.72 CP |
+| Decke, Kurve | 10172 Cent = 101.72 CP | 10172 Cent = 101.72 CP | 10616 Cent = 106.16 CP | 300.00 / 325.13 / 678.76 CP |
+| Jedes Stück an der Decke, Kurve ignoriert | 400.00 CP (4 Cent) | 400.00 CP (4 Cent) | 900.00 CP (9 Cent) | 300 / 400 / 900 CP |
 
-Der Rezeptdeckel senkt diese drei Erlöse nicht (Deckel 6, 6, 12 Cent). `unsellable` setzt den realen Erlös heute auf 0. Die Tabelle ist die Kurve ohne diese Sperre.
+Der Decken-Cent von Bruchstein ist jetzt 4, nicht 3, weil `hi = 1.2 * 0.05 = 0.06` und `floor(0.06 * 75) = 4`. Die Kurve von der Decke zahlt trotzdem nur 101.72 CP: nach `128 * ln(1.2) = 23.35` Verkäufen ist der +20-%-Rücken weg, nach 177 Verkäufen klebt der Verkauf auf 1 Cent.
+
+101.72 CP sind 5.65 % der Diamantrüstung an `lo` (1800 CP) und 1.03 % der Netheritrüstung (9900.04 CP). Sand von der Decke, 106.16 CP, sind 5.90 % bzw. 1.07 %. Selbst jedes Sandstück eingefroren zum Decken-Cent, 900 CP, ist die Hälfte der Diamantrüstung: `180000 / 9 = 20000` Sand, nicht 10000. Bruchstein an der Decke bräuchte `180000 / 4 = 45000` Stück. 10000 reichen nicht.
+
+Der Rezeptdeckel senkt Bruchstein, Erde und Sand nicht (kein billigeres ausführbares Rezept). `unsellable` setzt den realen Erlös heute auf 0. Die Tabelle ist die Kurve ohne diese Sperre.
 
 ## 8. Netherit-Simulation
 
-Barren, ein Trade, Start Basis `net = 0`. Deckel endlich? Nein.
+Barren, `D = 400`, `lo = 1000`, `hi = 4800`, Start `net = 0`. Kein Rezeptdeckel. Die Zeile ist das Stück mit dieser Nummer (Preis vor dem Schritt) und die Summe bis dahin. Daneben die alte Summe bei `D = 64000/3` und Floor `0.8b` (Verkauf am Ende 2400 CP, Summe nach 10.000 Stück 25375326.60 CP).
 
-| Stück Nr. | Mid CP | Verkauf dieses Stücks | Summe Cent | Summe CP |
+| Stück Nr. | Mid CP | Verkauf dieses Stücks | Summe neu | Summe alt |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 4000.000000 | 300000 Cent | 300000 | 3000.00 |
-| 2 | 3999.812504 | 299985 Cent | 599985 | 5999.85 |
-| 64 | 3988.204925 | 299115 Cent | 19171644 | 191716.44 |
-| 1000 | 3817.005582 | 286275 Cent | 293083725 | 2930837.25 |
-| 3890 | 3333.415607 | 250006 Cent | 1066808109 | 10668081.09 |
-| 4761 | 3200.059365 | 240004 Cent | 1280172660 | 12801726.60 |
-| 10000 | 3200.000000 | 240000 Cent | 2537532660 | 25375326.60 |
+| 1 | 4000.000000 | 300000 Cent = 3000 CP | 3000.00 CP | 3000.00 CP |
+| 2 | 3990.012490 | 299250 Cent | 5992.50 CP | 5999.85 CP |
+| 64 | 3417.107254 | 256283 Cent | 177649.01 CP | 191716.44 CP |
+| 640 | 1000 | 75000 Cent = 750 CP | 965234.67 CP | — |
+| 1000 | 1000 | 75000 Cent | 1235234.67 CP | 2930837.25 CP |
+| 10000 | 1000 | 75000 Cent | 7985234.67 CP | 25375326.60 CP |
 
-Ab Stück 4761 klebt der Mid auf 3200 CP, der Verkauf auf 2400 CP. 64 Barren verkaufen und zurückkaufen kostet 38341526 Cent und bringt 19171644 Cent ein.
+Ab Stück 555 klebt der Mid auf 1000 CP und der Verkauf auf 750 CP. Der alte Floor 3200 CP / 2400 CP Verkauf kam erst bei Stück 4761; deshalb war die Summe 25,4 Millionen CP. Der neue Floor schneidet den Schwanz auf 750 CP. 7,99 Millionen CP sind der Integralwert der Kurve, nicht eine Auszahlung.
 
-Schmieden einer Netheritbrust aus den Basis-Mids, ohne dass die Kurven der Teile laufen (die Bank verkauft die Teile nicht; das ist die Preisidentität):
+`Market.revenueLimit` gibt 150000 Cent zurück, das sind 1500 CP pro Spieler und Markttag (dieselbe Größe wie `market.daily-revenue-limit: 1500.0`; die Methode liest den Config-Wert heute nicht, der Betrag ist fest verdrahtet). Ein Barren an der Basis kostet die Bank 300000 Cent. `affordable` lässt den Trade nicht zu, auch nicht als Einzelstück. Der erste Verkauf, dessen Stückpreis auf höchstens 1500 CP fällt, ist Index 278 (das 279. Stück, Mid 1996.30 CP, Verkauf 149722 Cent). Die 278 Stücke davor liegen einzeln über dem Tageslimit. Ein Spieler kommt die Kurve damit nicht hinunter, und 10.000 Barren zu 7,99 Millionen CP werden nicht gutgeschrieben. Mehrere Spieler teilen sich das Tageslimit nicht; jeder scheitert am ersten Barren für sich. Der Floor `0.25b` bleibt trotzdem, damit ein später angehobenes Tageslimit nicht wieder bei 2400 CP pro Barren ausläuft.
 
-```text
-Diamantbrust 1600 + Barren 4000 + Vorlage 1400.05 = Brust 7000.05
-Kauf der drei Teile am Basis-Mid = 1050007 Cent = 10500.07 CP
-Verkauf der Brust am Basis-Mid    = 525003 Cent = 5250.03 CP
-```
+64 Barren verkaufen und zurückkaufen, ohne Tageslimit gerechnet: Erlös 17764901 Cent, Rückkauf 35441120 Cent.
 
-Ecke, Teile an `lo`, Brust an `hi`: Kosten 840006 Cent, Erlös 630004 Cent, Marge 210002 Cent. Ein Spieler, der die Teile zum Floor-Kauf bekäme, verliert beim Ankauf der Brust.
+Schmieden, Basis-Mids, unverändert 7000.05 CP und Marge 525004 Cent auf der Bank. Die Ecke mit `lo = 0.25b` steht in Abschnitt 4: sie würde gewinnen, wenn die Teile kaufbar wären. Sie sind es nicht.
 
-10.000 Sand von der Decke (678.76 CP) sind 2.14 % der Netheritrüstung an `lo` (31680.24 CP) und 8.08 % einer einzelnen Netheritbrust an `lo` (8400.06 CP).
+10.000 Sand von der Decke (106.16 CP) sind 1.07 % der Netheritrüstung an `lo` (9900.04 CP) und 4.04 % einer Netheritbrust an `lo` (2625.01 CP).
 
 ## 9. Geplante Tests
 
-Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen sind Cent, sofern nicht CP dazu steht. Die Tests instanziieren die neue Kurvenklasse mit `D = 64000/3`, Halbwertszeit 72 h und den Faktoren aus Abschnitt 3. Sie lesen `prices-base.yml` und `config.yml` aus den Plugin-Ressourcen, analog `RecipeArbitrageTest`.
+Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen sind Cent, sofern nicht CP dazu steht. Die Tests instanziieren die Kurve mit `D(b)` aus Abschnitt 3, `lo = 0.25b`, `hi = 1.2b`, Halbwertszeit 72 h. Sie lesen `prices-base.yml` und `config.yml` aus den Plugin-Ressourcen, analog `RecipeArbitrageTest`. Die Config-Pins für Bruchstein und Stein dürfen den Test-Mid nicht festsetzen.
 
-- [ ] `CurvePriceTest.diamondMovesOneCentPerItem`
+- [ ] `CurvePriceTest.diamondMovesAQuarterPercent`
   - Verkauf bei `net = 0`: 15000, Mid 200.
-  - Nach einem Verkauf: `net = -1`, Mid `200 * exp(-3/64000)`, Verkauf 14999.
-  - Kauf bei `net = 0`: 30000. Nach einem Kauf: `net = +1`, Kauf 30001.
+  - Nach einem Verkauf: `net = -1`, Mid `200 * exp(-1/400) = 199.500624`, Verkaufsquote 14962, Kaufquote 29925.
+  - Nach einem Kauf ab `net = 0`: Mid `200.500626`, Kauf 30075.
+
+- [ ] `CurvePriceTest.quoteAfterVolume`
+  - Die vier neuen Tabellen aus Abschnitt 3: Bruchstein, Erde, Sand, Diamant, Netheritbarren, jeweils Kauf und Verkauf, nach 1, 64, 640 und 10.000. Mid auf 1e-6 CP, Cent exakt.
+  - Bruchstein nach einem Verkauf: Verkaufscent bleibt 3. Nach 64 Verkäufen: Verkauf 2 Cent, Mid 0.030327.
 
 - [ ] `CurvePriceTest.netheriteIngotSecondUnit`
-  - Erster Verkauf 300000 Cent, zweiter 299985 Cent, Summe 599985.
+  - Erster Verkauf 300000 Cent, zweiter 299250 Cent, Summe 599250.
 
 - [ ] `CurvePriceTest.stackMatchesSingles`
-  - 64 Netheritbarren in einem Aufruf und 64 einzelne Verkäufe ergeben beide 19171644 Cent und dasselbe `net`.
+  - 64 Netheritbarren in einem Aufruf und 64 einzelne Verkäufe ergeben beide 17764901 Cent und dasselbe `net`.
+
+- [ ] `CurvePriceTest.quantityCap`
+  - `q = 2304` wird gerechnet, `q = 2305` ändert `net` nicht und wirft die erwartete Ablehnung.
 
 - [ ] `CurvePriceTest.floorCeilingAndRecovery`
-  - Nach 10000 Verkäufen Netheritbarren: Mid 3200, Verkauf 240000, `net = -10000`.
-  - Diamant auf die Untergrenze setzen (`net = -D * ln(1.25)`), 72 h vergehen lassen, Mid = `200 * sqrt(0.8)`, Verkauf 13416, Kauf 26832.
+  - Nach 10000 Verkäufen Netheritbarren: Mid 1000, Verkauf 75000, `net = -10000`, Summe 798523467 Cent.
+  - Diamant an `lo` (`net = -400 * ln(4)`), 72 h später Mid 100, Verkauf 7500, Kauf 15000.
   - Negative vergangene Zeit ändert `net` nicht.
 
 - [ ] `CurvePriceTest.farmDumpCannotBuyGear`
-  - 10000 Bruchstein, Basis und Decke: 30000 Cent.
-  - 10000 Erde, Basis: 30000; Decke: 32513.
-  - 10000 Sand, Basis: 61472; Decke: 67876.
-  - Jeder dieser Werte `< 576000` und `< 3168024`.
-  - Zusätzlich `10000 * Verkauf(hi) < 576000` für die drei Items (30000, 40000, 90000).
+  - 10000 Bruchstein von der Basis 10110 Cent, von der Decke 10172.
+  - 10000 Erde: 10110 und 10172. 10000 Sand: 10459 und 10616.
+  - Jeder dieser Werte `< 180000` und `< 990004`.
+  - `10000 * Verkauf(hi)` ist 40000, 40000 und 90000, jeweils `< 180000`.
 
 - [ ] `CurvePriceTest.roundTripIsALoss`
   - Die sechs Zeilen aus der Tabelle in Abschnitt 4, Erlös < Kosten, `net` am Ende wieder 0.
@@ -348,10 +374,13 @@ Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen s
 - [ ] `CurvePriceTest.tradeIsAtomic`
   - H2-Transaktion wie `DynamicPriceTest.websiteCatalogAndEventAreUpdatedAndRolledBackTogether`: nach Rollback stehen `net`, Katalog, Event und Kontostand auf dem Vorwert. Die Event-Menge ist die Stapelmenge, `total_cp` ist die Summe der Stückcent.
 
+- [ ] `CurvePriceTest.firstRowUsesInsertIgnore`
+  - Zwei Transaktionen, die beide mit `INSERT IGNORE` die noch fehlende Zeile anlegen und dann `SELECT … FOR UPDATE` lesen, enden mit genau einer Zeile. Kein Primary-Key-Fehler.
+
 - [ ] `RecipeCurveArbitrageTest.everyExecutableRecipe`
-  - Für jede Zeile in `recipes-26.1.tsv` außer Selbstkopien: wenn das Produkt nicht in `unsellable` steht und jeder Slot mindestens eine kaufbare Zutat hat (`unbuyable` und fehlender Basispreis zählen als nicht kaufbar), dann `count * Verkauf(hi(Produkt)) <= Summe der günstigsten Kauf(lo(Zutat))`.
-  - Erwartet 0 Verletzungen. Dieselbe Schleife **ohne** Rezeptdeckel hat 96 Verletzungen (87 `normal`, 8 `uncraft`, 1 `recolor`; Kontrollassertion, damit niemand den Deckel entfernt). Größte Kontrollzeile: `END_ROD` x4, 2340 > 1945.
-  - Netheritbrust, Zutaten trotz `unbuyable` einzeln geprüft: Basis-Summe der Quote-Basen 7000.05, Ecken-Marge `840006 - 630004 = 210002`.
+  - Für jede Zeile in `recipes-26.1.tsv` außer Selbstkopien: wenn das Produkt nicht in `unsellable` steht und jeder Slot mindestens eine kaufbare Zutat hat, dann `count * Verkauf(hi)` ≤ Summe der günstigsten `Kauf(lo)`. `Verkauf` enthält den Deckel aus diesen Floor-Käufen.
+  - Erwartet 0 Verletzungen bei 1652 Rezepten. Dieselbe Schleife ohne Deckel verletzt die Ungleichung; Kontrollzeile `RAW_GOLD` x9, 7281 > 3037.
+  - `DIAMOND_CHESTPLATE`, `NETHERITE_INGOT` und `NETHERITE_UPGRADE_SMITHING_TEMPLATE` sind unkaufbar. Die hypothetische Ecke ohne diese Sperre ist 630004 > 262501 und darf nicht als „grün“ durchgewunken werden, solange die Sperre fehlt.
 
 - [ ] `MarketSnapshotOscillationTest.writersDoNotShareColumns`
   - H2, Stunde 7200: Snapshot setzt `quote_price`, lässt eine vorhandene Fill-Zeile (`avg_price` 2, `volume_qty` 10) in den Fill-Spalten unverändert.
@@ -375,8 +404,8 @@ Keine dieser Dateien wird in der Plan-PR angefasst.
 
 - [ ] **Schritt 1.** `CurvePrice` und `CurvePriceTest` mit den Cent-Erwartungen aus Abschnitt 3, 4, 7 und 8. Test zuerst, er muss an der fehlenden Klasse scheitern, dann die Klasse, dann grün.
 - [ ] **Schritt 2.** `RecipeCurveArbitrageTest` gegen `CurvePrice.sellCents` / `buyCents` und den Deckel aus `RecipeCost`.
-- [ ] **Schritt 3.** `market_curve` in der bestehenden `CraftCore.tx`-Transaktion an `Market.price` hängen. GUI-Lesung persistiert nicht. Rollback-Test.
+- [ ] **Schritt 3.** `market_curve` per `INSERT IGNORE` und `SELECT … FOR UPDATE` in `CraftCore.tx` hängen. `q > 2304` ablehnen. GUI-Lesung persistiert nicht. Rollback-Test.
 - [ ] **Schritt 4.** Historie trennen, Oszillationstest, `CHANGE_24H_SQL`.
 - [ ] **Schritt 5.** Ein Commit pro Schritt, Message mit dem Verhalten (`market: ein Stück bewegt den Mid`, `market: Quote und Fill getrennt`).
 
-Akzeptanz: die Tests aus Abschnitt 9 sind grün, 10000 Bruchstein, Erde oder Sand bleiben unter 576000 Cent, und ein wiederholter Snapshot plus `maintain` bewegt weder `quote_price` noch `avg_price` einer abgeschlossenen Stunde.
+Akzeptanz: die Tests aus Abschnitt 9 sind grün, 10000 Bruchstein, Erde oder Sand bleiben unter 180000 Cent, und ein wiederholter Snapshot plus `maintain` bewegt weder `quote_price` noch `avg_price` einer abgeschlossenen Stunde.
