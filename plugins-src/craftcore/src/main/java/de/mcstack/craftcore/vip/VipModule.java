@@ -13,19 +13,43 @@ public final class VipModule {
                      boolean inWorld, String worldId) {
         VipConfig.Values config = VipConfig.load();
         VipHostClient host = new VipHostClient();
+        VipStore store = new VipStore(source);
         this.coordinator = new VipStartCoordinator(
             new VipStartCoordinator.Host() {
                 public VipStartCoordinator.Reply start(String id) { return reply(host.start(id)); }
                 public VipStartCoordinator.Reply status(String slot) { return reply(host.status(slot)); }
             },
-            (delayMillis, task) -> Bukkit.getScheduler().runTaskLater(plugin, task, Math.max(1, delayMillis / 50)),
+            // poll() does blocking HTTP, so the timer must never run on the server thread
+            (delayMillis, task) -> Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, task, Math.max(1, delayMillis / 50)),
             runnable -> Bukkit.getScheduler().runTaskAsynchronously(plugin, runnable),
             System::currentTimeMillis,
             config.pollSeconds() * 1000L,
             config.startTimeoutSeconds() * 1000L,
-            config.maxErrors());
+            config.maxErrors(),
+            new VipStartCoordinator.Events() {
+                public void ready(String id, String slot) {
+                    background(plugin, () -> {
+                        try { store.started(id, slot); }
+                        catch (Exception e) { plugin.getLogger().warning("VIP-Start: " + e.getClass().getSimpleName()); }
+                    });
+                }
+                public void finished(String id, String reason, String slot, boolean began) {
+                    background(plugin, () -> {
+                        // A start that already reached the host must not leave the slot running.
+                        if (began && slot != null && VipStartCoordinator.CANCELLED.equals(reason)) host.stop(slot);
+                        try { store.status(id, "stopped", null); }
+                        catch (Exception e) { plugin.getLogger().warning("VIP-Startabbruch: " + e.getClass().getSimpleName()); }
+                    });
+                }
+            });
         this.bars = new VipStartBars(plugin, coordinator);
         this.gui = new VipGui(plugin, source, coordinator, bars, config, connector, inWorld, worldId);
+    }
+
+    /** The coordinator reports from the server thread or from a poll thread; both end up async. */
+    private static void background(JavaPlugin plugin, Runnable task) {
+        try { Bukkit.getScheduler().runTaskAsynchronously(plugin, task); }
+        catch (IllegalStateException disabling) { task.run(); }
     }
 
     public VipGui gui() { return gui; }

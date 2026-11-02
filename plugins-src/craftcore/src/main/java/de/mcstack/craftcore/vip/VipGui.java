@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,6 +22,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -70,6 +72,8 @@ public final class VipGui implements Listener {
     private final Map<UUID, Consumer<String>> inputs = new ConcurrentHashMap<>();
     private final Map<UUID, Long> inputExpiry = new ConcurrentHashMap<>();
     private final Map<UUID, String> waiting = new ConcurrentHashMap<>();
+    /** Players that already left this server, so a connect retry does not bounce them again. */
+    private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
 
     public VipGui(JavaPlugin plugin, VipStore.ConnectionSource source, VipStartCoordinator coordinator,
                   VipStartBars bars, VipConfig.Values config, Connector connector,
@@ -305,6 +309,8 @@ public final class VipGui implements Listener {
             if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
             UUID target = store.player(clean).orElse(null);
             if (target == null) { message(player, "Spieler nicht gefunden."); return; }
+            if (target.equals(entry.owner())) { message(player, "Der Besitzer ist bereits Mitglied dieser Welt."); return; }
+            if (target.equals(player.getUniqueId())) { message(player, "Du kannst dich nicht selbst einladen."); return; }
             List<VipStore.Member> members = store.members(id);
             boolean already = members.stream().anyMatch(m -> m.player().equals(target));
             VipMemberRules.Verdict verdict = VipMemberRules.invite(
@@ -328,18 +334,20 @@ public final class VipGui implements Listener {
         }, error -> failed(player, "Kicken", error));
     }
 
+    /** Removes the member off the server thread; the display name is never a UUID. */
     private void kickTarget(Player player, VipStore.Entry entry, UUID target, String name) {
         VipMemberRules.Verdict verdict = VipMemberRules.kick(
             entry.owner().equals(player.getUniqueId()), isAdmin(player),
             entry.owner().equals(target), target.equals(player.getUniqueId()));
         if (!verdict.allowed()) { message(player, verdictText(verdict.reason())); return; }
-        try {
-            if (!store.removeMember(entry.id(), target)) { message(player, "Spieler ist kein Mitglied."); return; }
-        } catch (SQLException e) { failed(player, "Kicken", e); return; }
-        message(player, name + " wurde entfernt.");
-        Player online = Bukkit.getPlayer(target);
-        if (online != null && inWorld && worldId != null && worldId.equals(entry.id())) lobby(online);
-        openMembers(player, entry.id());
+        String display = name == null || name.isBlank() ? target.toString() : name;
+        load(() -> store.removeMember(entry.id(), target), removed -> {
+            if (!removed) { message(player, "Spieler ist kein Mitglied."); return; }
+            message(player, display + " wurde entfernt.");
+            Player online = Bukkit.getPlayer(target);
+            if (online != null && inWorld && worldId != null && worldId.equals(entry.id())) lobby(online);
+            openMembers(player, entry.id());
+        }, error -> failed(player, "Kicken", error));
     }
 
     private void toggleAddon(Player player, String id, String addon) {
@@ -368,17 +376,30 @@ public final class VipGui implements Listener {
             waiting.remove(id);
             bars.clear(id);
             if (outcome == null || !outcome.ok()) {
+                // Der Coordinator setzt den Status genau einmal auf stopped und stoppt einen
+                // bereits gestarteten Slot; hier bleibt nur die Meldung an den Wartenden.
                 String reason = outcome == null ? VipStartCoordinator.START_FAILED : outcome.reason();
-                if (!VipStartCoordinator.CANCELLED.equals(reason)) {
-                    message(player, VipStartProgress.reasonText(reason));
-                    async(() -> store.status(entry.id(), "stopped", null), ignored -> { });
-                }
+                if (!VipStartCoordinator.CANCELLED.equals(reason)) message(player, VipStartProgress.reasonText(reason));
                 return;
             }
-            async(() -> store.started(entry.id(), outcome.slot()), ignored -> { });
             message(player, VipStartProgress.ready(outcome.slot()).message());
-            connect(player, outcome.slot());
+            retryConnect(player, outcome.slot());
         }));
+    }
+
+    /**
+     * Velocity may not accept the slot the moment the host reports ready, so the connect is
+     * sent up to three times. A player who already left this server is not sent again.
+     */
+    private void retryConnect(Player player, String slot) {
+        UUID id = player.getUniqueId();
+        for (int attempt = 0; attempt < VipConnectRetry.ATTEMPTS; attempt++) {
+            int current = attempt;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (!VipConnectRetry.maySend(current, player.isOnline(), !transferred.contains(id))) return;
+                connector.connect(player, slot);
+            }, VipConnectRetry.delayTicks(current));
+        }
     }
 
     // ---------------------------------------------------------------- clicks
@@ -416,26 +437,39 @@ public final class VipGui implements Listener {
                 String[] parts = button.arg().split(":", 2);
                 if (parts.length == 2) toggleAddon(player, parts[0], parts[1]);
             }
-            case "member" -> {
-                String[] parts = button.arg().split(":", 3);
-                if (parts.length < 3) return;
-                load(() -> store.findById(parts[0]).orElse(null), entry -> {
-                    if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
-                    UUID target = UUID.fromString(parts[1]);
-                    if (rightClick) {
-                        VipMemberRules.Verdict verdict = VipMemberRules.mayManage(
-                            entry.owner().equals(player.getUniqueId()), isAdmin(player));
-                        if (!verdict.allowed()) { message(player, verdictText(verdict.reason())); return; }
-                        String next = "trusted".equals(parts[2]) ? "member" : "trusted";
-                        async(() -> store.setMemberRole(parts[0], target, next),
-                            () -> openMembers(player, parts[0]), error -> failed(player, "Mitglieder", error));
-                    } else {
-                        kickTarget(player, entry, target, parts[1]);
-                    }
-                }, error -> failed(player, "Mitglieder", error));
-            }
+            case "member" -> memberClick(player, button, rightClick);
             default -> { }
         }
+    }
+
+    private record MemberState(VipStore.Entry entry, String role) {}
+
+    /** Left click kicks, right click toggles "trusted". The role always comes from the database. */
+    private void memberClick(Player player, Button button, boolean rightClick) {
+        String[] parts = button.arg().split(":", 3);
+        if (parts.length < 3) return;
+        UUID target;
+        try { target = UUID.fromString(parts[1]); } catch (IllegalArgumentException invalid) { return; }
+        String name = button.label();
+        load(() -> {
+            VipStore.Entry entry = store.findById(parts[0]).orElse(null);
+            if (entry == null) return null;
+            String role = store.members(parts[0]).stream()
+                .filter(m -> m.player().equals(target)).map(VipStore.Member::role).findFirst().orElse(null);
+            return role == null ? null : new MemberState(entry, role);
+        }, state -> {
+            if (state == null) { message(player, "Dieses Mitglied gibt es nicht mehr."); openMembers(player, parts[0]); return; }
+            if (rightClick) {
+                VipMemberRules.Verdict verdict = VipMemberRules.mayManage(
+                    state.entry().owner().equals(player.getUniqueId()), isAdmin(player));
+                if (!verdict.allowed()) { message(player, verdictText(verdict.reason())); return; }
+                String next = "trusted".equals(state.role()) ? "member" : "trusted";
+                async(() -> store.setMemberRole(parts[0], target, next),
+                    () -> openMembers(player, parts[0]), error -> failed(player, "Mitglieder", error));
+            } else {
+                kickTarget(player, state.entry(), target, name);
+            }
+        }, error -> failed(player, "Mitglieder", error));
     }
 
     // ------------------------------------------------------------ chat input
@@ -463,9 +497,15 @@ public final class VipGui implements Listener {
         UUID id = event.getPlayer().getUniqueId();
         inputs.remove(id);
         inputExpiry.remove(id);
+        transferred.add(id);
         String world = waiting.remove(id);
         if (world != null) coordinator.leave(world, id);
         bars.clear(id);
+    }
+
+    @EventHandler
+    public void join(PlayerJoinEvent event) {
+        transferred.remove(event.getPlayer().getUniqueId());
     }
 
     // --------------------------------------------------------------- helpers
@@ -489,8 +529,9 @@ public final class VipGui implements Listener {
         catch (SQLException e) { return false; }
     }
 
+    /** Player cap of a world. Loads the owner's LuckPerms user when the owner is offline. */
     public int playerLimit(VipStore.Entry entry) {
-        int limit = config.players(VipPerks.rank(entry.owner()));
+        int limit = config.players(VipPerks.rankLoaded(entry.owner()));
         return limit > 0 ? limit : config.vipPlayers();
     }
 

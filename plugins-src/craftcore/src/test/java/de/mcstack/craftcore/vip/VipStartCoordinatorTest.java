@@ -176,6 +176,68 @@ class VipStartCoordinatorTest {
         assertEquals(0, host.starts.get(), "a cancelled start must not reach the host");
     }
 
+    @Test void cancelAfterBeginReportsOnceWithTheSlot() {
+        host.startReplies.add(VipStartCoordinator.Reply.starting("vipworld-1"));
+        List<String> finished = Collections.synchronizedList(new ArrayList<>());
+        VipStartCoordinator coordinator = new VipStartCoordinator(host, scheduler, executor, clock::get, 500, 60_000, 5,
+            new VipStartCoordinator.Events() {
+                public void finished(String id, String reason, String slot, boolean began) {
+                    finished.add(id + ":" + reason + ":" + slot + ":" + began);
+                }
+            });
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        coordinator.join("world", first);
+        CompletableFuture<VipStartCoordinator.Outcome> secondFuture = coordinator.join("world", second);
+        executor.runAll();
+        assertEquals(1, host.starts.get());
+        coordinator.leave("world", first);
+        assertTrue(finished.isEmpty(), "ein Wartender bleibt");
+        coordinator.leave("world", second);
+        assertEquals(List.of("world:cancelled:vipworld-1:true"), finished,
+            "genau ein Abbruch mit Slot, damit der Host gestoppt werden kann");
+        assertTrue(secondFuture.isDone());
+        assertEquals(VipStartCoordinator.CANCELLED, secondFuture.join().reason());
+        assertEquals(0, coordinator.activeCount());
+    }
+
+    @Test void failedStartReportsOnceNotPerWaiter() {
+        host.startReplies.add(VipStartCoordinator.Reply.failed(VipStartCoordinator.NO_FREE_SLOT));
+        List<String> finished = Collections.synchronizedList(new ArrayList<>());
+        VipStartCoordinator coordinator = new VipStartCoordinator(host, scheduler, executor, clock::get, 500, 60_000, 5,
+            new VipStartCoordinator.Events() {
+                public void finished(String id, String reason, String slot, boolean began) {
+                    finished.add(reason + ":" + began);
+                }
+            });
+        coordinator.join("world", UUID.randomUUID());
+        coordinator.join("world", UUID.randomUUID());
+        coordinator.join("world", UUID.randomUUID());
+        executor.runAll();
+        assertEquals(List.of("no_free_slot:true"), finished, "der Status wird einmal zurueckgesetzt");
+    }
+
+    @Test void joinAfterCancelStartsFreshInsteadOfHangingOnTheCancelledFuture() {
+        host.startReplies.add(VipStartCoordinator.Reply.starting("vipworld-1"));
+        host.startReplies.add(VipStartCoordinator.Reply.starting("vipworld-1"));
+        host.statusReplies.add(VipStartCoordinator.Reply.online("vipworld-1"));
+        VipStartCoordinator coordinator = coordinator(60_000, 5);
+        UUID first = UUID.randomUUID();
+        CompletableFuture<VipStartCoordinator.Outcome> cancelled = coordinator.join("world", first);
+        executor.runAll();
+        coordinator.leave("world", first);
+        assertEquals(VipStartCoordinator.CANCELLED, cancelled.join().reason());
+        // The review race: a waiter arriving right after the cancel must not attach to the dead start.
+        CompletableFuture<VipStartCoordinator.Outcome> retry = coordinator.join("world", UUID.randomUUID());
+        executor.runAll();
+        assertFalse(retry.isDone());
+        scheduler.runAll();
+        assertTrue(retry.isDone());
+        assertTrue(retry.join().ok());
+        assertEquals("vipworld-1", retry.join().slot());
+        assertEquals(2, host.starts.get());
+    }
+
     static final class Manual implements VipStartCoordinator.Scheduler {
         final List<Runnable> tasks = Collections.synchronizedList(new ArrayList<>());
         public void later(long delayMillis, Runnable task) { tasks.add(task); }

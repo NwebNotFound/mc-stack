@@ -39,6 +39,14 @@ public final class VipMemberRules {
         return owner || admin ? Verdict.ok() : Verdict.no("not_owner");
     }
 
+    /**
+     * Periodic membership check on the world server: a player who was kicked while in the
+     * lobby must leave the running world, and the join gate blocks the rejoin.
+     */
+    public static boolean mustLeaveWorld(boolean owner, boolean member, boolean bypass) {
+        return !VipAccessRules.decide(owner, member, bypass, true, true);
+    }
+
     public static Role role(String value) {
         return "trusted".equalsIgnoreCase(value == null ? "" : value.trim()) ? Role.TRUSTED : Role.MEMBER;
     }
