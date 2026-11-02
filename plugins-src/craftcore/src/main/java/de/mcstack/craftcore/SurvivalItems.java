@@ -75,7 +75,7 @@ final class SurvivalItems {
           String name = r.getString(1);
           if (name != null && blocked.test(name)) drop.add(name);
         }
-      } catch (SQLException ignored) { continue; }
+      } catch (SQLException ex) { if (!missingTable(ex)) throw ex; continue; }
       if (drop.isEmpty()) continue;
       try (PreparedStatement delete = c.prepareStatement("DELETE FROM " + table[0] + " WHERE " + table[1] + "=?")) {
         for (String name : drop) { delete.setString(1, name); delete.addBatch(); }
@@ -84,5 +84,13 @@ final class SurvivalItems {
       removed += drop.size();
     }
     return removed;
+  }
+
+  /** MySQL/MariaDB 1146 and ANSI 42S02. Other SQL errors must surface. */
+  static boolean missingTable(SQLException ex) {
+    if (ex == null) return false;
+    if ("42S02".equals(ex.getSQLState()) || ex.getErrorCode() == 1146) return true;
+    String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
+    return message.contains("table") && (message.contains("not found") || message.contains("doesn't exist") || message.contains("does not exist"));
   }
 }

@@ -7,12 +7,13 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.*;
 
 final class PriceCatalog {
-  static boolean eligible(Material m) { return m != null && SurvivalItems.obtainable(m.name(), java.util.List.of()); }
+  static boolean eligible(Material m) { return eligible(null, m); }
+  static boolean eligible(org.bukkit.configuration.Configuration cfg, Material m) { return m != null && SurvivalItems.obtainable(cfg, m); }
   static Map<Material,Double> build(CraftCore core) {
     File file=new File(core.getDataFolder(),"prices-base.yml"); if(!file.exists()) core.saveResource("prices-base.yml",false);
     YamlConfiguration cfg=YamlConfiguration.loadConfiguration(file);
     List<Recipe> recipes=new ArrayList<>(); Bukkit.recipeIterator().forEachRemaining(recipes::add);
-    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList(), m -> m.isItem() && SurvivalItems.obtainable(core.getConfig(), m), PriceCatalog::category);
+    return build(cfg, recipes.stream().map(PriceCatalog::recipe).filter(Objects::nonNull).toList(), m -> m.isItem() && eligible(core.getConfig(), m), PriceCatalog::category);
   }
   record CatalogRecipe(Material output, int amount, List<List<Material>> ingredients, boolean cooking) {
     CatalogRecipe(Material output, int amount, List<List<Material>> ingredients) { this(output,amount,ingredients,false); }

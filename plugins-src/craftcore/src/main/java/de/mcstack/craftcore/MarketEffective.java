@@ -40,9 +40,10 @@ final class MarketEffective {
     return !ore(material) && material != Material.DIAMOND && material != Material.DIAMOND_BLOCK && material != Material.TOTEM_OF_UNDYING;
   }
   static Map<Material, Double> bases(CraftCore core) {
-    return bases(YamlConfiguration.loadConfiguration(new File(core.getDataFolder(), "prices-base.yml")));
+    return bases(YamlConfiguration.loadConfiguration(new File(core.getDataFolder(), "prices-base.yml")), core.getConfig().getStringList("market.unobtainable"));
   }
-  static Map<Material, Double> bases(Configuration cfg) {
+  static Map<Material, Double> bases(Configuration cfg) { return bases(cfg, List.of()); }
+  static Map<Material, Double> bases(Configuration cfg, java.util.Collection<String> extra) {
     Map<Material, Double> out = new EnumMap<>(Material.class);
     ConfigurationSection section = cfg.getConfigurationSection("base");
     if (section == null) return out;
@@ -50,7 +51,7 @@ final class MarketEffective {
       Material material = Material.matchMaterial(key);
       double value = section.getDouble(key);
       if (material == null || !Double.isFinite(value) || value < 0.01) throw new IllegalArgumentException("Ungueltiger Basispreis: " + key);
-      if (!SurvivalItems.obtainable(material.name(), List.of())) continue;
+      if (!SurvivalItems.obtainable(material.name(), extra)) continue;
       out.put(material, value);
     }
     return out;
