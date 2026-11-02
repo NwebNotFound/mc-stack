@@ -3,13 +3,9 @@ package de.mcstack.craftcore.vip;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
-import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -21,9 +17,6 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.EquipmentSlot;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
@@ -35,12 +28,10 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
     private final VipModule module;
     private final VipGui gui;
     private final String worldId;
-    private final NamespacedKey key;
 
     public VipWorldMenu(JavaPlugin plugin, VipStore.ConnectionSource source) {
         this.plugin = plugin;
         this.worldId = System.getenv("CRAFTCORE_VIP_WORLD_ID");
-        this.key = new NamespacedKey(plugin, "vip_menu_star");
         this.module = new VipModule(plugin, source, new Connector(), true, worldId);
         this.gui = module.gui();
     }
@@ -49,6 +40,7 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
         Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this);
         Bukkit.getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
         Bukkit.getPluginManager().registerEvents(this, plugin);
+        Bukkit.getPluginManager().registerEvents(new VipStarGuard(), plugin);
         module.start();
         if (worldId == null || worldId.isBlank()) {
             plugin.getLogger().warning("CRAFTCORE_VIP_WORLD_ID fehlt; das In-World-Menue ist nicht verfuegbar.");
@@ -90,31 +82,16 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
     @EventHandler
     public void join(PlayerJoinEvent event) {
         if (worldId == null || worldId.isBlank()) return;
-        Player player = event.getPlayer();
-        for (ItemStack item : player.getInventory().getContents()) if (isStar(item)) return;
-        ItemStack existing = player.getInventory().getItem(8);
-        if (existing != null && !existing.getType().isAir()) return;
-        ItemStack star = new ItemStack(Material.NETHER_STAR);
-        ItemMeta meta = star.getItemMeta();
-        meta.displayName(Component.text("VIP-Menue", NamedTextColor.LIGHT_PURPLE));
-        meta.lore(List.of(Component.text("Rechtsklick: Welt verwalten", NamedTextColor.GRAY)));
-        meta.getPersistentDataContainer().set(key, PersistentDataType.BYTE, (byte) 1);
-        star.setItemMeta(meta);
-        player.getInventory().setItem(8, star);
+        VipStarGuard.give(event.getPlayer(), VipStarGuard.KEY);
     }
 
     @EventHandler
     public void use(PlayerInteractEvent event) {
         if (worldId == null || worldId.isBlank()) return;
-        if (event.getHand() != EquipmentSlot.HAND || !isStar(event.getItem())) return;
+        if (event.getHand() != EquipmentSlot.HAND || !VipStarGuard.tagged(event.getItem())) return;
         if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
         event.setCancelled(true);
         gui.openWorld(event.getPlayer(), worldId);
-    }
-
-    private boolean isStar(ItemStack item) {
-        return item != null && item.hasItemMeta()
-            && item.getItemMeta().getPersistentDataContainer().has(key, PersistentDataType.BYTE);
     }
 
     private final class Connector implements VipGui.Connector {

@@ -1,5 +1,6 @@
 package de.mcstack.craftcore;
 
+import de.mcstack.craftcore.vip.VipStarGuard;
 import java.sql.*;
 import java.util.*;
 import org.bukkit.*;
@@ -750,7 +751,7 @@ final class Market implements Listener {
       result->{finishSell(p,p.getUniqueId(),key,sold,result); if(after!=null && result.status()==SellTransaction.CommitStatus.COMMITTED) after.run();});
   }
   private boolean canSell(ItemStack real){
-    return real!=null && SurvivalItems.obtainable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType()) && !core.getConfig().getStringList("market.unsellable").contains(real.getType().name());
+    return real!=null && VipStarGuard.sellable(real) && SurvivalItems.obtainable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType()) && !core.getConfig().getStringList("market.unsellable").contains(real.getType().name());
   }
   private void finishSale(String id) {
     try { core.tx(c->{
