@@ -73,7 +73,7 @@ The website stores the status mc-stack sends. The website does not set `expired`
 mc-stack checks again when it runs the item.
 
 1. **Discord link.** The Minecraft UUID is the `mc_links` row for that `discord_id`. No row acks `denied` / `not_linked`. If the item also contains `mc_uuid`, it must equal that UUID or the ack is `denied` / `not_linked`.
-2. **Rank.** The linked UUID must currently be `vip`, `mvp`, or `admin`. Anything else is `denied` / `no_rank`. Admins are allowed to use and to manage worlds.
+2. **Rank.** `create`, and every action the caller takes as owner or admin, requires the caller's linked UUID to be `vip`, `mvp`, or `admin`. Anything else is `denied` / `no_rank`. A trusted member's `start` does not use the caller's rank. mc-stack reads the world owner's rank instead, and that owner must be `vip`, `mvp`, or `admin` or the start is `denied` / `no_rank`. Admins may use and manage worlds.
 3. **Who may do what.**
 
 | Action | Owner | Admin | Trusted invite | Plain invite |
@@ -118,6 +118,7 @@ If the friends list cannot be read, `friends` mode fails closed for everyone exc
 Before a free-text field (`info`, `name`, or any other display string) is stored or shown, mc-stack:
 
 - removes every code point in Unicode general category `\p{Cc}` (this includes newlines and the other C0/C1 controls)
+- removes every code point in `\p{Cf}` (bidi overrides, zero-width characters, and the other format characters)
 - removes each `§` and the formatting character that follows it
 - trims
 - caps the result at 120 characters
@@ -146,7 +147,7 @@ Addon ids, max 3, all `type: rule`: `keep-inventory`, `peaceful`, `creative`, `d
 | `addons` | `world_id`, `addons` array of ids |
 | `delete` | `world_id` |
 
-`create` stores `playerLimit` from the rank at that moment. `start` of a world that is already `running` is `done`. `stop` of a world that is already `stopped` is `done`. `invite` of someone who is already invited is `denied` / `already_member`. `uninvite` of a player who is not invited is `denied` / `member_not_found`. `uninvite` of the owner is `denied` / `is_owner`. `trust` sets the invite's role to `trusted` and does not grant manage, invite, or delete. `delete` removes the world from `vip_worlds` after the ack `done`. Names are resolved in `known_players`.
+`create` stores `playerLimit` from the rank at that moment. `start` of a world that is already `running` is `done`. `stop` of a world that is already `stopped` is `done`. `invite` of someone who is already invited is `denied` / `already_member`. `uninvite` of a player who is not invited is `denied` / `member_not_found`. `uninvite` of the owner is `denied` / `is_owner`. When the world is `private` and the uninvited player is on it, mc-stack sends that player to the lobby. `trust` sets the invite's role to `trusted` and does not grant manage, invite, or delete. `delete` removes the world from `vip_worlds` after the ack `done`. Names are resolved in `known_players`.
 
 `start` does not return a queue position. The in-game client shows a boss bar and the action bar and connects the player when the slot is ready. The website only learns `done`, `denied`, `expired`, or `failed`.
 
