@@ -26,10 +26,11 @@ class UnobtainableMarketTest {
     for (String name : NAMED) {
       Material material = Material.matchMaterial(name);
       assertNotNull(material, name);
-      assertFalse(SurvivalItems.obtainable(cfg, material), name);
-      assertFalse(PriceCatalog.eligible(material), name);
+      boolean obtainable = SurvivalItems.obtainable(cfg, material);
+      assertFalse(obtainable, name);
+      assertFalse(PriceCatalog.eligible(cfg, material), name);
       assertTrue(Market.unbuyable(cfg, material), name);
-      assertFalse(Market.buyEnabled(Market.unbuyable(cfg, material), SurvivalItems.obtainable(cfg, material), false), name);
+      assertFalse(Market.buyEnabled(!obtainable, obtainable, false), name);
     }
     assertTrue(SurvivalItems.obtainable(cfg, Material.DIRT));
     assertTrue(SurvivalItems.obtainable(cfg, Material.IRON_SWORD));
@@ -37,8 +38,16 @@ class UnobtainableMarketTest {
     assertTrue(PriceCatalog.eligible(Material.DIRT));
     assertTrue(PriceCatalog.eligible(Material.IRON_SWORD));
     cfg.set("market.unobtainable", List.of("DIRT"));
-    assertFalse(SurvivalItems.obtainable(cfg, Material.DIRT));
-    assertFalse(Market.buyEnabled(Market.unbuyable(cfg, Material.DIRT), true, false));
+    boolean obtainable = SurvivalItems.obtainable(cfg, Material.DIRT);
+    assertFalse(obtainable);
+    assertFalse(PriceCatalog.eligible(cfg, Material.DIRT));
+    assertFalse(Market.buyEnabled(!obtainable, obtainable, false));
+    var prices = new YamlConfiguration();
+    prices.set("base.DIRT", 1.0);
+    prices.set("base.STONE", 1.0);
+    var kept = MarketEffective.bases(prices, List.of("DIRT"));
+    assertFalse(kept.containsKey(Material.DIRT));
+    assertEquals(1.0, kept.get(Material.STONE));
   }
 
   @Test void startupRemovesUnobtainableCatalogRows() throws Exception {
@@ -59,6 +68,16 @@ class UnobtainableMarketTest {
         assertEquals("IRON_SWORD", prices.getString(1));
         assertFalse(prices.next());
       }
+    }
+  }
+
+  @Test void purgeIgnoresAMissingTableAndSurfacesOtherSqlErrors() throws Exception {
+    try (Connection empty = DriverManager.getConnection("jdbc:h2:mem:unobtainable_missing;MODE=MySQL")) {
+      assertEquals(0, SurvivalItems.purge(empty, name -> true));
+    }
+    try (Connection broken = DriverManager.getConnection("jdbc:h2:mem:unobtainable_badcol;MODE=MySQL"); Statement s = broken.createStatement()) {
+      s.execute("CREATE TABLE market_catalog(id INT)");
+      assertThrows(java.sql.SQLException.class, () -> SurvivalItems.purge(broken, name -> true));
     }
   }
 }
