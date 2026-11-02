@@ -22,6 +22,13 @@ class PvpAccessTest {
         assertFalse(PvpAccess.sendToBuildWorld(PvpAccess.decide(true, true)));
         assertFalse(PvpAccess.sendToBuildWorld(PvpAccess.decide(false, false)));
     }
+    @Test void pendingBuildRequestLandsInBuildWorldEvenWithAnAssignment() {
+        assertEquals(PvpAccess.JoinDecision.BUILDER, PvpAccess.destination(true, true, false));
+        assertEquals(PvpAccess.JoinDecision.BUILDER, PvpAccess.destination(true, false, false));
+        assertTrue(PvpAccess.sendToBuildWorld(PvpAccess.destination(true, true, true)));
+        assertEquals(PvpAccess.JoinDecision.MATCH, PvpAccess.destination(false, true, true));
+        assertEquals(PvpAccess.JoinDecision.KICK, PvpAccess.destination(false, false, false));
+    }
     @Test void eachPermissionAllowsBypass() {
         for (String permission : Set.of("craftcore.build.pvp", "group.builder", "group.admin")) {
             assertTrue(PvpAccess.mayBypass(permission::equals));

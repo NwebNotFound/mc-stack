@@ -22,5 +22,20 @@ class PvpStoreTest {
         assertTrue(store.markStatus("match","pending","failed"));
         assertFalse(store.markStatus("match","pending","failed"));
         assertTrue(store.pendingFor(a).isEmpty());
+        assertEquals(0, store.pendingCount());
+        store.holdForQueue(true);
+        assertEquals(1, store.pendingCount());
+        assertTrue(store.pendingFor(a).isEmpty());
+        store.createAssignment("later", a, b, "one", "two");
+        assertEquals(2, store.pendingCount());
+        store.holdForQueue(false);
+        assertEquals(1, store.pendingCount());
+        assertTrue(store.markStatus("later", "pending", "failed"));
+        assertEquals(0, store.pendingCount());
+        assertFalse(store.consumeBuildRequest(a));
+        store.requestBuild(a);
+        assertTrue(store.consumeBuildRequest(a));
+        assertFalse(store.consumeBuildRequest(a));
+        assertTrue(store.pendingFor(a).isEmpty());
     }
 }

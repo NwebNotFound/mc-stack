@@ -16,6 +16,24 @@ class IdleStopTest {
         assertTrue(IdleStop.busy(false, null, 0, true));
         assertFalse(IdleStop.busy(false, null, 0, false));
     }
+    @Test void queueOrPendingAssignmentBlocksIdleStop() {
+        assertTrue(PvpStore.holdsServer(0, 1));
+        assertTrue(PvpStore.holdsServer(1, 0));
+        assertTrue(PvpStore.holdsServer(2, 3));
+        assertFalse(PvpStore.holdsServer(0, 0));
+        IdleStop timer = new IdleStop(IdleStop.DEFAULT_GRACE_MS);
+        assertFalse(timer.shouldStop(0, false, PvpStore.holdsServer(0, 1), 0, false));
+        assertFalse(timer.shouldStop(180_000, false, PvpStore.holdsServer(1, 0), 1_000, false));
+        assertFalse(timer.shouldStop(180_000, false, PvpStore.holdsServer(0, 0), 0, false));
+        assertTrue(timer.shouldStop(300_000, false, PvpStore.holdsServer(0, 0), 0, false));
+    }
+    @Test void pendingAssignmentHoldsTheIdleTimer() {
+        IdleStop timer = new IdleStop(IdleStop.DEFAULT_GRACE_MS);
+        assertFalse(timer.shouldStop(0, false, true, 0, false));
+        assertFalse(timer.shouldStop(180_000, false, true, 1_000, false));
+        assertFalse(timer.shouldStop(180_001, false, false, 0, false));
+        assertTrue(timer.shouldStop(300_001, false, false, 0, false));
+    }
     @Test void graceAndBusyReset() {
         IdleStop timer = new IdleStop(IdleStop.DEFAULT_GRACE_MS);
         assertFalse(timer.tick(1_000, false));

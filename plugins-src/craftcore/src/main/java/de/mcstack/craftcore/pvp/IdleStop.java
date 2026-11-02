@@ -10,6 +10,11 @@ public final class IdleStop {
 
     public IdleStop(long graceMs) { this.graceMs = graceMs; }
 
+    /** Idle clock uses the same busy signal as the shutdown check, so a pending assignment resets the timer. */
+    public boolean shouldStop(long nowMs, boolean playersOnline, Boolean pendingFromDb, long dbCheckAgeMs, boolean buildOccupied) {
+        return tick(nowMs, busy(playersOnline, pendingFromDb, dbCheckAgeMs, buildOccupied));
+    }
+
     public boolean tick(long nowMs, boolean busy) {
         if (busy) {
             idleSince = null;
