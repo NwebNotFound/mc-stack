@@ -13,12 +13,19 @@ import java.util.Map;
 import java.util.Set;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.Material;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.FurnaceSmeltEvent;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.StonecutterInventory;
 
 /**
  * Supply is the sum of online inventories, ender chests, and open market listings.
@@ -274,6 +281,73 @@ final class MarketSupply implements Listener {
     int crafts = CraftDemand.crafts(event.isShiftClick(), amounts, per, max, empty, partial);
     Map<String, Long> used = CraftDemand.consumed(types, crafts);
     if (!used.isEmpty()) Bukkit.getScheduler().runTaskAsynchronously(core, () -> recordDemand(used));
+  }
+
+  /** Result slot of a stonecutter. Vanilla StonecutterMenu.RESULT_SLOT. */
+  private static final int STONECUTTER_RESULT = 1;
+
+  @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+  public void stonecut(InventoryClickEvent event) {
+    if (!(event.getWhoClicked() instanceof Player player)) return;
+    if (!(event.getView().getTopInventory() instanceof StonecutterInventory stonecutter)) return;
+    if (event.getRawSlot() != STONECUTTER_RESULT) return;
+    ItemStack result = stonecutter.getResult();
+    ItemStack input = stonecutter.getInputItem();
+    if (result == null || input == null || result.getType().isAir() || input.getType().isAir()) return;
+    if (result.getAmount() <= 0 || input.getAmount() <= 0) return;
+    boolean shift = event.isShiftClick() && event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
+    int empty = 0, partial = 0, max = Math.max(1, result.getMaxStackSize()), per = result.getAmount();
+    if (shift) {
+      int[] space = space(player.getInventory().getStorageContents(), result.getType(), max);
+      empty = space[0];
+      partial = space[1];
+    }
+    int room = shift ? 0 : takeRoom(event, player, result, max);
+    int takes = CraftDemand.stonecutterTakes(shift, input.getAmount(), per, max, empty, partial, room);
+    Map<String, Long> used = CraftDemand.stonecutterConsumed(input.getType().name(), takes);
+    if (!used.isEmpty()) Bukkit.getScheduler().runTaskAsynchronously(core, () -> recordDemand(used));
+  }
+
+  @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+  public void smelt(FurnaceSmeltEvent event) {
+    Material block = event.getBlock().getType();
+    if (block != Material.FURNACE && block != Material.BLAST_FURNACE && block != Material.SMOKER) return;
+    ItemStack source = event.getSource();
+    if (source == null) return;
+    Map<String, Long> used = CraftDemand.smelted(source.getType().name());
+    if (!used.isEmpty()) Bukkit.getScheduler().runTaskAsynchronously(core, () -> recordDemand(used));
+  }
+
+  private static int[] space(ItemStack[] storage, Material type, int maxStack) {
+    int empty = 0, partial = 0;
+    if (storage != null) for (ItemStack slot : storage) {
+      if (slot == null || slot.getType().isAir()) empty++;
+      else if (slot.getType() == type) partial += Math.max(0, maxStack - slot.getAmount());
+    }
+    return new int[] {empty, partial};
+  }
+
+  /** How many result items this click can accept. A non-empty hotbar cannot swap into the result slot. */
+  private static int takeRoom(InventoryClickEvent event, Player player, ItemStack result, int maxStack) {
+    return switch (event.getAction()) {
+      case PICKUP_ALL, PICKUP_HALF, PICKUP_SOME, PICKUP_ONE -> cursorRoom(event.getCursor(), result, maxStack);
+      case DROP_ALL_SLOT, DROP_ONE_SLOT -> maxStack;
+      case HOTBAR_SWAP, HOTBAR_MOVE_AND_READD -> emptyHotbar(event, player) ? maxStack : 0;
+      default -> 0;
+    };
+  }
+
+  private static int cursorRoom(ItemStack cursor, ItemStack result, int maxStack) {
+    if (cursor == null || cursor.getType().isAir()) return maxStack;
+    if (cursor.getType() != result.getType()) return 0;
+    return Math.max(0, maxStack - cursor.getAmount());
+  }
+
+  private static boolean emptyHotbar(InventoryClickEvent event, Player player) {
+    ItemStack dest = event.getClick() == ClickType.SWAP_OFFHAND
+      ? player.getInventory().getItemInOffHand()
+      : event.getHotbarButton() >= 0 ? player.getInventory().getItem(event.getHotbarButton()) : null;
+    return dest == null || dest.getType().isAir();
   }
 
   @EventHandler public void join(PlayerJoinEvent event) { capture(event.getPlayer(), true); }

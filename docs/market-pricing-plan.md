@@ -472,7 +472,11 @@ Verkauf bleibt `<= Kauf / 2`, weil Kauf und Verkauf denselben `preisMid` verwend
 
 ### Craft-Nachfrage
 
-`CraftItemEvent` zählt verbrauchte Zutaten, Shift-Klick inklusive: so oft, wie die kleinste belegte Zutat reicht und das Ergebnis ins Inventar passt. Jede belegte Zelle verbraucht ein Stück pro Durchgang. Die Zählung passiert auf dem Server-Thread, das Schreiben asynchron.
+Jede Verarbeitung zählt verbrauchte Zutaten auf dem Server-Thread. Das Schreiben passiert danach asynchron. Dieselbe Halbwertszeit, dasselbe `demand-weight` und dieselbe Klemme gelten für alle drei Wege.
+
+- Werkbank: `CraftItemEvent`, Shift-Klick inklusive. So oft, wie die kleinste belegte Zutat reicht und das Ergebnis ins Inventar passt. Jede belegte Zelle verbraucht ein Stück pro Durchgang.
+- Steinsäge: `InventoryClickEvent` auf dem Ergebnis-Slot (`STONECUTTER`, Slot 1), und nur wenn der Klick das Ergebnis wirklich nimmt. Ein Durchgang verbraucht ein Eingangsstück, auch wenn das Ergebnis zwei Stufen sind. Shift-Klick wiederholt das, bis der Eingang oder der Platz im Inventar ausgeht. 64 Stein und ein leeres Inventar bei zwei Stufen pro Schnitt zählen 64 Stein, nicht 128 Stufen. Die Rezeptwahl allein zählt nicht. Glatter Stein bleibt ein Ofenrezept.
+- Ofen, Schmelzofen und Räucherofen: `FurnaceSmeltEvent`. Dieselbe Klasse feuert für alle drei, weil sie einen gemeinsamen Ofen-Blockentity haben. Ein Ereignis zählt ein Eingangsstück, unabhängig von der Stapelgröße im Slot. Brennstoff zählt nicht. Herausnehmen aus dem Ergebnis zählt nicht noch einmal.
 
 Der gespeicherte Verbrauch fällt mit derselben Halbwertszeit wie die Kurve (`12 h` unter 1 CP, sonst `72 h`): `demand * 2^(-Δt / H)`. Eingefaltet wird er vor der Klemme:
 
@@ -480,4 +484,4 @@ Der gespeicherte Verbrauch fällt mit derselben Halbwertszeit wie die Kurve (`12
 s = clamp( (ref / (smoothed + 1)) ^ k * (1 + demand-weight * decayed / ref) , smin, smax )
 ```
 
-`demand-weight` Default 1, Schlüssel `market.scarcity.demand-weight`. Ein unbekannter Bestand (`smoothed < 0`) lässt den Bestandsteil bei 1; eine Zeile, die nur Nachfrage trägt, zählt nicht als Bestand 0. Fehlt die Nachfrage, ist der zweite Faktor 1. `market_supply.demand` und `demand_updated` bleiben bei der Bestands-EMA stehen. Einzigartige Items nutzen weiter `unique-smax`. Viel Craften von Bruchstein kann den Faktor höchstens auf 3 ziehen (Einzigartiges auf 8). Der Rezeptdeckel benutzt dabei den erhöhten Kaufpreis der Zutat, deshalb bleibt Steinverkauf `<=` Bruchsteinkauf, und `Verkauf <= Kauf / 2` gilt auf demselben Mid. Das Tageslimit bleibt `market.daily-revenue-limit`.
+`demand-weight` Default 1, Schlüssel `market.scarcity.demand-weight`. Ein unbekannter Bestand (`smoothed < 0`) lässt den Bestandsteil bei 1; eine Zeile, die nur Nachfrage trägt, zählt nicht als Bestand 0. Fehlt die Nachfrage, ist der zweite Faktor 1. `market_supply.demand` und `demand_updated` bleiben bei der Bestands-EMA stehen. Einzigartige Items nutzen weiter `unique-smax`. Viel Craften, Schneiden oder Schmelzen von Bruchstein oder Stein kann den Faktor höchstens auf 3 ziehen (Einzigartiges auf 8). Der Rezeptdeckel benutzt dabei den erhöhten Kaufpreis der Zutat: Steinverkauf bleibt `<=` Bruchsteinkauf, zwei Steinstufen bleiben `<=` ein Steinkauf, glatter Stein bleibt `<=` ein Steinkauf, und `Verkauf <= Kauf / 2` gilt auf demselben Mid. Das Tageslimit bleibt `market.daily-revenue-limit`.

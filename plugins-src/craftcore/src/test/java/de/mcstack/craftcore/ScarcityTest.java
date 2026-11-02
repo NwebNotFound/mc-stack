@@ -105,6 +105,46 @@ class ScarcityTest {
     assertTrue(CraftDemand.consumed(new String[] {"COBBLESTONE"}, 0).isEmpty());
   }
 
+  @Test void stonecutterShiftClickCountsTheInputOncePerBatch() {
+    assertEquals(64, CraftDemand.stonecutterTakes(true, 64, 2, 64, 36, 0, 0));
+    assertEquals(Map.of("STONE", 64L), CraftDemand.stonecutterConsumed("STONE", 64));
+    assertEquals(5, CraftDemand.stonecutterTakes(true, 64, 2, 64, 0, 10, 0));
+    assertEquals(32, CraftDemand.stonecutterTakes(true, 64, 2, 64, 1, 0, 0));
+    assertEquals(10, CraftDemand.stonecutterTakes(true, 64, 1, 64, 0, 10, 0));
+    assertEquals(1, CraftDemand.stonecutterTakes(false, 64, 2, 64, 0, 0, 64));
+    assertEquals(0, CraftDemand.stonecutterTakes(false, 64, 2, 64, 36, 0, 1));
+    assertEquals(0, CraftDemand.stonecutterTakes(true, 0, 2, 64, 36, 0, 0));
+    assertTrue(CraftDemand.stonecutterConsumed("STONE_SLAB", 0).isEmpty());
+  }
+
+  @Test void smeltingCountsOneInputAndIgnoresFuel() {
+    assertEquals(Map.of("COBBLESTONE", 1L), CraftDemand.smelted("COBBLESTONE"));
+    assertEquals(Map.of("STONE", 1L), CraftDemand.smelted("STONE"));
+    assertFalse(CraftDemand.smelted("STONE").containsKey("COAL"));
+    assertFalse(CraftDemand.smelted("COBBLESTONE").containsKey("COAL"));
+    assertTrue(CraftDemand.smelted("AIR").isEmpty());
+    assertTrue(CraftDemand.smelted(null).isEmpty());
+  }
+
+  @Test void cuttingAndSmeltingCannotProfitAtTheClamp() {
+    var cfg = RecipeArbitrageTest.liveCfg();
+    var prices = RecipeArbitrageTest.prices();
+    Scarcity.Settings settings = Scarcity.settings(cfg);
+    double stone = Market.quote(cfg, Material.STONE, prices.getDouble("base.STONE")).base();
+    double slab = Market.quote(cfg, Material.STONE_SLAB, prices.getDouble("base.STONE_SLAB")).base();
+    double smooth = Market.quote(cfg, Material.SMOOTH_STONE, prices.getDouble("base.SMOOTH_STONE")).base();
+    long stoneBuy = CurvePrice.buyCents(CurvePrice.lo(stone) * settings.smin(), F);
+    long bareSlab = CurvePrice.sellCents(CurvePrice.hi(slab) * settings.smax(), null, F);
+    long cappedSlab = CurvePrice.sellCents(CurvePrice.hi(slab) * settings.smax(), stoneBuy / 2, F);
+    assertTrue(2L * bareSlab > stoneBuy, bareSlab + " vs " + stoneBuy);
+    assertTrue(2L * cappedSlab <= stoneBuy, cappedSlab + " vs " + stoneBuy);
+    long bareSmooth = CurvePrice.sellCents(CurvePrice.hi(smooth) * settings.smax(), null, F);
+    long cappedSmooth = CurvePrice.sellCents(CurvePrice.hi(smooth) * settings.smax(), stoneBuy, F);
+    assertTrue(bareSmooth > stoneBuy, bareSmooth + " vs " + stoneBuy);
+    assertTrue(cappedSmooth <= stoneBuy, cappedSmooth + " vs " + stoneBuy);
+    assertEquals(150000, Market.revenueLimit(cfg));
+  }
+
   @Test void craftDemandDecaysWithTheSameHalfLife() {
     long half = 12L * 3_600_000L;
     assertEquals(500d, Scarcity.decay(1000, half, 12), 1e-6);
