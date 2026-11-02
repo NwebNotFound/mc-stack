@@ -12,7 +12,8 @@
 
 - Rohpreise in `plugins-src/craftcore/src/main/resources/prices-base.yml` bleiben die Quelle. Diese Plan-PR ändert sie nicht.
 - `market.base-factor` = 0.5, `market.buy-factor` = 1.5, `market.sell-factor` = 0.75, `market.max-sell-ratio` = 0.5.
-- Verkaufsuntergrenze der Kurve ist `lo = 0.25 * b`, Obergrenze `hi = 1.2 * b`, für jedes Item. `market.min-price` / `market.max-price` klemmen die Kurve nicht mehr: Bruchstein und Stein stehen dort auf einem Punkt (`0.05` bzw. `0.10`) und würden sonst fest bleiben. Halbwertszeit 72 Stunden.
+- Verkaufsuntergrenze der Kurve ist `lo = 0.25 * b`, Obergrenze `hi = 1.2 * b`, für jedes Item. `market.min-price` / `market.max-price` klemmen die Kurve nicht mehr: Bruchstein und Stein stehen dort auf einem Punkt (`0.05` bzw. `0.10`) und würden sonst fest bleiben.
+- Halbwertszeit ist konfigurierbar und hängt an derselben Grenze wie `D`: `b < 1` nutzt `market.curve.half-life-cheap-hours` (Default 12), alles andere `market.curve.half-life-hours` (Default 72). Beide Schlüssel sind Stunden, beide müssen endlich und positiv sein.
 - Tiefe hängt an der Quote-Basis, nicht an einem globalen `D = 64000/3`. Das alte `D` bleibt nur als Vergleich in den Tabellen. Normativ: `b < 1` → `D = 128` (zwei Stacks), `1 ≤ b < 50` → `D = 250`, `b ≥ 50` → `D = 400`. Ein Trade bewegt den Mid um `exp(1/D) - 1`: 0.778 % bei Massenblöcken, 0.400 % in der Mitte, 0.250 % bei Diamant und Netherit.
 - Ein Trade nimmt höchstens 2304 Stück an (`36 * 64`, ein Inventar ohne Shulker-Inhalt). Die Schleife läuft im Speicher, nicht als SQL pro Stück.
 - 1 CP = 100 Cent. Auszahlung und Abbuchung in ganzen Cent, Summe über die Stückkurve, nicht ein Kurs mal Menge.
@@ -94,8 +95,11 @@ Abklingzeit einmal pro Transaktion, nicht pro Stück, und nur schreibend in der 
 
 ```text
 Δt_ms = max(0, now - updated)
-net   = net * 2^(-Δt_ms / (72 * 3600 * 1000))
+H_h   = half-life-cheap-hours    wenn b < 1, sonst half-life-hours
+net   = net * 2^(-Δt_ms / (H_h * 3600 * 1000))
 ```
+
+Defaults: 12 Stunden unter 1 CP, 72 Stunden sonst. Ein Dump und die anschließende Erholung stehen weiter unten; die Kurve nach N Trades ohne Zeitverzug hängt nicht von `H_h` ab.
 
 Mid in CP. `D` nach Quote-Basis:
 
@@ -180,7 +184,29 @@ Der erste Verkauf zahlt 15000 Cent und hinterlässt 14962. Das sind 38 Cent auf 
 
 Netheritbarren, `b = 4000`, `D = 400`, `lo = 1000`, `hi = 4800`. Erster Verkauf 300000 Cent, Quote danach 299250 Cent (Mid 3990.012490). Floor nach `400 * ln(4) = 554.52` Verkäufen, Verkauf dann 75000 Cent = 750 CP.
 
-Erholung vom Floor: `net` halbiert, Mid ist `b * sqrt(0.25) = 0.5 b`. Diamant: Mid 100 CP, Verkauf 7500 Cent, Kauf 15000 Cent.
+Erholung vom Floor, nur für Items mit 72 Stunden: `net` halbiert sich in einer Halbwertszeit, der Mid ist dann `b * sqrt(0.25) = 0.5 b`. Diamant: nach 72 Stunden Mid 100 CP, Verkauf 7500 Cent, Kauf 15000 Cent. Dieselbe Halbierung bei Bruchstein dauert 12 Stunden und landet auf Mid `0.025` CP (Kauf 3 / Verkauf 1), nicht auf dem Basiscent.
+
+### Zwei Stacks verkauft, dann Erholung
+
+Zwei Stacks sind 128 Stück, bei Massenblöcken genau ein `D`. Unmittelbar danach ist `net = -128` und `m = b / e` (−63.21 %), noch über `lo`. „Wieder da“ heißt hier: der Verkaufscent ist wieder der Basiscent. Der Mid liegt dann noch spürbar unter `b`; 1 % Abstand ist die zweite Spalte.
+
+Bruchstein und Erde, `b = 0.05`, Halbwertszeit 12 h. Basisquote 7 / 3 Cent. Direkt nach dem Dump: Mid 0.018394 CP, Kauf 2 / Verkauf 1.
+
+| Zeit | net | Mid CP | Kauf / Verkauf Cent |
+| --- | ---: | ---: | --- |
+| 0 | −128 | 0.018394 | 2 / 1 |
+| 6 h | −90.510 | 0.024653 | 3 / 1 |
+| 12 h | −64 | 0.030327 | 4 / 2 |
+| 24 h | −32 | 0.038940 | 5 / 2 |
+| 26.0 h | −28.562 | 0.040000 | 6 / 3 |
+| 46.3 h | −8.831 | 0.046667 | 7 / 3 |
+| 79.6 h | −1.286 | 0.049500 | 7 / 3 |
+
+26.0 Stunden, bis der Verkauf wieder 3 Cent ist (bei der alten Halbwertszeit 72 h wären das 155.8 Stunden). 46.3 Stunden, bis auch der Kauf wieder 7 Cent ist. 79.6 Stunden, bis der Mid höchstens 1 % unter `b` liegt (bei 72 h: 477.8 Stunden).
+
+Sand, gleiche `net`-Kurve und dieselbe 12-Stunden-Halbwertszeit, `b = 0.10`, Basis 15 / 7. Direkt nach dem Dump: Mid 0.036788 CP, Kauf 5 / Verkauf 2. Nach 12 h: Mid 0.060653, Kauf 9 / Verkauf 4. Der Verkaufscent ist nach 46.3 Stunden wieder 7, der Mid nach 79.6 Stunden innerhalb 1 %. Die Zeiten stimmen mit Bruchstein überein, sobald der Ziel-Mid derselbe Bruchteil von `b` ist; die Centgrenzen liegen bei Sand höher, deshalb dauert der Weg zurück auf den Basis-Verkaufscent länger als die 26.0 Stunden des Bruchsteins.
+
+Dieselben 128 Stück Diamant (`D = 400`, Halbwertszeit 72 h) setzen den Mid auf 145.230 CP (−27.39 %, Verkauf 10892 Cent). Nach 72 h: Mid 170.429 CP, Verkauf 12782 Cent. Bis auf 1 % an `b`: 359.5 Stunden. Der letzte Cent vor 15000 CP Verkauf ist kein sinnvolles Ziel, `floor(m * 75) = 15000` gilt erst bei `m = 200`.
 
 ### Massenblöcke, neue Kurve
 
@@ -323,7 +349,7 @@ Barren, `D = 400`, `lo = 1000`, `hi = 4800`, Start `net = 0`. Kein Rezeptdeckel.
 
 Ab Stück 555 klebt der Mid auf 1000 CP und der Verkauf auf 750 CP. Der alte Floor 3200 CP / 2400 CP Verkauf kam erst bei Stück 4761; deshalb war die Summe 25,4 Millionen CP. Der neue Floor schneidet den Schwanz auf 750 CP. 7,99 Millionen CP sind der Integralwert der Kurve, nicht eine Auszahlung.
 
-`Market.revenueLimit` gibt 150000 Cent zurück, das sind 1500 CP pro Spieler und Markttag (dieselbe Größe wie `market.daily-revenue-limit: 1500.0`; die Methode liest den Config-Wert heute nicht, der Betrag ist fest verdrahtet). Ein Barren an der Basis kostet die Bank 300000 Cent. `affordable` lässt den Trade nicht zu, auch nicht als Einzelstück. Der erste Verkauf, dessen Stückpreis auf höchstens 1500 CP fällt, ist Index 278 (das 279. Stück, Mid 1996.30 CP, Verkauf 149722 Cent). Die 278 Stücke davor liegen einzeln über dem Tageslimit. Ein Spieler kommt die Kurve damit nicht hinunter, und 10.000 Barren zu 7,99 Millionen CP werden nicht gutgeschrieben. Mehrere Spieler teilen sich das Tageslimit nicht; jeder scheitert am ersten Barren für sich. Der Floor `0.25b` bleibt trotzdem, damit ein später angehobenes Tageslimit nicht wieder bei 2400 CP pro Barren ausläuft.
+`Market.revenueLimit` gibt heute fest 150000 Cent zurück. Das sind 1500 CP und trifft den Wert von `market.daily-revenue-limit: 1500.0`, die Methode liest den Schlüssel aber nicht. Die Umsetzungs-PR liest diesen Schlüssel (CP, `Money.cents`, Default 1500, wenn der Eintrag fehlt oder nicht endlich positiv ist). Die folgende Grenze ist der heutige Config-Wert, nicht eine zweite Konstante im Code. Ein Barren an der Basis kostet die Bank 300000 Cent. `affordable` lässt den Trade nicht zu, auch nicht als Einzelstück. Der erste Verkauf, dessen Stückpreis auf höchstens 1500 CP fällt, ist Index 278 (das 279. Stück, Mid 1996.30 CP, Verkauf 149722 Cent). Die 278 Stücke davor liegen einzeln über dem Tageslimit. Ein Spieler kommt die Kurve damit nicht hinunter, und 10.000 Barren zu 7,99 Millionen CP werden nicht gutgeschrieben. Mehrere Spieler teilen sich das Tageslimit nicht; jeder scheitert am ersten Barren für sich. Der Floor `0.25b` bleibt trotzdem, damit ein später angehobenes Tageslimit nicht wieder bei 2400 CP pro Barren ausläuft.
 
 64 Barren verkaufen und zurückkaufen, ohne Tageslimit gerechnet: Erlös 17764901 Cent, Rückkauf 35441120 Cent.
 
@@ -333,7 +359,7 @@ Schmieden, Basis-Mids, unverändert 7000.05 CP und Marge 525004 Cent auf der Ban
 
 ## 9. Geplante Tests
 
-Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen sind Cent, sofern nicht CP dazu steht. Die Tests instanziieren die Kurve mit `D(b)` aus Abschnitt 3, `lo = 0.25b`, `hi = 1.2b`, Halbwertszeit 72 h. Sie lesen `prices-base.yml` und `config.yml` aus den Plugin-Ressourcen, analog `RecipeArbitrageTest`. Die Config-Pins für Bruchstein und Stein dürfen den Test-Mid nicht festsetzen.
+Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen sind Cent, sofern nicht CP dazu steht. Die Tests instanziieren die Kurve mit `D(b)` aus Abschnitt 3, `lo = 0.25b`, `hi = 1.2b`, Halbwertszeit 12 h bei `b < 1` und 72 h sonst. Sie lesen `prices-base.yml` und `config.yml` aus den Plugin-Ressourcen, analog `RecipeArbitrageTest`. Die Config-Pins für Bruchstein und Stein dürfen den Test-Mid nicht festsetzen.
 
 - [ ] `CurvePriceTest.diamondMovesAQuarterPercent`
   - Verkauf bei `net = 0`: 15000, Mid 200.
@@ -353,10 +379,20 @@ Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen s
 - [ ] `CurvePriceTest.quantityCap`
   - `q = 2304` wird gerechnet, `q = 2305` ändert `net` nicht und wirft die erwartete Ablehnung.
 
+- [ ] `CurvePriceTest.twoStacksThenRecovery`
+  - 128 Bruchstein verkauft: Mid `0.05 / e = 0.018394`, Kauf 2, Verkauf 1.
+  - Nach 12 h (billige Halbwertszeit): Mid 0.030327, Kauf 4, Verkauf 2.
+  - Nach 25.967 h: Verkauf wieder 3 Cent, Mid 0.040000.
+  - Dieselbe Rechnung mit 72 h statt 12 h lässt den Verkaufscent erst nach 155.805 h wieder auf 3.
+  - 128 Sand: direkt Mid 0.036788, Kauf 5, Verkauf 2; Verkauf wieder 7 Cent nach 46.289 h.
+  - 128 Diamant, 72 h: direkt Mid 145.229807, Verkauf 10892; nach 72 h Mid 170.428758, Verkauf 12782.
+
 - [ ] `CurvePriceTest.floorCeilingAndRecovery`
   - Nach 10000 Verkäufen Netheritbarren: Mid 1000, Verkauf 75000, `net = -10000`, Summe 798523467 Cent.
   - Diamant an `lo` (`net = -400 * ln(4)`), 72 h später Mid 100, Verkauf 7500, Kauf 15000.
+  - Bruchstein an `lo` (`net = -128 * ln(4)`), 12 h später Mid 0.025, Kauf 3, Verkauf 1.
   - Negative vergangene Zeit ändert `net` nicht.
+  - `half-life-cheap-hours = 24` und `half-life-hours = 48` verschieben nur die jeweils gemeinte Klasse.
 
 - [ ] `CurvePriceTest.farmDumpCannotBuyGear`
   - 10000 Bruchstein von der Basis 10110 Cent, von der Decke 10172.
@@ -380,7 +416,7 @@ Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen s
 - [ ] `RecipeCurveArbitrageTest.everyExecutableRecipe`
   - Für jede Zeile in `recipes-26.1.tsv` außer Selbstkopien: wenn das Produkt nicht in `unsellable` steht und jeder Slot mindestens eine kaufbare Zutat hat, dann `count * Verkauf(hi)` ≤ Summe der günstigsten `Kauf(lo)`. `Verkauf` enthält den Deckel aus diesen Floor-Käufen.
   - Erwartet 0 Verletzungen bei 1652 Rezepten. Dieselbe Schleife ohne Deckel verletzt die Ungleichung; Kontrollzeile `RAW_GOLD` x9, 7281 > 3037.
-  - `DIAMOND_CHESTPLATE`, `NETHERITE_INGOT` und `NETHERITE_UPGRADE_SMITHING_TEMPLATE` sind unkaufbar. Die hypothetische Ecke ohne diese Sperre ist 630004 > 262501 und darf nicht als „grün“ durchgewunken werden, solange die Sperre fehlt.
+  - `DIAMOND_CHESTPLATE`, `NETHERITE_INGOT` und `NETHERITE_UPGRADE_SMITHING_TEMPLATE` sind unkaufbar. Die hypothetische Ecke ohne diese Sperre ist 630004 > 262501 und darf nicht als „grün“ durchgewunken werden, solange die Sperre fehlt. Eigener Test in der Umsetzungs-PR: `NetheriteChestIngredientsStayUnbuyable` (siehe Abschnitt 10).
 
 - [ ] `MarketSnapshotOscillationTest.writersDoNotShareColumns`
   - H2, Stunde 7200: Snapshot setzt `quote_price`, lässt eine vorhandene Fill-Zeile (`avg_price` 2, `volume_qty` 10) in den Fill-Spalten unverändert.
@@ -395,14 +431,21 @@ Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen s
 
 Keine dieser Dateien wird in der Plan-PR angefasst.
 
-- Neu: `plugins-src/craftcore/src/main/java/de/mcstack/craftcore/CurvePrice.java` mit `mid`, `buyCents`, `sellCents`, `fold`, `quote`, `fillSell`, `fillBuy`. Reine Funktionen plus die eine SQL-Zeile `market_curve`.
+- Neu: `plugins-src/craftcore/src/main/java/de/mcstack/craftcore/CurvePrice.java` mit `mid`, `buyCents`, `sellCents`, `fold`, `quote`, `fillSell`, `fillBuy`. `fold` nimmt die Halbwertszeit in Stunden. Reine Funktionen plus die eine SQL-Zeile `market_curve`.
 - `DynamicPrice`: Handel und Lesung delegieren. `move` mit festem `±1` entfällt.
 - `Market.price`: Lesung schreibt keinen Katalog. Handel ruft `fillSell` / `fillBuy` mit der echten Menge. `safeSell` bleibt auf dem Kurvenergebnis.
+- `config.yml`: `market.curve.half-life-cheap-hours: 12` und `market.curve.half-life-hours: 72`. Grenze bleibt `b < 1`, dieselbe wie bei `D = 128`.
+
+### Für die Umsetzungs-PR, nicht diese Plan-PR
+
+- [ ] **Rex, Netheritbrust.** `NetheriteChestIngredientsStayUnbuyable`: `Market.unbuyable` ist für `DIAMOND_CHESTPLATE`, `NETHERITE_INGOT` und `NETHERITE_UPGRADE_SMITHING_TEMPLATE` wahr, gelesen aus der Plugin-`config.yml` (`market.unbuyable`). Die drei Namen fehlen in keiner der drei Listen. Ohne diese Sperre wäre die Ecke aus Abschnitt 4 ein Gewinn (630004 Cent Verkauf gegen 262501 Cent Kauf); der Test ist die Sperre, nicht die Preisformel.
+- [ ] **Rex, Tageslimit.** `Market.revenueLimit` liest `market.daily-revenue-limit` in CP und rechnet mit `Money.cents`. Default 1500, wenn der Schlüssel fehlt oder der Wert nicht endlich und positiv ist. Heute steht in der Methode fest `150000L`. Ein Test setzt den Config-Wert auf 20 CP und erwartet 2000 Cent, und mit der ausgelieferten 1500 bleibt es 150000 Cent. Die Netherit-Rechnung in Abschnitt 8 benutzt diesen Config-Wert, keine zweite Literale.
 - `WebsiteStats`: Spalte `quote_price`, Snapshot und `maintain` wie Abschnitt 6, `CHANGE_24H_SQL` auf `quote_price`. Event nimmt Min- und Max-Stückpreis.
 - `Market.start`: stündlicher Lauf nur mit `GET_LOCK('craftcore-market-snapshot', 0)`, und nur dort wird die Abklingzeit persistiert.
 - Tests aus Abschnitt 9.
 
-- [ ] **Schritt 1.** `CurvePrice` und `CurvePriceTest` mit den Cent-Erwartungen aus Abschnitt 3, 4, 7 und 8. Test zuerst, er muss an der fehlenden Klasse scheitern, dann die Klasse, dann grün.
+- [ ] **Schritt 1.** `CurvePrice` und `CurvePriceTest` mit den Cent-Erwartungen aus Abschnitt 3, 4, 7 und 8, inklusive der 12-Stunden-Erholung nach zwei Stacks Bruchstein. Test zuerst, er muss an der fehlenden Klasse scheitern, dann die Klasse, dann grün.
+- [ ] **Schritt 1b.** `NetheriteChestIngredientsStayUnbuyable` und `revenueLimit` aus `market.daily-revenue-limit`, wie im Abschnitt „Für die Umsetzungs-PR“.
 - [ ] **Schritt 2.** `RecipeCurveArbitrageTest` gegen `CurvePrice.sellCents` / `buyCents` und den Deckel aus `RecipeCost`.
 - [ ] **Schritt 3.** `market_curve` per `INSERT IGNORE` und `SELECT … FOR UPDATE` in `CraftCore.tx` hängen. `q > 2304` ablehnen. GUI-Lesung persistiert nicht. Rollback-Test.
 - [ ] **Schritt 4.** Historie trennen, Oszillationstest, `CHANGE_24H_SQL`.
