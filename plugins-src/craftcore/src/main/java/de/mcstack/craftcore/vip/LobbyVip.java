@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Consumer;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -104,23 +105,36 @@ public final class LobbyVip implements CommandExecutor {
         });
     }
 
-    /** Resolves a world name. The caller's own world wins; admins may reach any world. */
+    /** Resolves a world name. The caller's own world wins; admins may reach any world via {@code owner:name}. */
     private void resolve(Player player, String name, Consumer<VipStore.Entry> action) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             VipStore.Entry entry = null;
+            String problem = null;
             try {
                 for (VipStore.World world : store.list(player.getUniqueId())) {
                     if (!world.name().equalsIgnoreCase(name)) continue;
                     entry = store.findById(world.id()).orElse(null);
                     break;
                 }
-                if (entry == null && VipGui.isAdmin(player)) entry = store.findByName(name).orElse(null);
+                if (entry == null && VipGui.isAdmin(player)) {
+                    int colon = name.indexOf(':');
+                    if (colon > 0) {
+                        UUID owner = store.player(name.substring(0, colon)).orElse(null);
+                        if (owner != null) entry = store.findByOwnerName(owner, name.substring(colon + 1)).orElse(null);
+                        if (entry == null) problem = "Keine Welt " + name + ".";
+                    } else {
+                        List<UUID> owners = store.ownersOf(name);
+                        if (owners.size() > 1) problem = "Mehrere Welten heissen " + name + ". Nutze <besitzer>:" + name + ".";
+                        else if (owners.size() == 1) entry = store.findByOwnerName(owners.get(0), name).orElse(null);
+                    }
+                }
             } catch (Exception e) {
                 plugin.getLogger().warning("VIP-Welt suchen: " + e.getClass().getSimpleName());
             }
             VipStore.Entry found = entry;
+            String hint = problem;
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (found == null) { player.sendMessage("Deine VIP-Welt wurde nicht gefunden."); return; }
+                if (found == null) { player.sendMessage(hint == null ? "Deine VIP-Welt wurde nicht gefunden." : hint); return; }
                 action.accept(found);
             });
         });
