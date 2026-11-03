@@ -844,14 +844,18 @@ async function opRunTests(params: Record<string, unknown>, deps: ActionDeps): Pr
 
 async function opRestartService(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const service = params.service as string;
-  const id = await deps.docker.containerId(service);
-  await deps.docker.restart(id, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
-  const state = await deps.docker.state(id);
+  // Restart by NAME, never by id: the socket filter allowlists exact container
+  // names, so this is the only reference that can pass the second, independent
+  // check. A game server's name is not on that list, which is what keeps a
+  // game-server restart impossible even if this action asked for one.
+  const name = await deps.docker.containerName(service);
+  await deps.docker.restartByName(name, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+  const state = await deps.docker.stateOf(name);
   return {
     ok: true,
     result: {
       service,
-      container: id.slice(0, 12),
+      container: name,
       state: state.status,
       health: state.health,
       note: "reversible, no player impact for the T1 allowlist (bot, cloudflared-mcp)",

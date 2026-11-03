@@ -408,11 +408,11 @@ services:
   # argv lists (no shell, no free arguments), behind confirm/tier/armed/delay/
   # backup gates, and writes an append-only audit log. hermes-mcp reaches it only
   # over the internal network `ops` with the shared OPS_HELPER_TOKEN. It holds NO
-  # raw Docker socket: the only socket holder is docker-socket-proxy below.
+  # raw Docker socket: the only socket holder is docker-socket-filter below.
   #
   # Profile "ops": nothing starts by itself, and T2 (game servers, deploys) stays
   # refused until OPS_ARMED=true. Start it explicitly:
-  #   docker compose --profile ops --profile mcp up -d docker-socket-proxy ops-helper hermes-mcp
+  #   docker compose --profile ops --profile mcp up -d docker-socket-filter ops-helper hermes-mcp
   ops-helper:
     build: ./tools/ops-helper
     profiles: ["ops"]
@@ -429,10 +429,14 @@ services:
       OPS_ALLOWLIST_PATH: "/repo/config/ops-allowlist.json"
       OPS_DATA_DIR: "/app/data/ops-helper"
       OPS_ARTIFACTS_DIR: "/artifacts"
-      # Docker API access goes through docker-socket-proxy (below), never through
-      # a raw socket mount. The proxy exposes only /containers + /exec and
-      # refuses volumes/images/networks/system/build/swarm.
-      DOCKER_HOST: "tcp://docker-socket-proxy:2375"
+      # Docker API access goes through docker-socket-filter (below), never
+      # through a raw socket mount. The filter allowlists exact method+path
+      # pairs, so only ps/inspect/logs and a restart of the two T1 names pass.
+      DOCKER_HOST: "tcp://docker-socket-filter:2375"
+      # Pinned on purpose: with an explicit API version the CLI skips
+      # `GET /version`, which the filter refuses (it is not a route). Only
+      # `HEAD /_ping` remains as the documented health/negotiation exception.
+      DOCKER_API_VERSION: "1.51"
       # Named volumes (not host paths): build containers mount the same volume at
       # the same path, so no host path ever has to be guessed.
       OPS_ARTIFACTS_VOLUME: "mc-stack-ops-artifacts"
@@ -441,9 +445,9 @@ services:
       OPS_ACTION_TIMEOUT_SECONDS: "${OPS_ACTION_TIMEOUT_SECONDS:-120}"
       OPS_BUILD_TIMEOUT_SECONDS: "${OPS_BUILD_TIMEOUT_SECONDS:-1800}"
     depends_on:
-      - docker-socket-proxy
+      - docker-socket-filter
     volumes:
-      # NO docker socket here: the helper talks to docker-socket-proxy over TCP.
+      # NO docker socket here: the helper talks to docker-socket-filter over TCP.
       # The repo is read-only for this service...
       - ./:/repo:ro
       # ...except the backup directory and the two plugin templates a deploy
@@ -465,68 +469,42 @@ services:
     cap_drop:
       - ALL
 
-  # The ONLY holder of the Docker socket (see tools/ops-helper/README.md).
+  # The ONLY holder of the Docker socket (see tools/docker-socket-filter/README.md).
   #
-  # tecnativa/docker-socket-proxy is an HAProxy in front of the socket that
-  # returns 403 for every API section it was not explicitly granted. It has no
-  # host port and lives only in the internal `ops` network, so ops-helper (and
-  # nothing else) can reach it.
+  # A tiny, dependency-free Node filter written for this repo, replacing
+  # tecnativa/docker-socket-proxy. That image filters by API *section*
+  # (`CONTAINERS`, `POST`, `EXEC`, ...), and that granularity cannot express
+  # "GET is fine, but only this one POST path, and only for these two container
+  # names". Turning `POST=1` on there re-opens `/containers/create`, `/stop`,
+  # `/kill` and `/exec` for the whole container API.
   #
-  # Granted: CONTAINERS=1 only (GET /containers/* for ps, inspect and logs).
-  # POST=0 and EXEC=0: the proxy denies every non-GET request, so the helper can
-  # NOT start a container (POST /containers/create) and can NOT exec into one
-  # (POST /exec/{id}/start).
-  #
-  # ALLOW_RESTARTS=1 is kept to record the intent, but it is INERT while POST=0:
-  # the proxy's first rule denies every non-GET request before the ALLOW_RESTARTS
-  # rule is reached, so a restart is 403 too (verified against the real daemon;
-  # see tools/ops-helper/README.md). Every other section below is pinned to 0.
-  docker-socket-proxy:
-    # Pinned by digest on purpose: this container is a privilege boundary.
-    image: tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+  # Allowed (everything else is 403, including unknown methods and header
+  # tricks): HEAD|GET /_ping, GET /containers/json (query: all, filters),
+  # GET /containers/<ref>/json, GET /containers/<ref>/logs (tail <= 300) and
+  # POST /containers/<name>/restart for an EXACT name from
+  # OPS_FILTER_RESTART_ALLOW (no ids, no prefixes, no globs). Game-server names
+  # (lobby/survival/velocity/...) are deliberately absent, so a game-server
+  # restart stays impossible even if the helper asked for one.
+  docker-socket-filter:
+    build: ./tools/docker-socket-filter
     profiles: ["ops"]
     restart: unless-stopped
     environment:
-      # Read-only container API only.
-      CONTAINERS: "1"
-      # No general POST -> no container create; no exec; restarts are denied too.
-      POST: "0"
-      EXEC: "0"
-      ALLOW_RESTARTS: "1"
-      # Everything else stays off, listed explicitly so a test can prove it.
-      ALLOW_START: "0"
-      ALLOW_STOP: "0"
-      ALLOW_PAUSE: "0"
-      ALLOW_UNPAUSE: "0"
-      AUTH: "0"
-      BUILD: "0"
-      COMMIT: "0"
-      CONFIGS: "0"
-      DISTRIBUTION: "0"
-      EVENTS: "0"
-      GRPC: "0"
-      IMAGES: "0"
-      INFO: "0"
-      NETWORKS: "0"
-      NODES: "0"
-      PING: "0"
-      PLUGINS: "0"
-      SECRETS: "0"
-      SERVICES: "0"
-      SESSION: "0"
-      SWARM: "0"
-      SYSTEM: "0"
-      TASKS: "0"
-      VERSION: "0"
-      VOLUMES: "0"
-      DISABLE_IPV6: "1"
-      LOG_LEVEL: "warning"
+      OPS_FILTER_PORT: "2375"
+      OPS_FILTER_HOST: "0.0.0.0"
+      OPS_FILTER_UPSTREAM: "/var/run/docker.sock"
+      # Exact container names a restart may target. Override in .env if the
+      # compose project name ever changes.
+      OPS_FILTER_RESTART_ALLOW: "${OPS_FILTER_RESTART_ALLOW:-mc-stack-bot-1,mc-stack-cloudflared-mcp-1}"
+      # Hard cap on a forwarded response body (logs are the big one).
+      OPS_FILTER_MAX_RESPONSE_BYTES: "${OPS_FILTER_MAX_RESPONSE_BYTES:-8388608}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [ops]
+    expose:
+      - "2375/tcp"
     read_only: true
     tmpfs:
-      - /run
       - /tmp
     security_opt:
       - no-new-privileges:true
@@ -565,7 +543,7 @@ networks:
   # `external: true` wiring is needed.
   mcp:
     name: mcp
-  # Private network between hermes-mcp, ops-helper and docker-socket-proxy only.
+  # Private network between hermes-mcp, ops-helper and docker-socket-filter only.
   # `internal: true` means it has no route off the host: the helper cannot reach
   # the internet, the socket proxy cannot call out, and nothing outside these
   # three services (in particular NOT cloudflared-mcp, which lives only in `mcp`)

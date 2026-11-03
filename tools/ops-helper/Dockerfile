@@ -24,7 +24,7 @@ COPY --from=build /app/dist ./dist
 COPY package.json ./package.json
 # Runs as root ON PURPOSE: it must be able to chmod the shared artifact volume so
 # the build containers that run as uid 1000 (gradle/node images) can write it.
-# It does NOT hold the Docker socket - DOCKER_HOST points at docker-socket-proxy
+# It does NOT hold the Docker socket - DOCKER_HOST points at docker-socket-filter
 # over TCP. read_only rootfs, cap_drop ALL, no-new-privileges and a tmpfs /tmp
 # still apply - see README.
 USER root

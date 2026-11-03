@@ -69,11 +69,14 @@ export class FakeRunner {
 }
 
 export const CONTAINER_ID = "0123456789ab";
+/** The compose container name of the service the tests restart. */
+export const CONTAINER_NAME = "mc-stack-bot-1";
 
 /** A runner that answers the docker calls the ops tools make. */
-export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, inspect = null } = {}) {
+export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, inspect = null, name = CONTAINER_NAME } = {}) {
   return new FakeRunner([
     { match: (argv) => argv[1] === "ps" && argv.includes("{{.ID}}"), reply: { stdout: CONTAINER_ID + "\n" } },
+    { match: (argv) => argv[1] === "ps" && argv.includes("{{.Names}}"), reply: { stdout: name + "\n" } },
     { match: (argv) => argv[1] === "ps", reply: { stdout: ps } },
     { match: (argv) => argv[1] === "logs", reply: { stdout: logsOk ? logs : "", stderr: logsOk ? "" : logs, ok: logsOk } },
     { match: (argv) => argv[1] === "exec", reply: exec ? exec : { ok: false, stdout: "", stderr: "rcon-cli: not found" } },
@@ -81,7 +84,7 @@ export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, i
       match: (argv) => argv[1] === "inspect",
       reply: inspect ? inspect : { stdout: JSON.stringify({ Status: "running", Health: { Status: "healthy" } }) },
     },
-    { match: (argv) => argv[1] === "restart", reply: { stdout: CONTAINER_ID + "\n" } },
+    { match: (argv) => argv[1] === "restart", reply: { stdout: CONTAINER_NAME + "\n" } },
     { match: (argv) => argv[1] === "run", reply: { stdout: "fake container ran" } },
   ]);
 }

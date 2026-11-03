@@ -10,7 +10,20 @@ import type { Allowlist } from "./allowlist.js";
 import type { Runner } from "./runner.js";
 
 export const ID_RE = /^[0-9a-f]{12,64}$/;
+/** A container NAME or id, as accepted in a Docker API path segment. */
+export const CONTAINER_REF_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SERVICE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * `docker ps` JSON format.
+ *
+ * Deliberately an explicit template instead of `{{json .}}`: with `{{json .}}`
+ * the CLI adds `size=1` to `GET /containers/json`, and the path-exact socket
+ * filter refuses unknown query keys. This template asks for exactly the fields
+ * the tools read (and keeps the same key names, so nothing downstream changes).
+ */
+export const PS_FORMAT =
+  '{"Names":"{{.Names}}","Image":"{{.Image}}","State":"{{.State}}","Status":"{{.Status}}","Labels":"{{.Labels}}"}'
 
 export interface ContainerState {
   id: string;
@@ -38,7 +51,7 @@ export function psArgv(project: string, service?: string): string[] {
     `label=com.docker.compose.project=${project}`,
   ];
   if (service) argv.push("--filter", `label=com.docker.compose.service=${service}`);
-  argv.push("--format", "{{json .}}");
+  argv.push("--format", PS_FORMAT);
   return argv;
 }
 
@@ -53,6 +66,26 @@ export function resolveServiceArgv(project: string, service: string): string[] {
     `label=com.docker.compose.service=${service}`,
     "--format",
     "{{.ID}}",
+  ];
+}
+
+/**
+ * Names of the containers of one compose service (must be exactly one).
+ *
+ * `ops_restart_service` restarts by NAME, never by id: the socket filter's
+ * restart allowlist is a list of exact names, so a name is the only thing that
+ * can pass both checks.
+ */
+export function resolveServiceNameArgv(project: string, service: string): string[] {
+  return [
+    "ps",
+    "-a",
+    "--filter",
+    `label=com.docker.compose.project=${project}`,
+    "--filter",
+    `label=com.docker.compose.service=${service}`,
+    "--format",
+    "{{.Names}}",
   ];
 }
 
@@ -82,7 +115,7 @@ export interface RunContainerOptions {
   /**
    * Docker network for the throwaway container. Defaults to `none`: a build or
    * test container gets no interface at all, so it cannot reach the internet,
-   * the mc-stack services or the socket proxy. Offline caches (pre-warmed
+   * the mc-stack services or the socket filter. Offline caches (pre-warmed
    * volumes) are how dependencies are available without a network.
    */
   network?: string;
@@ -137,6 +170,15 @@ export function parseContainerId(output: string): string {
   return ids.length === 1 ? ids[0] : "";
 }
 
+/** Exactly one container name from `docker ps --format {{.Names}}`. */
+export function parseContainerName(output: string): string {
+  const names = output
+    .split("\n")
+    .map((line) => line.trim().replace(/^\//, ""))
+    .filter(Boolean);
+  return names.length === 1 ? names[0] : "";
+}
+
 export class DockerCli {
   constructor(
     private readonly runner: Runner,
@@ -187,9 +229,8 @@ export class DockerCli {
       });
   }
 
-  async state(id: string): Promise<ContainerState> {
-    if (!ID_RE.test(id)) throw new DockerError("invalid_id", "refusing to inspect an unexpected container id");
-    const res = await this.run(inspectStateArgv(id));
+  private async inspectState(ref: string): Promise<ContainerState> {
+    const res = await this.run(inspectStateArgv(ref));
     if (!res.ok) {
       throw new DockerError("docker_failed", `docker inspect failed: ${(res.stderr || res.error || "").trim().slice(0, 300)}`);
     }
@@ -202,12 +243,47 @@ export class DockerCli {
     const health = parsed.Health as { Status?: string } | undefined;
     const status = typeof parsed.Status === "string" ? parsed.Status : "unknown";
     return {
-      id,
+      id: ref,
       status,
       running: status === "running",
       health: health && typeof health.Status === "string" ? health.Status : null,
       startedAt: typeof parsed.StartedAt === "string" ? parsed.StartedAt : null,
     };
+  }
+
+  async state(id: string): Promise<ContainerState> {
+    if (!ID_RE.test(id)) throw new DockerError("invalid_id", "refusing to inspect an unexpected container id");
+    return await this.inspectState(id);
+  }
+
+  /** Inspect a container by NAME (or id): what a name-based restart uses. */
+  async stateOf(ref: string): Promise<ContainerState> {
+    if (!CONTAINER_REF_RE.test(ref)) throw new DockerError("invalid_ref", "refusing to inspect an unexpected container reference");
+    return await this.inspectState(ref);
+  }
+
+  /**
+   * Container names of a compose service; throws when it is not exactly one.
+   * The result is re-validated by the socket filter against its own exact-name
+   * restart allowlist, so a wrong resolution cannot widen anything.
+   */
+  async containerName(service: string): Promise<string> {
+    if (!isServiceName(service)) throw new DockerError("invalid_service", `invalid service name: ${service}`);
+    const res = await this.run(resolveServiceNameArgv(this.project, service));
+    if (!res.ok) {
+      throw new DockerError(
+        "docker_failed",
+        `docker ps failed for ${service}: ${(res.stderr || res.stdout || res.error || "unknown error").trim().slice(0, 300)}`,
+      );
+    }
+    const name = parseContainerName(res.stdout);
+    if (!name) {
+      throw new DockerError("service_not_found", `no running or stopped container found for service ${service}`);
+    }
+    if (!CONTAINER_REF_RE.test(name)) {
+      throw new DockerError("unexpected_docker_output", `docker ps returned an unexpected name for ${service}`);
+    }
+    return name;
   }
 
   async logs(id: string, tail: number): Promise<{ text: string; truncated: boolean }> {
@@ -222,6 +298,19 @@ export class DockerCli {
   async restart(id: string, timeoutMs?: number): Promise<void> {
     if (!ID_RE.test(id)) throw new DockerError("invalid_id", "refusing to restart an unexpected container id");
     const res = await this.run(restartArgv(id), timeoutMs);
+    if (!res.ok) {
+      throw new DockerError("restart_failed", `docker restart failed: ${(res.stderr || res.error || "").trim().slice(0, 300)}`);
+    }
+  }
+
+  /**
+   * Restart a container by NAME. This is the only restart path that works
+   * through the socket filter, whose restart allowlist is a list of exact
+   * container names (never ids, never prefixes).
+   */
+  async restartByName(name: string, timeoutMs?: number): Promise<void> {
+    if (!CONTAINER_REF_RE.test(name)) throw new DockerError("invalid_ref", "refusing to restart an unexpected container reference");
+    const res = await this.run(restartArgv(name), timeoutMs);
     if (!res.ok) {
       throw new DockerError("restart_failed", `docker restart failed: ${(res.stderr || res.error || "").trim().slice(0, 300)}`);
     }

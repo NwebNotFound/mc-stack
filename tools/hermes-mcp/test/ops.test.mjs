@@ -225,7 +225,6 @@ const PAUSED_TOOLS = [
   "ops_players",
   "ops_build_plugin",
   "ops_run_tests",
-  "ops_restart_service",
   "ops_backup_now",
   "ops_restart_game",
   "ops_deploy_plugin",
@@ -237,7 +236,8 @@ test("the paused ops tools announce it in their description", () => {
   for (const name of PAUSED_TOOLS) {
     assert.match(server.handlers[name].def.description, /PAUSED/, `${name} description must say it is paused`);
   }
-  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"]) {
+  // ops_restart_service is live now: the path-exact socket filter can serve it.
+  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state", "ops_restart_service"]) {
     assert.ok(!/PAUSED/.test(server.handlers[name].def.description), `${name} must stay available`);
   }
 });
@@ -251,7 +251,7 @@ test("a paused action returns action_disabled with its reason to the caller", as
         tier: "T0",
         impl: "build_plugin",
         code: "action_disabled",
-        message: "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0).",
+        message: "paused: starting a throwaway container needs POST /containers/create, which docker-socket-filter refuses (create is not on the route allowlist).",
         result: null,
         audit_id: "a6",
       }),

@@ -3,97 +3,153 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 /**
- * The docker-socket-proxy is the privilege boundary between ops-helper and the
+ * The docker-socket-filter is the privilege boundary between ops-helper and the
  * Docker socket, so its least-privilege configuration is asserted, not trusted.
- * This reads the `docker-socket-proxy` service out of the repo's compose.yaml
- * (no YAML dependency) and checks every section flag.
+ *
+ * This reads compose.yaml with a tiny indent-based block splitter (no YAML
+ * dependency) and checks the properties that actually matter:
+ *  - exactly ONE service mounts the socket, and it is the filter;
+ *  - that service has no host port and lives only in the internal `ops` network;
+ *  - it is hardened (read_only, cap_drop ALL, no-new-privileges);
+ *  - ops-helper keeps no socket, talks to the filter over TCP and depends on it;
+ *  - the restart allowlist names the two T1 containers and NO game server;
+ *  - the replaced tecnativa image is gone.
  */
 
 const COMPOSE_PATH = new URL("../../../compose.yaml", import.meta.url).pathname;
 
-function proxyBlock() {
-  const lines = readFileSync(COMPOSE_PATH, "utf8").split("\n");
-  const start = lines.findIndex((line) => line === "  docker-socket-proxy:");
-  if (start < 0) throw new Error("docker-socket-proxy service not found in compose.yaml");
-
-  const block = [];
+function serviceBlocks() {
+  const lines = readFileSync(COMPOSE_PATH, "utf8")
+    .split("\n")
+    .map((line) => line.replace(/\r$/, ""));
+  const start = lines.findIndex((line) => line === "services:");
+  if (start < 0) throw new Error("no `services:` key in compose.yaml");
+  const blocks = new Map();
+  let current = null;
   for (let i = start + 1; i < lines.length; i += 1) {
     const line = lines[i];
-    // A 2-space-indented non-space (sibling service) or a 0-indent key ends the block.
-    if (/^\S/.test(line) || /^ {2}\S/.test(line)) break;
-    block.push(line);
+    if (/^\S/.test(line)) break; // a new top-level key ends the services section
+    if (/^ {2}#/.test(line)) {
+      // A section-level comment: it documents the NEXT service, so it must not
+      // be attributed to the previous one.
+      current = null;
+      continue;
+    }
+    const m = /^ {2}([A-Za-z0-9._-]+):\s*$/.exec(line);
+    if (m) {
+      current = m[1];
+      blocks.set(current, []);
+      continue;
+    }
+    if (current) blocks.get(current).push(line);
   }
-  return block;
+  return blocks;
 }
 
-/** KEY -> value from the `environment:` section of that block. */
-function proxyEnv() {
+/** Lines of a top-level block such as `networks:` -> `ops:`. */
+function topBlock(name) {
+  const lines = readFileSync(COMPOSE_PATH, "utf8")
+    .split("\n")
+    .map((line) => line.replace(/\r$/, ""));
+  const start = lines.findIndex((line) => line === `  ${name}:`);
+  if (start < 0) throw new Error(`no \`${name}:\` key in compose.yaml`);
+  const out = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\S/.test(lines[i]) || /^ {2}\S/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+const BLOCKS = serviceBlocks();
+const blockOf = (name) => {
+  const block = BLOCKS.get(name);
+  assert.ok(block, `compose.yaml must define the ${name} service`);
+  return block;
+};
+
+/** KEY -> value from the `environment:` section of a service block. */
+function envOf(block) {
   const env = {};
-  for (const line of proxyBlock()) {
-    const m = /^ {6}([A-Z0-9_]+):\s*"([^"]*)"\s*$/.exec(line.replace(/\r$/, ""));
+  for (const line of block) {
+    const m = /^ {6}([A-Z0-9_]+):\s*"?([^"]*?)"?\s*$/.exec(line);
     if (m) env[m[1]] = m[2];
   }
   return env;
 }
 
-test("docker-socket-proxy is pinned by digest", () => {
-  const image = proxyBlock()
-    .map((line) => /^ {4}image:\s*(\S+)/.exec(line.replace(/\r$/, "")))
-    .find(Boolean);
-  assert.ok(image, "the proxy service must declare an image");
-  assert.match(image[1], /@sha256:[0-9a-f]{64}$/, "the privilege-boundary image must be pinned by digest");
+const mountsSocket = (block) => block.some((line) => /\/var\/run\/docker\.sock/.test(line));
+const hasHostPorts = (block) => block.some((line) => /^ {4}ports:/.test(line));
+
+test("exactly one service mounts the docker socket, and it is docker-socket-filter", () => {
+  const holders = [...BLOCKS.entries()].filter(([, block]) => mountsSocket(block)).map(([name]) => name);
+  assert.deepEqual(holders, ["docker-socket-filter"], `socket holders: ${holders.join(", ") || "(none)"}`);
 });
 
-test("docker-socket-proxy grants exactly CONTAINERS and denies every method that mutates", () => {
-  const env = proxyEnv();
+test("docker-socket-filter is the only socket holder and has no host port", () => {
+  const block = blockOf("docker-socket-filter");
+  assert.ok(mountsSocket(block), "the filter must mount the socket");
+  assert.equal(hasHostPorts(block), false, "the filter must not publish a host port");
+  assert.ok(
+    block.some((line) => /^ {4}networks: \[ops\]\s*$/.test(line)),
+    "the filter must live only in the internal `ops` network",
+  );
+});
 
-  // The only granted API section, and the restart flag that records the intent.
-  assert.equal(env.CONTAINERS, "1", "CONTAINERS=1 is the whole read surface");
-  assert.equal(env.ALLOW_RESTARTS, "1", "ALLOW_RESTARTS is pinned to 1 (see README: inert under POST=0)");
+test("the ops network is internal", () => {
+  const block = topBlock("ops");
+  assert.ok(block.some((line) => /internal: true/.test(line)), "the ops network must be internal (no route off the host)");
+  assert.ok(block.some((line) => /name: mc-stack-ops/.test(line)), "the ops network must keep its fixed name");
+});
 
-  // No general POST -> no container create; no exec; every other section off.
-  assert.equal(env.POST, "0", "POST must stay 0: no container create and no restart");
-  assert.equal(env.EXEC, "0", "EXEC must stay 0: no docker exec");
+test("docker-socket-filter is hardened and self-contained", () => {
+  const block = blockOf("docker-socket-filter");
+  const text = block.join("\n");
+  assert.match(text, /^ {4}read_only: true$/m, "read_only: true");
+  assert.match(text, /^ {6}- ALL$/m, "cap_drop: ALL");
+  assert.match(text, /no-new-privileges:true/, "no-new-privileges");
+  assert.match(text, /^ {4}build: \.\/tools\/docker-socket-filter$/m, "built from this repo, not a third-party image");
+  assert.ok(!/^\s*image:/m.test(text), "the filter must be built locally, not pulled");
+  assert.match(text, /OPS_FILTER_UPSTREAM: "\/var\/run\/docker\.sock"/);
+});
 
-  const mustBeZero = [
-    "ALLOW_START",
-    "ALLOW_STOP",
-    "ALLOW_PAUSE",
-    "ALLOW_UNPAUSE",
-    "AUTH",
-    "BUILD",
-    "COMMIT",
-    "CONFIGS",
-    "DISTRIBUTION",
-    "EVENTS",
-    "GRPC",
-    "IMAGES",
-    "INFO",
-    "NETWORKS",
-    "NODES",
-    "PING",
-    "PLUGINS",
-    "SECRETS",
-    "SERVICES",
-    "SESSION",
-    "SWARM",
-    "SYSTEM",
-    "TASKS",
-    "VERSION",
-    "VOLUMES",
-  ];
-  for (const key of mustBeZero) {
-    assert.equal(env[key], "0", `${key} must be pinned to 0`);
+test("the filter restart allowlist names the T1 containers and no game server", () => {
+  const env = envOf(blockOf("docker-socket-filter"));
+  const raw = env.OPS_FILTER_RESTART_ALLOW;
+  assert.ok(raw, "OPS_FILTER_RESTART_ALLOW must be set");
+  // The default in compose is written as ${VAR:-a,b}; take the fallback list.
+  const fallback = raw.includes(":-") ? raw.slice(raw.indexOf(":-") + 2).replace(/\}$/, "") : raw;
+  const names = fallback.split(",").map((v) => v.trim()).filter(Boolean);
+  assert.deepEqual(names, ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"]);
+  for (const forbidden of ["lobby", "survival", "velocity", "craftcore-db", "hermes-mcp", "hermes-test"]) {
+    assert.ok(
+      !names.some((name) => name.includes(forbidden)),
+      `${forbidden} must never be restartable through the filter`,
+    );
   }
+});
 
-  // The only values that may be "1" are the read section, the restart flag and
-  // the IPv6 toggle; anything else being 1 would be a silent privilege gain.
-  for (const [key, value] of Object.entries(env)) {
-    if (value === "1") {
-      assert.ok(
-        ["CONTAINERS", "ALLOW_RESTARTS", "DISABLE_IPV6"].includes(key),
-        `${key}=1 is not expected: only CONTAINERS/ALLOW_RESTARTS/DISABLE_IPV6 may be 1`,
-      );
-    }
-  }
+test("ops-helper keeps no socket and talks to the filter over TCP", () => {
+  const block = blockOf("ops-helper");
+  assert.equal(mountsSocket(block), false, "ops-helper must not mount the docker socket");
+  assert.equal(hasHostPorts(block), false, "ops-helper must not publish a host port");
+  const env = envOf(block);
+  assert.equal(env.DOCKER_HOST, "tcp://docker-socket-filter:2375");
+  // Pinned API version: without it the CLI would probe GET /version, which the
+  // filter refuses.
+  assert.match(env.DOCKER_API_VERSION ?? "", /^1\.\d+$/);
+  assert.ok(
+    block.some((line) => /^ {6}- docker-socket-filter$/.test(line)),
+    "ops-helper must depend on the filter",
+  );
+  assert.ok(!/tecnativa/.test(block.join("\n")), "no reference to the replaced proxy image");
+});
+
+test("the replaced proxy service is gone from compose.yaml", () => {
+  const text = readFileSync(COMPOSE_PATH, "utf8");
+  // A comment may still name it (that is how the replacement is explained), but
+  // no service may pull it and the old service name must not exist any more.
+  assert.ok(!/^\s*image:.*tecnativa/m.test(text), "compose.yaml must not pull the replaced proxy image");
+  assert.equal(BLOCKS.has("docker-socket-proxy"), false, "the old docker-socket-proxy service must be gone");
+  assert.ok(BLOCKS.has("docker-socket-filter"), "the docker-socket-filter service must exist");
 });

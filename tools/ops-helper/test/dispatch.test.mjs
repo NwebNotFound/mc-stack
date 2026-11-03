@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
-import { ALLOWLIST_PATH, CONTAINER_ID, advancingClock, dockerRunner, enabledAllowlist, makeDeps, tmpDir } from "./helpers.mjs";
+import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, makeDeps, tmpDir } from "./helpers.mjs";
 import { loadAllowlist } from "../dist/allowlist.js";
 
 const REPO_ROOT = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -400,12 +400,20 @@ test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo",
 /* disabled actions                                                    */
 /* ------------------------------------------------------------------ */
 
-const ENABLED_ACTIONS = ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"];
+const ENABLED_ACTIONS = [
+  "ops_status",
+  "ops_logs",
+  "ops_disk",
+  "ops_backups_list",
+  "ops_git_state",
+  // Enabled on purpose: the docker-socket-filter can serve exactly this one
+  // non-GET route (POST /containers/<name>/restart) for the two T1 names.
+  "ops_restart_service",
+];
 const DISABLED_ACTIONS = [
   "ops_players",
   "ops_build_plugin",
   "ops_run_tests",
-  "ops_restart_service",
   "ops_backup_now",
   "ops_restart_game",
   "ops_deploy_plugin",
@@ -415,14 +423,13 @@ const DISABLED_PARAMS = {
   ops_players: { service: "lobby" },
   ops_build_plugin: {},
   ops_run_tests: { target: "hermes-mcp" },
-  ops_restart_service: { service: "bot", confirm: true },
   ops_backup_now: { confirm: true },
   ops_restart_game: { service: "lobby", confirm: true, delay_seconds: 60 },
   ops_deploy_plugin: { confirm: true, delay_seconds: 60, artifact_sha256: "a".repeat(64) },
   ops_rollback_plugin: { confirm: true, delay_seconds: 60 },
 };
 
-test("the shipped allowlist keeps only the read-only tools enabled", () => {
+test("the shipped allowlist enables the read-only tools plus the T1 restart only", () => {
   const allow = loadAllowlist(ALLOWLIST_PATH);
   for (const name of ENABLED_ACTIONS) {
     assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
@@ -430,6 +437,32 @@ test("the shipped allowlist keeps only the read-only tools enabled", () => {
   for (const name of DISABLED_ACTIONS) {
     assert.equal(allow.actions[name].enabled, false, `${name} must be disabled`);
     assert.ok((allow.actions[name].disabledReason ?? "").length > 0, `${name} must carry a disabled_reason`);
+  }
+  assert.equal(allow.actions.ops_restart_service.tier, "T1");
+});
+
+test("ops_restart_service still demands confirm=true and the T1 cooldown", async () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  const noConfirm = await handleOp("ops_restart_service", { service: "bot" }, makeDeps({ allow }));
+  assert.equal(noConfirm.code, "confirmation_required");
+
+  const deps = makeDeps({ allow });
+  const ok = await handleOp("ops_restart_service", { service: "bot", confirm: true }, deps);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.result.container, CONTAINER_NAME);
+
+  const again = await handleOp("ops_restart_service", { service: "bot", confirm: true }, deps);
+  assert.equal(again.code, "cooldown_active");
+});
+
+test("a game server is not restartable even through the shipped allowlist", async () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  for (const service of ["lobby", "survival", "velocity", "craftcore-db", "hermes-mcp"]) {
+    const deps = makeDeps({ allow });
+    const out = await handleOp("ops_restart_service", { service, confirm: true }, deps);
+    assert.equal(out.ok, false, `${service} must be refused`);
+    assert.equal(out.code, "invalid_params");
+    assert.equal(deps.runner.calls.length, 0, `${service} must never reach docker`);
   }
 });
 

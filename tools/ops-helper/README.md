@@ -18,11 +18,11 @@ hermes-mcp            (compose networks `mcp` + `mc-stack-ops`; read_only,
         │  POST /op  +  Bearer OPS_HELPER_TOKEN     ── network `mc-stack-ops`
         │              (internal: true, no host port, no internet)
         ▼
-ops-helper            (NO docker socket: DOCKER_HOST=tcp://docker-socket-proxy:2375,
+ops-helper            (NO docker socket: DOCKER_HOST=tcp://docker-socket-filter:2375,
         │              repo mounted read-only, fixed allowlist)
-        │  docker ps/logs/inspect only (GET); create/exec/restart/run are denied
-        ▼                 by the proxy
-docker-socket-proxy   (tecnativa/docker-socket-proxy, pinned by digest; the ONLY
+        │  GET ps/inspect/logs + POST restart of two exact names; create/exec/
+        ▼  start/stop/kill are refused by the filter
+docker-socket-filter  (this repo, no dependencies; the ONLY
         │              service with /var/run/docker.sock; no host port)
         ▼
 mc-stack services: velocity · lobby · survival · pvp · vipworld-1..3 · bot
@@ -69,7 +69,7 @@ listener for T2.
    means a bug in the MCP server — or in the model's tool use — cannot become
    host root. The helper is a separate, tiny process with no tunnel, no published
    port, no internet route and a fixed allowlist — and it does not hold the
-   socket either: it speaks to the socket proxy over TCP.
+   socket either: it speaks to the docker-socket-filter over TCP.
 3. **The shared secret is the second boundary.** `OPS_HELPER_TOKEN` (>= 24
    chars) is compared in constant time over SHA-256 digests; a missing or short
    token makes the helper refuse to start (fail closed). It is never logged,
@@ -108,20 +108,19 @@ listener for T2.
 
 ### What a stolen token can still do (be honest about it)
 
-After the proxy hardening below, the helper is **read-only over Docker**: the
-proxy grants `CONTAINERS=1` and nothing else, so the only Docker calls that
-succeed are `docker ps`, `inspect` and `logs` (all GET). With the *read-only*
-token (`base` level):
+Through the socket filter the helper can **read** Docker state and restart two
+named containers — nothing else. With the *read-only* token (`base` level):
 
 * read container status, health, uptime and (redacted, capped) logs;
 * read repo branch/HEAD/dirty count and backup listings;
 * read filesystem/`du` sizes.
 
-Everything that needs a non-GET call to the daemon is **disabled** in
-`config/ops-allowlist.json` (see "Disabled actions" below), so even the *ops*
-token cannot build, test, exec, restart or deploy. The two token levels still
-exist and are enforced, but with the current proxy config only the read-only
-tools are enabled, so the elevated level buys nothing today.
+With the *ops* token (`ops` level) exactly one extra thing is possible:
+`ops_restart_service` with `confirm=true`, i.e. restarting `bot` or
+`cloudflared-mcp` (rate-limited by a 300 s cooldown). Everything else is
+`"enabled": false` in `config/ops-allowlist.json` (see "Disabled actions" below)
+**and** has no route in the filter, so it is refused twice: build, test, exec,
+game-server restart and deploy are impossible even with the ops token.
 
 That is a deliberate, bounded list — not "arbitrary root on the host".
 
@@ -131,24 +130,26 @@ That is a deliberate, bounded list — not "arbitrary root on the host".
 | --- | --- | --- | --- | --- |
 | T0 | `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_git_state` | `base` | **yes** (read-only) | none |
 | T0 | `ops_players`, `ops_build_plugin`, `ops_run_tests` | `base` | **no** – see below | – |
-| T1 | `ops_restart_service` (bot, cloudflared-mcp), `ops_backup_now` | `ops` | **no** – see below | `confirm=true` + cooldown 300 s |
+| T1 | `ops_restart_service` (bot, cloudflared-mcp) | `ops` | **yes** | `confirm=true` + cooldown 300 s |
+| T1 | `ops_backup_now` | `ops` | **no** – see below | `confirm=true` + cooldown 300 s |
 | T2 | `ops_restart_game` (lobby, survival, velocity), `ops_deploy_plugin`, `ops_rollback_plugin` | `ops` **+ local listener** | **no** – see below | `confirm=true` + `OPS_ARMED=true` + `delay_seconds >= 60` + fresh backup + cooldown 1800 s |
 
 ### Disabled actions (current state)
 
-Every action that needs a **non-GET** Docker call is disabled in
+Every action that needs a Docker call the filter cannot serve is disabled in
 `config/ops-allowlist.json` (`"enabled": false` plus a `disabled_reason`). The
 reason is returned verbatim to the caller, so a paused tool explains itself
-instead of failing vaguely. Right now the whole mutating half of the helper is
-paused:
+instead of failing vaguely:
 
 | Action | Why it is paused |
 | --- | --- |
-| `ops_build_plugin`, `ops_run_tests` | starting a throwaway container needs `POST /containers/create`; the proxy denies it (`POST=0`) |
-| `ops_players` | needs `POST /exec/{id}/start`; the proxy denies it (`EXEC=0`) |
-| `ops_restart_service` | `docker restart` is a `POST`; the proxy denies every non-GET request while `POST=0` (see below) |
+| `ops_build_plugin`, `ops_run_tests` | starting a throwaway container needs `POST /containers/create`; the filter has no such route |
+| `ops_players` | needs `POST /exec/{id}/start`; the filter has no exec route |
 | `ops_backup_now` | the helper image has no PowerShell, so `backup.ps1` cannot run here |
-| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` | T2: need a POST restart and/or an exec for the announcement |
+| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` | T2: the game-server names are not on the filter's restart allowlist, and/or the announcement needs an exec |
+
+`ops_restart_service` (T1) is the one action that was re-enabled: the filter can
+serve exactly the route it needs.
 
 Disabled is the default and the safe state; re-enabling one action is a
 one-line change in the allowlist (needs a helper restart), and re-enabling a
@@ -223,109 +224,105 @@ all make the helper refuse to start.
 pids) — the helper refuses to start without it, so there is no configuration in
 which a build container runs unlimited or on the host network.
 
-## Docker socket proxy
+## Docker socket filter
 
 ops-helper does **not** hold `/var/run/docker.sock`. Its `DOCKER_HOST` points at
-`docker-socket-proxy` (compose service, `tecnativa/docker-socket-proxy` **pinned
-by digest**), which is the only container with the socket, has no host port and
-lives only in the internal `mc-stack-ops` network.
+`docker-socket-filter` (a compose service **built from this repo**,
+`tools/docker-socket-filter`), which is the only container with the socket, has
+no host port and lives only in the internal `mc-stack-ops` network.
 
-The proxy returns `403 Forbidden` for every API section it was not granted. This
-repo grants **exactly one** section:
+The filter is a ~400-line, dependency-free Node HTTP filter in front of the
+socket. It allowlists **exact method + path + query** and returns `403` for
+everything else:
 
-| Flag | Value | Why |
+| Method | Path | Query | Used by |
+| --- | --- | --- | --- |
+| `HEAD`, `GET` | `/_ping` | *(none)* | the CLI's version-negotiation/health probe (documented exception) |
+| `GET` | `/containers/json` | `all`, `filters` | `ops_status` (`docker ps`) |
+| `GET` | `/containers/<ref>/json` | *(none)* | `ops_logs`, `ops_restart_service` (`docker inspect`) |
+| `GET` | `/containers/<ref>/logs` | `stdout`, `stderr`, `tail<=300`, `timestamps`, `since`, `until` | `ops_logs` |
+| `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | `ops_restart_service`, **only** for an exact name from the allowlist |
+
+Everything else is refused: `POST /containers/create`, `/start`, `/stop`,
+`/kill`, `/pause`, `/rename`, `/update`, `DELETE /containers/<x>`,
+`/containers/prune`, `/exec/...`, `/volumes`, `/images`, `/networks`, `/build`,
+`/events`, `/info`, `/version`, `/system/...`, `/auth`, `/swarm`, `/secrets`,
+`/tasks`, `/services` — plus traversal (`..`, `%2e%2e`), `//`, `;`, CRLF,
+duplicate `Content-Length`, `Transfer-Encoding`, `Upgrade` and any request body.
+
+A unit test reads the service block out of `compose.yaml` and asserts that
+**exactly one** service mounts the socket, that it is the filter, that it has no
+host port, that it lives only in the internal network, and that the restart
+allowlist contains the two T1 names and no game server
+(`tools/ops-helper/test/proxy.test.mjs`). The filter's own behaviour is covered
+by `tools/docker-socket-filter/test/filter.test.mjs` (fake upstream) and
+`tools/docker-socket-filter/test/real-daemon.sh` (real socket, throwaway
+container).
+
+### Why the filter replaced tecnativa/docker-socket-proxy
+
+`tecnativa/docker-socket-proxy` filters by API **section** (`CONTAINERS`, `POST`,
+`EXEC`, ...), which cannot express "GET is fine, but only this one POST path, and
+only for these two container names". It is all-or-nothing: `POST=0` makes
+`docker restart` impossible too (the first HAProxy rule denies every non-GET
+request before `ALLOW_RESTARTS` is reached — measured against the real daemon),
+and `POST=1` re-opens the whole mutable container API, `create` and `exec`
+included. The path-exact filter was the only way to get the T1 restart back
+**without** re-granting create/exec.
+
+### What this changes for the tools
+
+| Tool | Before | Now |
 | --- | --- | --- |
-| `CONTAINERS` | `1` | `docker ps`, `inspect`, `logs` — all GET, the read-only tool set |
-| `POST` | `0` | the method gate in front of every non-GET request; **off** |
-| `EXEC` | `0` | `POST /exec/{id}/start`; **off** |
-| `ALLOW_RESTARTS` | `1` | kept to record the intent, but **inert while `POST=0`** (see below) |
+| `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_git_state` | enabled | enabled (unchanged) |
+| `ops_restart_service` (T1) | paused | **enabled** — `confirm=true` + ops token, restart by exact container name |
+| `ops_players`, `ops_build_plugin`, `ops_run_tests` | paused | still paused: they need `exec` / `create`, which the filter refuses |
+| `ops_backup_now` | paused | still paused: no PowerShell in the helper image |
+| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` (T2) | paused | still paused: the game-server names are not on the filter allowlist, and the announcement needs `exec` |
 
-Every other section — `ALLOW_START`, `ALLOW_STOP`, `ALLOW_PAUSE`, `ALLOW_UNPAUSE`,
-`AUTH`, `BUILD`, `COMMIT`, `CONFIGS`, `DISTRIBUTION`, `EVENTS`, `GRPC`, `IMAGES`,
-`INFO`, `NETWORKS`, `NODES`, `PING`, `PLUGINS`, `SECRETS`, `SERVICES`, `SESSION`,
-`SWARM`, `SYSTEM`, `TASKS`, `VERSION`, `VOLUMES` — is pinned to `0`. A unit test
-reads this block out of `compose.yaml` and asserts exactly that, so the proxy
-config cannot drift silently (`tools/ops-helper/test/proxy.test.mjs`).
-
-### Why POST and EXEC are off (and what that pauses)
-
-`POST=0` makes the proxy's very first HAProxy rule
-(`http-request deny unless METH_GET || { env(POST) -m bool }`) refuse **every
-non-GET request**. With `EXEC=0` the `/exec` section is refused too. The effect,
-**verified against the real daemon with throwaway `tecnativa/docker-socket-proxy`
-instances** (see the test recipe below):
-
-| Request | `POST=0`, `EXEC=0` | `POST=1`, `EXEC=0` |
-| --- | --- | --- |
-| `GET /containers/json` | `200` | `200` |
-| `docker logs` / `docker inspect` | `200` | `200` |
-| `POST /containers/create` | **`403`** | `400` (section-scoped: reachable) |
-| `docker restart` | **`403`** | `204` (works) |
-| `docker stop` / `start` / `kill` | **`403`** | `204` / `204` / `409` |
-| `POST /exec/{id}/start` | **`403`** | **`403`** |
-| `GET /volumes` / `/images` / `/networks` / `/info` | `403` | `403` |
-
-Two consequences, stated plainly:
-
-* **Container creation and exec are impossible for the helper.** That is the
-  whole point of the change, and it is why `ops_build_plugin`, `ops_run_tests`
-  and `ops_players` are disabled: they cannot work, and the alternative — giving
-  the proxy `POST`/`EXEC` back — is exactly what this PR refuses to do.
-* **`docker restart` is also impossible.** `ALLOW_RESTARTS=1` does **not** open a
-  hole around `POST=0`: the POST gate is evaluated first, so the restart rule is
-  never reached. This was measured, not assumed. `ops_restart_service` (and the
-  T2 restarts) are therefore disabled as well. **If Nils wants restart back**, the
-  minimal change is to set `POST: "1"` on `docker-socket-proxy` and re-enable the
-  restart actions — but note that `POST=1` together with `CONTAINERS=1` re-opens
-  the whole `/containers` section (create/start/stop/kill), i.e. the section-scope
-  residual risk below returns. That trade-off is a decision for a human, so it is
-  **not** taken here.
-
-### The follow-up (not built now): a path-scoped proxy
-
-`tecnativa/docker-socket-proxy` filters by API **section**, not by path or
-container name, so it can never express "restart this one container but never
-create one". A proxy that filters per **path** — e.g. a small HAProxy/nginx with
-our own filter config, or a tiny shim that only rewrites
-`/containers/<allowlisted-name>/(restart|stop)` — is the natural next step and
-the only way to get restart back **without** re-granting `POST`.
-
-The condition to build it: **only once a T2 action or a build/exec tool is
-genuinely needed over MCP again.** Until then, keeping the proxy at `POST=0` /
-`EXEC=0` and the mutating tools disabled is strictly safer and needs no new code.
-This is a deliberate "do not build it yet", not an oversight.
+`ops_restart_service` now restarts by **container name**, never by id: the
+filter's allowlist is a list of exact names, so a name is the only reference that
+passes both checks. The helper resolves the name from `docker ps` and the filter
+re-validates it independently. That is why a game-server restart stays impossible
+even if the helper asked for one — and a test asserts exactly that.
 
 ### How it was verified (reproducible)
 
-Two throwaway proxies were started against the real socket, plus one throwaway
-target container, all on a throwaway network:
+The filter is tested twice, and both are automated:
+
+* `tools/docker-socket-filter/test/filter.test.mjs` — a fake Docker daemon on a
+  UNIX socket, the real filter in front of it, raw HTTP over a TCP socket. It
+  covers the allow table, every forbidden route, traversal/encoding/CRLF/
+  smuggling vectors, prefix names, container ids, the `t` bounds and pipelining.
+* `tools/docker-socket-filter/test/real-daemon.sh` — builds the image, runs it
+  with the **real** `/var/run/docker.sock` on a throwaway network next to a
+  throwaway canary container, and probes it: the canary restarts (`204`), a real
+  mc-stack container / game server / container id / `create` / `exec` / `stop` /
+  every injection variant is `403`. Only `hermes-dsf-*` containers are created,
+  each self-exits, and no `docker compose up` happens.
 
 ```
-docker network create hermes-proxy-test-net
-docker run -d --name hermes-proxy-target --network hermes-proxy-test-net alpine sleep 900
-# POST=0 instance and POST=1 instance, same image digest, same other env
-docker run -d --name hermes-socket-proxy-post0 --network hermes-proxy-test-net \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e CONTAINERS=1 -e POST=0 -e ALLOW_RESTARTS=1 -e EXEC=0 -e PING=0 -e VERSION=0 \
-  -e EVENTS=0 -e DISABLE_IPV6=1 -e LOG_LEVEL=warning \
-  tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
-# ... then DOCKER_HOST=tcp://hermes-socket-proxy-post0:2375 docker ps / logs / restart
+sh tools/docker-socket-filter/test/real-daemon.sh
+# -> REAL-DAEMON PROBE: ALL PASS   (43 cases + pipelining)
+# -> containers still running that mount the socket: only the ones that
+#    self-exit within their timeout
 ```
-
-No mc-stack container was touched; the running stack was read-only for these
-tests.
 
 ### Residual risk, stated honestly
 
-With `POST=0` + `EXEC=0` the proxy is now a fairly hard boundary for the helper:
-no create, no exec, no restart, no volumes/images/networks. What remains:
+The filter is a genuinely tight boundary, but it is not a sandbox:
 
-* `CONTAINERS=1` still lets the helper **read** any container's `inspect` and
-  `logs` on the host (not just mc-stack ones). That is the intended read surface
-  and is capped + redacted by the helper.
-* The hard boundary for *what the helper asks for* is still the helper's own
-  argv allowlist plus its authentication; the proxy is defence in depth. With
-  `POST=0`/`EXEC=0` the two now agree far more closely than before.
+* **Whoever compromises the filter process has the socket.** It is the boundary,
+  so it is small and dependency-free — but a bug in `src/filter.mjs` is host
+  root. That is the price of holding the socket at all.
+* **Whoever can change `OPS_FILTER_RESTART_ALLOW` can widen the restart set.**
+  That is a compose/env change, i.e. the same trust level as editing the repo.
+* `GET /containers/json` and `/containers/<ref>/json|logs` still let the helper
+  **read** any container on the host, not just mc-stack ones. That is the
+  intended read surface and is capped + redacted by the helper.
+* The helper's own argv allowlist and its authentication remain the first
+  boundary; the filter is defence in depth, and the two now agree far more
+  closely than the section-based proxy ever did.
 
 ## Build containers: offline and capped
 
@@ -384,7 +381,8 @@ deletes the file.
 | `OPS_ARTIFACTS_VOLUME` / `OPS_GRADLE_CACHE_VOLUME` / `OPS_NPM_CACHE_VOLUME` | `mc-stack-ops-artifacts` / `mc-stack-ops-gradle-cache` / `mc-stack-ops-npm-cache` | named volumes handed to the throwaway build containers (no host path is ever guessed) |
 | `OPS_ACTION_TIMEOUT_SECONDS` / `OPS_BUILD_TIMEOUT_SECONDS` | `120` / `1800` | per-command and per-build timeouts |
 | `OPS_DOCKER_BIN` | `docker` | docker CLI path |
-| `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-proxy:2375`; without the proxy the helper cannot reach Docker at all |
+| `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-filter:2375`; without the filter the helper cannot reach Docker at all |
+| `DOCKER_API_VERSION` | *(unset in the image)* | set by compose (`1.51`): with an explicit API version the CLI skips `GET /version`, which the filter refuses |
 | `OPS_BACKUP_INTERPRETERS` | `pwsh,powershell` | candidates for running `backup.ps1` |
 
 ## Setup (once, not done by this PR)
@@ -396,13 +394,13 @@ deletes the file.
    HERMES_MCP_OPS_TOKEN=<openssl rand -hex 32>    # the second, elevated token
    ```
 
-2. Start the socket proxy, the helper and MCP (this **recreates**
+2. Start the socket filter, the helper and MCP (this **recreates**
    `hermes-mcp`: it gains a second network and the 127.0.0.1 ops port — do it in a
    maintenance window):
 
    ```
-   docker compose --profile ops --profile mcp up -d --build docker-socket-proxy ops-helper hermes-mcp
-   docker compose logs -f ops-helper docker-socket-proxy
+   docker compose --profile ops --profile mcp up -d --build docker-socket-filter ops-helper hermes-mcp
+   docker compose logs -f ops-helper docker-socket-filter
    ```
 
 3. Warm the two offline build caches once (see "Build containers" above).
@@ -411,7 +409,8 @@ deletes the file.
 
    ```
    docker port mc-stack-ops-helper-1                     # empty: no host port
-   docker port mc-stack-docker-socket-proxy-1            # empty: no host port
+   docker port mc-stack-docker-socket-filter-1           # empty: no host port
+   docker compose logs docker-socket-filter | tail       # the audit log
    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8766/healthz   # unreachable from the host
    docker exec mc-stack-hermes-mcp-1 node -e "fetch('http://ops-helper:8766/healthz').then(r=>console.log(r.status))"  # 200
    docker exec mc-stack-hermes-mcp-1 node -e "fetch('http://ops-helper:8766/op',{method:'POST'}).then(r=>console.log(r.status))"  # 401
@@ -423,8 +422,9 @@ deletes the file.
    `docker compose --profile ops up -d ops-helper`. Game-server restarts then
    also require the ops token **and** the local listener, so they cannot be
    triggered from the internet. **Note:** in the current allowlist the T2 actions
-   are `"enabled": false` anyway (they need the denied POST/exec paths), so
-   arming alone does not enable them — see "Disabled actions".
+   are `"enabled": false` anyway (their container names are not on the filter's
+   restart allowlist), so arming alone does not enable them — see "Disabled
+   actions".
 
 ## Tests
 
@@ -447,20 +447,25 @@ fake runner (including the automatic rollback when a health check fails).
 
 Two suites are specific to this PR:
 
-* `test/proxy.test.mjs` parses the `docker-socket-proxy` env block out of
-  `compose.yaml` and asserts `CONTAINERS=1`, `POST=0`, `EXEC=0`,
-  `ALLOW_RESTARTS=1` and that **every** other section is `0` — so the boundary
-  cannot drift without a red test;
+* `test/proxy.test.mjs` parses the compose service blocks and asserts that
+  **exactly one** service mounts the Docker socket (the filter), that it has no
+  host port, lives only in the internal `mc-stack-ops` network, is hardened
+  (`read_only`, `cap_drop: ALL`, `no-new-privileges`), that `ops-helper` mounts
+  no socket and talks to it over TCP, and that the restart allowlist contains the
+  two T1 names and **no** game server — so the boundary cannot drift without a
+  red test;
 * the disabled actions are asserted twice: `allowlist.test.mjs` proves the
-  shipped allowlist pauses the right actions and that each carries a
-  `disabled_reason`, and `dispatch.test.mjs` proves a paused action returns
-  `action_disabled` with that reason **and never reaches Docker**. The
+  shipped allowlist pauses the right actions (and enables exactly
+  `ops_restart_service` on top of the read-only set) and that each paused action
+  carries a `disabled_reason`, and `dispatch.test.mjs` proves a paused action
+  returns `action_disabled` with that reason **and never reaches Docker**. The
   implementations themselves stay covered by forcing those actions enabled in a
   test-local copy of the allowlist.
 
-The real-daemon proxy behaviour (403 for create/exec/restart, 200 for read) was
-checked once, manually, with throwaway proxy containers — see "How it was
-verified" above. It is not part of `npm test`, which stays offline.
+The filter itself has its own suite in `tools/docker-socket-filter/`:
+`test/filter.test.mjs` (fake upstream, unit + live TCP) and
+`test/real-daemon.sh` (real socket, throwaway container). Both are run outside
+`npm test` on purpose — `npm test` stays offline.
 
 ## Not in phase 1 (documented concepts, deliberately not implemented)
 
@@ -500,10 +505,11 @@ verified" above. It is not part of `npm test`, which stays offline.
 * `not_armed` — T2 is refused on purpose; set `OPS_ARMED=true` and restart the
   helper (after you have decided who may hold the ops token).
 * `docker_failed` on every call — the helper cannot reach Docker. Check
-  `docker compose logs docker-socket-proxy` and that the proxy is on the same
-  `mc-stack-ops` network; a `403 Forbidden` message means the proxy refused the
-  API section, which is the intended behaviour for anything not in the table
-  above.
+  `docker compose logs docker-socket-filter` and that the filter is on the same
+  `mc-stack-ops` network; a `403 Forbidden` message means the filter refused the
+  method/path/query, which is the intended behaviour for anything not in the
+  table above. `GET /version` being refused is normal (the helper pins
+  `DOCKER_API_VERSION` so the CLI never asks for it).
 * `cooldown_active` — T1 300 s / T2 1800 s; the answer carries
   `retry_after_seconds`.
 * `source_missing` / `artifacts_volume_unset` — the repo mount or the volume

@@ -119,25 +119,24 @@
       "tier": "T0",
       "impl": "players",
       "enabled": false,
-      "disabled_reason": "paused: needs docker exec (POST /exec), which docker-socket-proxy denies (EXEC=0). Enable only with a path-scoped proxy that carries its own filter config."
+      "disabled_reason": "paused: needs docker exec (POST /exec/{id}/start), which docker-socket-filter refuses (there is no exec route at all)."
     },
     "ops_build_plugin": {
       "tier": "T0",
       "impl": "build_plugin",
       "enabled": false,
-      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0). Enable only with a path-scoped proxy that carries its own filter config."
+      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-filter refuses (create is not on the route allowlist)."
     },
     "ops_run_tests": {
       "tier": "T0",
       "impl": "run_tests",
       "enabled": false,
-      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0). Enable only with a path-scoped proxy that carries its own filter config."
+      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-filter refuses (create is not on the route allowlist)."
     },
     "ops_restart_service": {
       "tier": "T1",
       "impl": "restart_service",
-      "enabled": false,
-      "disabled_reason": "paused: docker restart is a POST and docker-socket-proxy denies every non-GET request while POST=0 (ALLOW_RESTARTS has no effect without POST). Re-enable together with POST=1, or use a path-scoped proxy."
+      "enabled": true
     },
     "ops_backup_now": {
       "tier": "T1",
@@ -149,19 +148,19 @@
       "tier": "T2",
       "impl": "restart_game",
       "enabled": false,
-      "disabled_reason": "paused (T2): needs POST /containers/{id}/restart and docker exec for the announcement, both denied by docker-socket-proxy (POST=0, EXEC=0). Enable only with a path-scoped proxy."
+      "disabled_reason": "paused (T2): the game-server container names (lobby/survival/velocity) are deliberately NOT on the docker-socket-filter restart allowlist, so the restart would be a 403; the announcement also needs docker exec, which the filter refuses."
     },
     "ops_deploy_plugin": {
       "tier": "T2",
       "impl": "deploy_plugin",
       "enabled": false,
-      "disabled_reason": "paused (T2): needs a built artifact (container create) and docker exec for the announcement, both denied by docker-socket-proxy. Enable only with a path-scoped proxy."
+      "disabled_reason": "paused (T2): needs a built artifact (POST /containers/create) and docker exec for the announcement; docker-socket-filter refuses both."
     },
     "ops_rollback_plugin": {
       "tier": "T2",
       "impl": "rollback_plugin",
       "enabled": false,
-      "disabled_reason": "paused (T2): needs POST /containers/{id}/restart and docker exec for the announcement, both denied by docker-socket-proxy. Enable only with a path-scoped proxy."
+      "disabled_reason": "paused (T2): needs a game-server restart (not on the docker-socket-filter restart allowlist) and docker exec for the announcement; the filter refuses both."
     }
   }
 }

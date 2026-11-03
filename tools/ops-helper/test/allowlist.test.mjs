@@ -47,13 +47,12 @@ test("every impl in the allowlist is implemented in code", () => {
   }
 });
 
-test("the shipped allowlist pauses every non-GET action with a reason", () => {
+test("the shipped allowlist pauses every action the filter cannot serve, with a reason", () => {
   const allow = loadAllowlist(ALLOWLIST_PATH);
   const paused = [
     "ops_players",
     "ops_build_plugin",
     "ops_run_tests",
-    "ops_restart_service",
     "ops_backup_now",
     "ops_restart_game",
     "ops_deploy_plugin",
@@ -63,9 +62,12 @@ test("the shipped allowlist pauses every non-GET action with a reason", () => {
     assert.equal(allow.actions[name].enabled, false, `${name} must be disabled`);
     assert.ok(allow.actions[name].disabledReason, `${name} must carry a disabled_reason`);
   }
-  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"]) {
+  // The read-only tools plus the T1 restart are the whole live surface: the
+  // docker-socket-filter can serve exactly those.
+  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state", "ops_restart_service"]) {
     assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
   }
+  assert.equal(allow.actions.ops_restart_service.tier, "T1");
 });
 
 test("a disabled action without a disabled_reason is refused at load time", () => {

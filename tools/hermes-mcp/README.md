@@ -85,18 +85,19 @@ set; the whole security model lives in
 | `ops_players(service)` | T0 | base | **paused** | online players via `rcon-cli list`; needs docker exec |
 | `ops_build_plugin()` | T0 | base | **paused** | gradle build in a throwaway container; needs container create |
 | `ops_run_tests(target)` | T0 | base | **paused** | run a test suite in a throwaway container; needs container create |
-| `ops_restart_service(service, confirm)` | T1 | ops | **paused** | restart `bot`/`cloudflared-mcp`; needs a POST the proxy denies |
+| `ops_restart_service(service, confirm)` | T1 | ops | **yes** | restart `bot`/`cloudflared-mcp`; `confirm=true`, exact-name allowlist in the socket filter |
 | `ops_backup_now(confirm)` | T1 | ops | **paused** | needs PowerShell, which the helper image lacks |
 | `ops_restart_game(service, confirm, delay_seconds)` | T2 | ops + local listener | **paused** | restart lobby/survival/velocity (armed + fresh backup) |
 | `ops_deploy_plugin(artifact_sha256, confirm, delay_seconds)` | T2 | ops + local listener | **paused** | rolling CraftCore deploy (needs a build + exec) |
 | `ops_rollback_plugin(confirm, delay_seconds)` | T2 | ops + local listener | **paused** | restore the jars the last deploy kept |
 
-**Paused tools:** with `docker-socket-proxy` at `POST=0`/`EXEC=0` (see the
-ops-helper README), every action that needs a non-GET Docker call is
-`"enabled": false` in `config/ops-allowlist.json`. The tools are still advertised
-(so a call returns a clear `action_disabled` with the reason), but only the five
-read-only tools work. `ops_ci_status(pr)` is deliberately **not** implemented: the
-token available here has no `checks:read`, so the tool could only guess.
+**Paused tools:** every action the `docker-socket-filter` cannot serve (needs a
+container create, an exec, or a game-server restart) is `"enabled": false` in
+`config/ops-allowlist.json`. The tools are still advertised (so a call returns a
+clear `action_disabled` with the reason), and only the five read-only tools plus
+`ops_restart_service` actually work. `ops_ci_status(pr)` is deliberately **not**
+implemented: the token available here has no `checks:read`, so the tool could
+only guess.
 
 ## Setup (once)
 
@@ -177,11 +178,13 @@ Consequences worth stating explicitly:
 
 * A **stolen read-only MCP token** (`base` level) can read status/logs and
   backups — and nothing else. It cannot see the T1/T2 tools at all.
-* The **ops token** still unlocks the T1/T2 tool *listings*, but they are
-  **paused** in the allowlist: with `docker-socket-proxy` at `POST=0`/`EXEC=0`,
-  every action that would need a container create, an exec or a restart is
-  disabled, so there is nothing a stolen token can mutate either. See the
-  ops-helper README for the (verified) reason and how to re-enable restart.
+* The **ops token** unlocks the T1 tool set, and exactly one of those tools can
+  mutate anything: `ops_restart_service` (restart `bot` or `cloudflared-mcp`,
+  `confirm=true`, 300 s cooldown). Everything else that would need a container
+  create, an exec or a game-server restart is `"enabled": false` **and** has no
+  route in the socket filter, so a stolen ops token cannot build, test, exec,
+  deploy or restart a game server either. See the ops-helper README for the
+  (verified) reason and the filter's allowlist.
 * Nothing in the ops path can reach `craftcore-db`, `hermes-mcp`, `ops-helper`,
   `hermes-test`, `docker compose down`, `volume rm/prune` or `kill -9`; that is
   enforced in code, not only in the JSON.
@@ -193,7 +196,7 @@ Consequences worth stating explicitly:
 * Kill switch: `touch data/ops-helper/DISABLED` (or `OPS_DISABLED=true`) refuses
   everything above T0 without restarting anything else.
 
-Full detail (allowlist format, tier gates, audit log, socket proxy, offline build
+Full detail (allowlist format, tier gates, audit log, socket filter, offline build
 caches, activation steps, what is deliberately not implemented) is in
 [`tools/ops-helper/README.md`](../ops-helper/README.md).
 
