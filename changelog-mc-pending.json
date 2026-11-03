@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "version": "2026-10-31-vip",
+    "date": "31.10.2026",
+    "changes": [
+      {
+        "type": "neu",
+        "text": "VIP-Welten: Mit /vw create <name> legst du deine eigene Welt an (VIP 1, MVP 3 Welten)."
+      },
+      {
+        "type": "neu",
+        "text": "Mit /vw start, /vw join und /vw stop startest, betrittst und stoppst du deine Welt. Leere Welten schlafen nach 10 Minuten ein."
+      }
+    ]
+  }
+]
