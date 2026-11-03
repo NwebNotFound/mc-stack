@@ -11,6 +11,7 @@ import { AuditLog } from "./audit.js";
 import { loadAllowlist, type Allowlist } from "./allowlist.js";
 import { loadConfig, type OpsConfig } from "./config.js";
 import { DockerCli } from "./docker.js";
+import { FileJobClient } from "./jobs.js";
 import { logger } from "./logger.js";
 import { ExecRunner } from "./runner.js";
 import { createServer } from "./server.js";
@@ -42,6 +43,7 @@ function main(): void {
 
   const runner = new ExecRunner();
   const docker = new DockerCli(runner, cfg.dockerBin, allow.composeProject, cfg.actionTimeoutSeconds * 1000);
+  const jobs = new FileJobClient(cfg.jobsDir, cfg.builderResultsDir, undefined, cfg.builderPollMs);
 
   logger.info("allowlist loaded", {
     actions: Object.keys(allow.actions).length,
@@ -61,6 +63,7 @@ function main(): void {
     runner,
     audit,
     state,
+    jobs,
     now: () => Date.now(),
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   };

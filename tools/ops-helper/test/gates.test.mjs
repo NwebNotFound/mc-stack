@@ -60,7 +60,7 @@ test("T1 needs confirm=true", () => {
 });
 
 test("T2 without the global arm switch is refused, even with confirm and delay", () => {
-  const decision = checkGates(action("T2"), T2, { confirm: true, delay_seconds: 60 }, ctx({ armed: false }));
+  const decision = checkGates(action("T2"), T2, { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, ctx({ armed: false }));
   assert.equal(decision.ok, false);
   assert.equal(decision.code, "not_armed");
 });
@@ -72,19 +72,31 @@ test("T2 armed but without confirm is refused", () => {
 
 test("T2 requires an integer delay_seconds >= 60", () => {
   for (const delay of [undefined, null, 0, 30, 59, "60", 60.5, Number.NaN]) {
-    const decision = checkGates(action("T2"), T2, { confirm: true, delay_seconds: delay }, ctx({ armed: true }));
+    const decision = checkGates(action("T2"), T2, { confirm: true, delay_seconds: delay, acknowledge_no_announce: true }, ctx({ armed: true }));
     assert.equal(decision.ok, false, `delay ${String(delay)} must be refused`);
     assert.equal(decision.code, "delay_too_short");
   }
-  assert.equal(checkGates(action("T2"), T2, { confirm: true, delay_seconds: 60 }, ctx({ armed: true })).ok, true);
-  assert.equal(checkGates(action("T2"), T2, { confirm: true, delay_seconds: 600 }, ctx({ armed: true })).ok, true);
+  assert.equal(checkGates(action("T2"), T2, { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, ctx({ armed: true })).ok, true);
+  assert.equal(checkGates(action("T2"), T2, { confirm: true, delay_seconds: 600, acknowledge_no_announce: true }, ctx({ armed: true })).ok, true);
+});
+
+test("a T2 action must acknowledge that no in-game announcement is sent", () => {
+  // There is no rcon/exec channel reachable through the socket filter, so a T2
+  // action must say out loud that no player warning happens.
+  for (const ack of [undefined, false, "true", 1]) {
+    const decision = checkGates(action("T2"), T2, { confirm: true, delay_seconds: 60, acknowledge_no_announce: ack }, ctx({ armed: true }));
+    assert.equal(decision.ok, false, `ack ${String(ack)} must be refused`);
+    assert.equal(decision.code, "announcement_not_acknowledged");
+  }
+  // T0/T1 do not carry a delay, so they never need the acknowledgement.
+  assert.equal(checkGates(action("T1"), T1, { confirm: true }, ctx()).ok, true);
 });
 
 test("the kill switch stops everything above T0, even an armed T2", () => {
   const decision = checkGates(
     action("T2"),
     T2,
-    { confirm: true, delay_seconds: 60 },
+    { confirm: true, delay_seconds: 60, acknowledge_no_announce: true },
     ctx({ armed: true, killSwitch: true }),
   );
   assert.equal(decision.code, "kill_switch_active");

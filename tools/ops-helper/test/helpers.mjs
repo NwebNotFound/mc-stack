@@ -71,10 +71,13 @@ export class FakeRunner {
 export const CONTAINER_ID = "0123456789ab";
 /** The compose container name of the service the tests restart. */
 export const CONTAINER_NAME = "mc-stack-bot-1";
+/** The commit the fake repo is checked out at (git rev-parse HEAD). */
+export const REPO_HEAD = "b".repeat(40);
 
 /** A runner that answers the docker calls the ops tools make. */
-export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, inspect = null, name = CONTAINER_NAME } = {}) {
+export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, inspect = null, name = CONTAINER_NAME, head = REPO_HEAD } = {}) {
   return new FakeRunner([
+    { match: (argv) => argv[0] === "git" && argv.includes("rev-parse"), reply: { stdout: `${head}\n` } },
     { match: (argv) => argv[1] === "ps" && argv.includes("{{.ID}}"), reply: { stdout: CONTAINER_ID + "\n" } },
     { match: (argv) => argv[1] === "ps" && argv.includes("{{.Names}}"), reply: { stdout: name + "\n" } },
     { match: (argv) => argv[1] === "ps", reply: { stdout: ps } },
@@ -87,6 +90,37 @@ export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, i
     { match: (argv) => argv[1] === "restart", reply: { stdout: CONTAINER_NAME + "\n" } },
     { match: (argv) => argv[1] === "run", reply: { stdout: "fake container ran" } },
   ]);
+}
+
+/**
+ * A job channel that never touches the disk: it records what the helper tried to
+ * hand to plugin-builder and answers with a canned result.
+ */
+export class FakeJobClient {
+  constructor({ result = null, failSubmit = null } = {}) {
+    this.submitted = [];
+    this.result = result;
+    this.failSubmit = failSubmit;
+  }
+
+  submit(job) {
+    if (this.failSubmit) throw new Error(this.failSubmit);
+    this.submitted.push(job);
+    return `/jobs/job-${job.id}.json`;
+  }
+
+  async awaitResult(id /*, timeoutMs */) {
+    if (!this.result) return null;
+    return { ...this.result, id };
+  }
+
+  jobPath(id) {
+    return `/jobs/job-${id}.json`;
+  }
+
+  resultPath(id) {
+    return `/artifacts/builder/result-${id}.json`;
+  }
 }
 
 /**
@@ -123,6 +157,10 @@ export function makeDeps(overrides = {}) {
     artifactsVolume: "mc-stack-ops-artifacts",
     gradleCacheVolume: "mc-stack-ops-gradle-cache",
     npmCacheVolume: "mc-stack-ops-npm-cache",
+    jobsDir: `${dir}/jobs`,
+    builderResultsDir: `${dir}/artifacts/builder`,
+    builderTimeoutSeconds: 60,
+    builderPollMs: 100,
     dockerBin: "docker",
     actionTimeoutSeconds: 30,
     buildTimeoutSeconds: 60,
@@ -136,6 +174,7 @@ export function makeDeps(overrides = {}) {
     runner,
     audit: new AuditLog(`${dir}/audit.jsonl`),
     state: new OpsState(`${dir}/state.json`),
+    jobs: overrides.jobs ?? new FakeJobClient(),
     now,
     sleep: async (ms) => {
       sleeps.push(ms);

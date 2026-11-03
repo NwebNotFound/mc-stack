@@ -442,13 +442,29 @@ services:
       OPS_ARTIFACTS_VOLUME: "mc-stack-ops-artifacts"
       OPS_GRADLE_CACHE_VOLUME: "mc-stack-ops-gradle-cache"
       OPS_NPM_CACHE_VOLUME: "mc-stack-ops-npm-cache"
+      # Build/test jobs go through a shared volume to plugin-builder (below); the
+      # helper never starts a container itself.
+      OPS_JOBS_DIR: "/jobs"
+      OPS_BUILDER_RESULTS_DIR: "/artifacts/builder"
+      OPS_BUILDER_TIMEOUT_SECONDS: "${OPS_BUILDER_TIMEOUT_SECONDS:-1800}"
       OPS_ACTION_TIMEOUT_SECONDS: "${OPS_ACTION_TIMEOUT_SECONDS:-120}"
       OPS_BUILD_TIMEOUT_SECONDS: "${OPS_BUILD_TIMEOUT_SECONDS:-1800}"
     depends_on:
       - docker-socket-filter
+      - plugin-builder
     volumes:
       # NO docker socket here: the helper talks to docker-socket-filter over TCP.
-      # The repo is read-only for this service...
+      # The repo IS mounted whole and read-only, on purpose - unlike
+      # plugin-builder's narrow mount. `ops_git_state` runs `git status` over the
+      # whole worktree, `ops_disk` runs `df` on the repo root and `du` on
+      # /repo/data, and deploy/rollback reads /repo/backup.ps1, so narrowing it
+      # would make git state lie (every unmounted file looks deleted) and `df`
+      # report the container overlay instead of the repo filesystem. This service
+      # is the trusted control plane (its trust level equals the repo's own code
+      # - it can already restart game servers and write plugin jars); the
+      # untrusted component that runs build commands is plugin-builder, and that
+      # one is narrowed. See tools/ops-helper/README.md ("Why the repo mount is
+      # not narrowed").
       - ./:/repo:ro
       # ...except the backup directory and the two plugin templates a deploy
       # writes into (nothing else in the repo is writable).
@@ -458,6 +474,8 @@ services:
       # Audit log, cooldown state and the DISABLED kill-switch file.
       - ./data/ops-helper:/app/data/ops-helper
       - ops-artifacts:/artifacts
+      # The job channel to plugin-builder (jobs in, results back via /artifacts).
+      - ops-jobs:/jobs
     networks: [ops]
     expose:
       - "8766/tcp"
@@ -468,6 +486,69 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  # Build/test worker for the ops tools (see tools/plugin-builder/README.md).
+  #
+  # It is a PERMANENT service so that a build no longer needs
+  # `POST /containers/create` on the Docker socket (the filter refuses it, because
+  # create is host root). ops-helper drops a job file into the shared `ops-jobs`
+  # volume; this service validates it strictly, asserts the read-only repo is at
+  # the requested commit, runs ONE fixed command from config/ops-allowlist.json
+  # and writes the result into the artifact volume.
+  #
+  # Hardened hard on purpose: `network_mode: none` (no interface at all, so an
+  # offline cache is the only source of dependencies), NO Docker socket, a
+  # read-only rootfs, all capabilities dropped, no-new-privileges and explicit
+  # CPU/RAM/PID caps so a build cannot starve the Minecraft servers.
+  plugin-builder:
+    build: ./tools/plugin-builder
+    profiles: ["ops"]
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      BUILDER_JOBS_DIR: "/jobs"
+      BUILDER_ARTIFACTS_DIR: "/artifacts"
+      BUILDER_RESULTS_DIR: "/artifacts/builder"
+      BUILDER_REPO: "/repo"
+      BUILDER_ALLOWLIST_PATH: "/repo/config/ops-allowlist.json"
+      # Repo-relative roots the mounted read-only trees cover; a spec whose
+      # `source` is not under one of them is refused (`source_not_mounted`).
+      BUILDER_SOURCE_ROOTS: "plugins-src,tools"
+      BUILDER_WORK_DIR: "/work"
+      BUILDER_POLL_MS: "${OPS_BUILDER_POLL_MS:-1000}"
+      BUILDER_JOB_TIMEOUT_SECONDS: "${OPS_BUILDER_TIMEOUT_SECONDS:-1800}"
+      # The toolchains this image declares it can run; a build spec naming a
+      # different image is refused rather than silently run on the wrong JDK.
+      BUILDER_TOOLCHAINS: "gradle:9-jdk,node:22-alpine"
+      GRADLE_USER_HOME: "/home/gradle/.gradle"
+    volumes:
+      # Deliberately NARROW and read-only: only the two source trees the
+      # allowlist can build/test, the allowlist file itself and `.git` (which is
+      # all `git archive`/`git status` need for the commit assertion and the
+      # dirty count). The repo ROOT is NOT mounted, so `.env`, `secrets/` and
+      # `data/` are not reachable from this service at all - a build must never
+      # be able to read (or bake into a jar) anything but source code.
+      - ./plugins-src:/repo/plugins-src:ro
+      - ./tools:/repo/tools:ro
+      - ./config/ops-allowlist.json:/repo/config/ops-allowlist.json:ro
+      - ./.git:/repo/.git:ro
+      # The only writable channels: the job volume (in) and the artifact volume.
+      - ops-jobs:/jobs
+      - ops-artifacts:/artifacts
+      - ops-gradle-cache:/home/gradle/.gradle
+      - ops-npm-cache:/root/.npm
+    read_only: true
+    tmpfs:
+      - /tmp
+      # The build happens on a copy of the source under /work, never in /repo.
+      - /work:size=2g,exec
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: "1.5"
+    mem_limit: 2g
+    pids_limit: 512
 
   # The ONLY holder of the Docker socket (see tools/docker-socket-filter/README.md).
   #
@@ -493,9 +574,15 @@ services:
       OPS_FILTER_PORT: "2375"
       OPS_FILTER_HOST: "0.0.0.0"
       OPS_FILTER_UPSTREAM: "/var/run/docker.sock"
-      # Exact container names a restart may target. Override in .env if the
-      # compose project name ever changes.
+      # Exact container names a restart may target, split by intent:
+      #  - OPS_FILTER_RESTART_ALLOW     -> T1, reversible helper services;
+      #  - OPS_FILTER_RESTART_ALLOW_T2  -> T2, the game servers.
+      # Both apply to the exact `/containers/<name>/restart` path only, and the
+      # union is what the filter accepts; the T1/T2 split is enforced by the
+      # helper's own restart_t1 / restart_game lists. The database, the proxy DB,
+      # hermes-test, hermes-mcp and ops-helper are in NEITHER list.
       OPS_FILTER_RESTART_ALLOW: "${OPS_FILTER_RESTART_ALLOW:-mc-stack-bot-1,mc-stack-cloudflared-mcp-1}"
+      OPS_FILTER_RESTART_ALLOW_T2: "${OPS_FILTER_RESTART_ALLOW_T2:-mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1}"
       # Hard cap on a forwarded response body (logs are the big one).
       OPS_FILTER_MAX_RESPONSE_BYTES: "${OPS_FILTER_MAX_RESPONSE_BYTES:-8388608}"
     volumes:
@@ -556,10 +643,12 @@ volumes:
   craftcore-db:
   bot-plugin:
   bot-pending:
-  # Build artifacts and the offline caches of the ops-helper build containers.
+  # Build artifacts and the offline caches of the ops build/test path, plus the
+  # job channel between ops-helper and plugin-builder.
   ops-artifacts:
   ops-gradle-cache:
   ops-npm-cache:
+  ops-jobs:
 
 secrets:
   forwarding_secret:

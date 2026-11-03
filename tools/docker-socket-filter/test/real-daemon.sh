@@ -21,6 +21,7 @@ SUFFIX=$$
 IMAGE=hermes-dsf:test
 NET=hermes-dsf-net
 CANARY="hermes-dsf-canary-$SUFFIX"
+T2CANARY="hermes-dsf-t2canary-$SUFFIX"
 FILTER="hermes-dsf-filter-$SUFFIX"
 
 echo "### 1. build $IMAGE"
@@ -29,22 +30,25 @@ docker build -q -t "$IMAGE" "$DIR" || exit 1
 echo "### 2. throwaway network $NET"
 docker network create "$NET" >/dev/null 2>&1 || true
 
-echo "### 3. throwaway canary ($CANARY, self-removes after 300s)"
+echo "### 3. throwaway canaries ($CANARY, $T2CANARY, self-remove after 300s)"
 docker run -d --rm --name "$CANARY" --network "$NET" alpine sleep 300 >/dev/null || exit 1
+docker run -d --rm --name "$T2CANARY" --network "$NET" alpine sleep 300 >/dev/null || exit 1
 
 echo "### 4. filter holding the REAL socket ($FILTER, self-exits after 240s)"
 docker run -d --rm --name "$FILTER" --network "$NET" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e OPS_FILTER_RESTART_ALLOW="$CANARY" \
+  -e OPS_FILTER_RESTART_ALLOW_T2="$T2CANARY" \
   --entrypoint sh "$IMAGE" -c 'timeout 240 node src/server.mjs' >/dev/null || exit 1
 sleep 2
 
 echo "### 5. probe (raw HTTP from a throwaway client)"
-docker run --rm -i --network "$NET" -e PROBE_HOST="$FILTER" -e CANARY="$CANARY" \
+docker run --rm -i --network "$NET" -e PROBE_HOST="$FILTER" -e CANARY="$CANARY" -e T2CANARY="$T2CANARY" \
   node:22-alpine node --input-type=module - <<'PROBE'
 import net from "node:net";
 const HOST = process.env.PROBE_HOST;
 const CANARY = process.env.CANARY;
+const T2CANARY = process.env.T2CANARY;
 const raw = (request) =>
   new Promise((resolve) => {
     const chunks = [];
@@ -69,8 +73,11 @@ const cases = [
   ["allowed GET canary inspect", get(`/containers/${CANARY}/json`), 200],
   ["allowed GET canary logs", get(`/containers/${CANARY}/logs?stderr=1&stdout=1&tail=200&timestamps=1`), 200],
   ["allowed restart canary", post(`/containers/${CANARY}/restart`), 204],
-  ["denied restart mc-stack-bot-1 (real bot)", post("/containers/mc-stack-bot-1/restart"), 403],
-  ["denied restart mc-stack-lobby-1 (game server)", post("/containers/mc-stack-lobby-1/restart"), 403],
+  ["allowed restart T2 canary (the T2 list is honoured separately)", post(`/containers/${T2CANARY}/restart`), 204],
+  ["denied restart mc-stack-bot-1 (real bot: not on this throwaway T1 list)", post("/containers/mc-stack-bot-1/restart"), 403],
+  ["denied restart mc-stack-lobby-1 (game server: not on this throwaway T2 list)", post("/containers/mc-stack-lobby-1/restart"), 403],
+  ["denied restart mc-stack-survival-1", post("/containers/mc-stack-survival-1/restart"), 403],
+  ["denied restart mc-stack-velocity-1", post("/containers/mc-stack-velocity-1/restart"), 403],
   ["denied restart lobby", post("/containers/lobby/restart"), 403],
   ["denied restart survival", post("/containers/survival/restart"), 403],
   ["denied restart velocity", post("/containers/velocity/restart"), 403],

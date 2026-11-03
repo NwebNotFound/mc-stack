@@ -20,9 +20,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { classify, createFilterServer, dechunk, Denied, DEFAULT_RESTART_ALLOW, parseHead, rewriteResponse, stripInspectEnv } from "../src/filter.mjs";
+import {
+  classify,
+  createFilterServer,
+  dechunk,
+  DEFAULT_RESTART_ALLOW_T1,
+  DEFAULT_RESTART_ALLOW_T2,
+  Denied,
+  parseHead,
+  resolveRestartAllow,
+  rewriteResponse,
+  restartTierOf,
+  stripInspectEnv,
+} from "../src/filter.mjs";
 
-const CFG = { restartAllow: DEFAULT_RESTART_ALLOW };
+const CFG = { restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: DEFAULT_RESTART_ALLOW_T2 };
 const ID64 = "a".repeat(64);
 
 function allowed(method, target, cfg = CFG) {
@@ -143,16 +155,42 @@ test("restart is only possible for an exact allowlisted container name", () => {
   }
 });
 
-test("a game server can never be restarted even if the helper asks for it", () => {
-  // Defence in depth: the filter is the second, independent check. The helper's
-  // own allowlist is bypassed here on purpose.
-  const gameServers = ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1", "mc-stack-craftcore-db-1"];
-  for (const name of gameServers) {
+test("the T1 list alone cannot restart a game server; the union can", () => {
+  // Defence in depth: the filter is the second, independent check. With only the
+  // T1 list configured (the pre-T2 state) a game server can never pass...
+  const t1Only = { restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: [] };
+  for (const name of ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1", "mc-stack-craftcore-db-1"]) {
+    denied("POST", `/containers/${name}/restart`, null, t1Only);
+  }
+  allowed("POST", "/containers/mc-stack-bot-1/restart", t1Only);
+  allowed("POST", "/containers/mc-stack-cloudflared-mcp-1/restart", t1Only);
+
+  // ...and with the full configuration the game servers pass on the T2 list
+  // while the database / mcp / helper containers still do not.
+  for (const name of ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1"]) {
+    const route = allowed("POST", `/containers/${name}/restart`);
+    assert.equal(route.restarts, "t2", `${name} must be classified as T2`);
+  }
+  for (const name of ["mc-stack-craftcore-db-1", "mc-stack-hermes-mcp-1", "mc-stack-hermes-test-1", "mc-stack-ops-helper-1", "mc-stack-docker-socket-filter-1"]) {
+    denied("POST", `/containers/${name}/restart`, null, t1Only);
     denied("POST", `/containers/${name}/restart`);
   }
-  // ...while the T1 allowlist still works.
-  allowed("POST", "/containers/mc-stack-bot-1/restart");
-  allowed("POST", "/containers/mc-stack-cloudflared-mcp-1/restart");
+});
+
+test("the two restart lists stay separate and are resolved as a union", () => {
+  assert.deepEqual(DEFAULT_RESTART_ALLOW_T1, ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"]);
+  assert.deepEqual(DEFAULT_RESTART_ALLOW_T2, ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1"]);
+  assert.deepEqual(
+    resolveRestartAllow(CFG).sort(),
+    [...DEFAULT_RESTART_ALLOW_T1, ...DEFAULT_RESTART_ALLOW_T2].sort(),
+    "the union is what the one restart path accepts",
+  );
+  assert.equal(restartTierOf("mc-stack-bot-1", CFG), "t1");
+  assert.equal(restartTierOf("mc-stack-lobby-1", CFG), "t2");
+  assert.equal(restartTierOf("mc-stack-craftcore-db-1", CFG), null);
+  assert.equal(restartTierOf("mc-stack-hermes-mcp-1", CFG), null);
+  // An empty T2 list (the old configuration) never widens anything.
+  assert.deepEqual(resolveRestartAllow({ restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: [] }), DEFAULT_RESTART_ALLOW_T1);
 });
 
 test("restart timeout is bounded to 0..30", () => {
@@ -313,7 +351,7 @@ async function withFilter(run) {
   const dir = mkdtempSync(join(tmpdir(), "dsf-"));
   const socketPath = join(dir, "docker.sock");
   const { server: daemon, hits } = await startFakeDaemon(socketPath);
-  const filter = createFilterServer({ upstreamSocketPath: socketPath, restartAllow: DEFAULT_RESTART_ALLOW, log: () => {} });
+  const filter = createFilterServer({ upstreamSocketPath: socketPath, restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: DEFAULT_RESTART_ALLOW_T2, log: () => {} });
   await new Promise((resolve) => filter.listen(0, "127.0.0.1", resolve));
   const port = filter.address().port;
   try {
@@ -342,15 +380,28 @@ test("live: allowed requests are forwarded, forbidden ones never reach the daemo
     const restart = await rawExchange(port, "POST /containers/mc-stack-bot-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
     assert.equal(statusesOf(restart)[0], 204, restart);
 
+    // A game server is on the T2 list, so it passes (the T1/T2 split is enforced
+    // one level up, in the helper's own service lists)...
+    const gameRestart = await rawExchange(port, "POST /containers/mc-stack-lobby-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    assert.equal(statusesOf(gameRestart)[0], 204, gameRestart);
+
     const before = hits.length;
 
     const create = await rawExchange(port, "POST /containers/create HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
     assert.equal(statusesOf(create)[0], 403, create);
     assert.match(create, /route_not_allowed/);
 
-    const gameRestart = await rawExchange(port, "POST /containers/mc-stack-lobby-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
-    assert.equal(statusesOf(gameRestart)[0], 403, gameRestart);
-    assert.match(gameRestart, /container_not_restartable/);
+    // ...but the database, hermes-mcp, ops-helper and the filter itself are on
+    // NEITHER list and must never be restartable.
+    for (const name of ["mc-stack-craftcore-db-1", "mc-stack-hermes-mcp-1", "mc-stack-ops-helper-1", "mc-stack-hermes-test-1"]) {
+      const forbidden = await rawExchange(port, `POST /containers/${name}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`);
+      assert.equal(statusesOf(forbidden)[0], 403, `${name}: ${forbidden}`);
+      assert.match(forbidden, /container_not_restartable/);
+    }
+
+    const shield = await rawExchange(port, "POST /containers/mc-stack-velocity-2/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    assert.equal(statusesOf(shield)[0], 403, shield);
+    assert.match(shield, /container_not_restartable/);
 
     const byId = await rawExchange(port, `POST /containers/${ID64}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(byId)[0], 403, byId);

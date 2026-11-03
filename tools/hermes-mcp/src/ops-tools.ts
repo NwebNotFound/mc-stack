@@ -211,7 +211,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     {
       title: "Ops build plugin",
       description:
-        "PAUSED (disabled in the allowlist): needs to start a container, which docker-socket-filter refuses (create is not on the route allowlist). Read-only otherwise: gradle clean build of plugins-src/craftcore in a throwaway container, returns the test counts from the JUnit XML and the sha256 of the built jar. Deploys nothing.",
+        "Build plugins-src/craftcore with gradle in the plugin-builder service (offline, no network, no Docker socket) and return the test counts from the JUnit XML plus the sha256 of the built jar. Deploys nothing. Runs the build for the commit the local repo is checked out at.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -223,7 +223,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     {
       title: "Ops run tests",
       description:
-        "PAUSED (disabled in the allowlist): needs to start a container, which docker-socket-filter refuses (create is not on the route allowlist). Read-only otherwise: run one project's test suite in a throwaway container (hermes-mcp, ops-helper or craftcore) and return the test counts plus a capped output tail.",
+        "Run one project's test suite in the plugin-builder service (offline, no network, no Docker socket) and return the test counts plus a capped output tail. Targets: hermes-mcp, ops-helper, craftcore. Runs the suite for the commit the local repo is checked out at.",
       inputSchema: {
         target: z.enum(["hermes-mcp", "ops-helper", "craftcore"]).describe("Which test suite to run"),
       },
@@ -273,16 +273,19 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops restart game server (T2)",
         description:
-          "PAUSED (disabled in the allowlist): the game-server container names are deliberately NOT on the docker-socket-filter restart allowlist, and the announcement needs an exec the filter refuses. When re-enabled: restart lobby, survival or velocity with confirm=true, an integer delay_seconds >= 60 (players are warned first, best effort) and a fresh backup; the helper must be armed (OPS_ARMED=true). A health check follows the restart.",
+          "Restart lobby, survival or velocity with confirm=true, an integer delay_seconds >= 60 and a recent backup (younger than 12h, made on the host); the helper must be armed (OPS_ARMED=true). There is NO in-game announcement channel in this stack, so acknowledge_no_announce=true is required - no player warning is sent. A health check follows the restart.",
         inputSchema: {
           service: z.enum(["lobby", "survival", "velocity"]).describe("Which game server to restart"),
           confirm: z.boolean().describe("Must be true."),
-          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time before the restart (>= 60)"),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Lead time before the restart (>= 60)"),
+          acknowledge_no_announce: z
+            .boolean()
+            .describe("Must be true: no in-game warning is sent (there is no rcon/exec channel)."),
         },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      async ({ service, confirm, delay_seconds }) =>
-        forward("ops_restart_game", { service, confirm, delay_seconds }, "T2"),
+      async ({ service, confirm, delay_seconds, acknowledge_no_announce }) =>
+        forward("ops_restart_game", { service, confirm, delay_seconds, acknowledge_no_announce }, "T2"),
     );
 
     server.registerTool(
@@ -290,16 +293,19 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops deploy plugin (T2)",
         description:
-          "PAUSED (disabled in the allowlist): needs a built artifact (container create) and an exec for the announcement, both refused by docker-socket-filter. When re-enabled: deploy the last ops_build_plugin artifact into config/lobby-plugins and config/survival-plugins, rolling with delay_seconds between services, health check each, automatic rollback on failure. T2: confirm=true, delay_seconds >= 60, armed helper and a fresh backup.",
+          "Deploy the last ops_build_plugin artifact into config/lobby-plugins and config/survival-plugins, rolling with delay_seconds between services, a health check each and an automatic rollback on failure. T2: confirm=true, delay_seconds >= 60, armed helper, a recent backup (younger than 12h) and acknowledge_no_announce=true (no in-game warning is sent).",
         inputSchema: {
           artifact_sha256: z.string().describe("sha256 returned by ops_build_plugin"),
           confirm: z.boolean().describe("Must be true."),
-          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Lead time and pause between services (>= 60)"),
+          acknowledge_no_announce: z
+            .boolean()
+            .describe("Must be true: no in-game warning is sent (there is no rcon/exec channel)."),
         },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      async ({ artifact_sha256, confirm, delay_seconds }) =>
-        forward("ops_deploy_plugin", { artifact_sha256, confirm, delay_seconds }, "T2"),
+      async ({ artifact_sha256, confirm, delay_seconds, acknowledge_no_announce }) =>
+        forward("ops_deploy_plugin", { artifact_sha256, confirm, delay_seconds, acknowledge_no_announce }, "T2"),
     );
 
     server.registerTool(
@@ -307,14 +313,18 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops rollback plugin (T2)",
         description:
-          "PAUSED (disabled in the allowlist): needs a game-server restart (not on the docker-socket-filter allowlist) and an exec for the announcement, both refused by the filter. When re-enabled: restore the jars ops_deploy_plugin kept, rolling with delay_seconds between services and a health check each. T2: confirm=true, delay_seconds >= 60 and an armed helper.",
+          "Restore the jars ops_deploy_plugin kept, rolling with delay_seconds between services and a health check each. T2: confirm=true, delay_seconds >= 60, armed helper, a recent backup (younger than 12h) and acknowledge_no_announce=true (no in-game warning is sent).",
         inputSchema: {
           confirm: z.boolean().describe("Must be true."),
-          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Lead time and pause between services (>= 60)"),
+          acknowledge_no_announce: z
+            .boolean()
+            .describe("Must be true: no in-game warning is sent (there is no rcon/exec channel)."),
         },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      async ({ confirm, delay_seconds }) => forward("ops_rollback_plugin", { confirm, delay_seconds }, "T2"),
+      async ({ confirm, delay_seconds, acknowledge_no_announce }) =>
+        forward("ops_rollback_plugin", { confirm, delay_seconds, acknowledge_no_announce }, "T2"),
     );
   }
 }

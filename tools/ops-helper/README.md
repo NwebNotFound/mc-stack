@@ -20,17 +20,27 @@ hermes-mcp            (compose networks `mcp` + `mc-stack-ops`; read_only,
         ▼
 ops-helper            (NO docker socket: DOCKER_HOST=tcp://docker-socket-filter:2375,
         │              repo mounted read-only, fixed allowlist)
-        │  GET ps/inspect/logs + POST restart of two exact names; create/exec/
-        ▼  start/stop/kill are refused by the filter
+        │  GET ps/inspect/logs + POST restart of the T1/T2 names; create/exec/
+        │  start/stop/kill are refused by the filter
+        │  build/test  ->  job-<uuid>.json  ->  volume `mc-stack-ops-jobs`
+        ▼
 docker-socket-filter  (this repo, no dependencies; the ONLY
         │              service with /var/run/docker.sock; no host port)
         ▼
 mc-stack services: velocity · lobby · survival · pvp · vipworld-1..3 · bot
                    craftcore-db · playit · cloudflared · hermes-mcp
+
+plugin-builder        (NO docker socket, network_mode: none, read_only,
+        │              cap_drop ALL, no-new-privileges, CPU/RAM/PID caps)
+        │  polls `ops-jobs`, validates strictly, runs ONE fixed command from
+        ▼  config/ops-allowlist.json, writes `result-<uuid>.json` + the jar into
+           the artifact volume `mc-stack-ops-artifacts`
 ```
 
 Nothing in this service starts by itself: it lives in the compose profile `ops`
-and is disarmed (`OPS_ARMED=false`) until Nils says otherwise.
+and is disarmed (`OPS_ARMED=false`) until Nils says otherwise. `plugin-builder`
+is in the same profile and is the only new service; it holds no socket and has no
+network at all.
 
 ## Ops tools: threat model
 
@@ -52,7 +62,7 @@ listener for T2.
    token does not grant), the **local listener** (T2 tools exist on 8767 only,
    which the tunnel does not route), and the global `OPS_ARMED=true` env var on
    the helper. With the defaults (no ops token, disarmed) a stolen read-only
-   token can read status/logs and run builds — nothing else.
+   token can read status/logs and ask for a build/test — nothing else.
 
    The level is decided by *which* bearer token the caller presents: a plain
    `HERMES_MCP_TOKEN` is the `base` level (T0 only), `HERMES_MCP_OPS_TOKEN` is
@@ -83,15 +93,17 @@ listener for T2.
    `^[a-z0-9][a-z0-9-]{0,31}$` and be listed for that action; every other
    parameter is an enum, an integer range or a sha256. `bot; rm -rf /`,
    `../../etc/passwd`, `lobby --privileged` and a smuggled `argv` key are refused
-   before a single docker call happens (see `test/injection.test.mjs`).
+   before a single docker call happens (see `test/injection.test.mjs`). Builds and
+   tests are not an exception: the helper writes a 5-field job file and
+   `plugin-builder` re-validates it (`test/validate.test.mjs`).
 5. **Blast radius of the helper itself.** Even if an attacker got the shared
    secret, the allowlist forbids — in code, not only in the JSON —
    `craftcore-db`, `hermes-mcp`, `ops-helper`, `hermes-test`, and there is no
    action that maps to `docker compose down`, `down -v`, `rm`, `volume
    rm/prune`, `system prune` or `kill -9`. Writes are limited to
    `config/lobby-plugins` and `config/survival-plugins` (one fixed file name per
-   service) plus the artifact volume and `backups/`. The rest of the repo is a
-   read-only mount. `read_only: true`, `cap_drop: ALL`,
+   service) plus the artifact/job volumes and `backups/`. The rest of the repo is
+   a read-only mount. `read_only: true`, `cap_drop: ALL`,
    `no-new-privileges:true` still apply to the helper container.
 6. **Kill switch.** `touch data/ops-helper/DISABLED` (or `OPS_DISABLED=true`)
    makes the helper refuse every action above T0, immediately and without a
@@ -99,12 +111,46 @@ listener for T2.
 7. **Order of operations before arming T2.** `OPS_HELPER_TOKEN` and
    `HERMES_MCP_OPS_TOKEN` have to be set in `.env`. Then decide who may hold the
    ops token, because from that moment on they can restart `bot`/
-   `cloudflared-mcp` (T1) even through the tunnel. `OPS_ARMED=true` is the last
-   step and the only one that unlocks game-server restarts — and those still
-   require the local listener, so they cannot be triggered from the internet at
-   all. **OAuth for the claude.ai connector is still not implemented and is not
-   part of this PR**; it remains the recommended future replacement for the
-   shared bearer token.
+   `cloudflared-mcp` (T1) even through the tunnel. Warm the offline caches (see
+   "plugin-builder" below). `OPS_ARMED=true` is the last step and the only one
+   that unlocks game-server restarts, plugin deploys and rollbacks — and those
+   still require the local listener, so they cannot be triggered from the
+   internet at all. **OAuth for the claude.ai connector is still not implemented
+   and is not part of this PR**; it remains the recommended future replacement
+   for the shared bearer token.
+
+### Threat model, part 2: what a *stolen ops token plus local access* can do
+
+T2 exists now, so the honest bar is higher than "read status/logs". Assume an
+attacker holds `HERMES_MCP_OPS_TOKEN` **and** can reach `127.0.0.1:8767` (i.e.
+they are already on the host/WSL). With `OPS_ARMED=true` they can:
+
+* restart `lobby`, `survival` or `velocity` (players are kicked; the world is not
+  wiped) — `ops_restart_game`;
+* deploy whatever jar is currently recorded as the last successful build into
+  `config/lobby-plugins` + `config/survival-plugins` and restart both servers —
+  `ops_deploy_plugin`;
+* roll those jars back — `ops_rollback_plugin`;
+* restart `bot` / `cloudflared-mcp` (T1) and read everything the read-only level
+  can read.
+
+They still **cannot**: build a malicious jar through this stack (the build runs
+the repo's own gradle command in a no-network container from a read-only
+checkout — they would have to change the repo, which is the same trust level as
+editing the helper's source), deploy an arbitrary file (only the artifact volume's
+last-build jar can be deployed, and its sha256 is re-hashed in the helper),
+restart the database, `hermes-mcp`, `hermes-test` or the helper itself, exec in
+any container, create/stop/kill containers, or touch `.env`/`secrets/`/`data/`.
+
+Every one of those actions costs a 1800 s cooldown and requires
+`confirm=true` **and** `acknowledge_no_announce=true` (see "Announcement" below),
+and every call lands in the audit log with its `audit_id`.
+
+What is **not** mitigated by design: a local operator can restart a game server
+in a way that loses in-flight chunk writes (that is why the backup gate exists),
+and a stolen token plus local access is, by construction, an operator. If the
+token is suspected leaked, `touch data/ops-helper/DISABLED` stops everything
+above T0 instantly.
 
 ### What a stolen token can still do (be honest about it)
 
@@ -115,12 +161,15 @@ named containers — nothing else. With the *read-only* token (`base` level):
 * read repo branch/HEAD/dirty count and backup listings;
 * read filesystem/`du` sizes.
 
-With the *ops* token (`ops` level) exactly one extra thing is possible:
-`ops_restart_service` with `confirm=true`, i.e. restarting `bot` or
-`cloudflared-mcp` (rate-limited by a 300 s cooldown). Everything else is
-`"enabled": false` in `config/ops-allowlist.json` (see "Disabled actions" below)
-**and** has no route in the filter, so it is refused twice: build, test, exec,
-game-server restart and deploy are impossible even with the ops token.
+With the *ops* token (`ops` level) the extra surface is exactly:
+`ops_restart_service` with `confirm=true` — restarting `bot` or `cloudflared-mcp`
+(300 s cooldown) **plus, only on the local listener with the helper armed**, the
+three T2 actions (game-server restart, plugin deploy, plugin rollback, 1800 s
+cooldown, confirm + delay >= 60 s + recent backup + `acknowledge_no_announce=true`).
+Everything else is `"enabled": false` in `config/ops-allowlist.json` (see
+"Disabled actions" below) **and** has no route in the filter, so it is refused
+twice: exec and container create/stop/kill stay impossible even with the ops
+token.
 
 That is a deliberate, bounded list — not "arbitrary root on the host".
 
@@ -129,76 +178,87 @@ That is a deliberate, bounded list — not "arbitrary root on the host".
 | Tier | Actions | Token level | Enabled now | Gates |
 | --- | --- | --- | --- | --- |
 | T0 | `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_git_state` | `base` | **yes** (read-only) | none |
-| T0 | `ops_players`, `ops_build_plugin`, `ops_run_tests` | `base` | **no** – see below | – |
+| T0 | `ops_build_plugin`, `ops_run_tests` | `base` | **yes** (no player impact) | no container is created: jobs go to plugin-builder |
+| T0 | `ops_players` | `base` | **no** – needs docker exec | – |
 | T1 | `ops_restart_service` (bot, cloudflared-mcp) | `ops` | **yes** | `confirm=true` + cooldown 300 s |
-| T1 | `ops_backup_now` | `ops` | **no** – see below | `confirm=true` + cooldown 300 s |
-| T2 | `ops_restart_game` (lobby, survival, velocity), `ops_deploy_plugin`, `ops_rollback_plugin` | `ops` **+ local listener** | **no** – see below | `confirm=true` + `OPS_ARMED=true` + `delay_seconds >= 60` + fresh backup + cooldown 1800 s |
+| T1 | `ops_backup_now` | `ops` | **no** – no PowerShell in the helper image | `confirm=true` + cooldown 300 s |
+| T2 | `ops_restart_game` (lobby, survival, velocity), `ops_deploy_plugin`, `ops_rollback_plugin` | `ops` **+ local listener** | **yes** (armed + gates) | `confirm=true` + `OPS_ARMED=true` + `delay_seconds >= 60` + **recent backup** + `acknowledge_no_announce=true` + cooldown 1800 s |
 
 ### Disabled actions (current state)
 
-Every action that needs a Docker call the filter cannot serve is disabled in
-`config/ops-allowlist.json` (`"enabled": false` plus a `disabled_reason`). The
-reason is returned verbatim to the caller, so a paused tool explains itself
-instead of failing vaguely:
-
-| Action | Why it is paused |
+| Action | Why it is still paused |
 | --- | --- |
-| `ops_build_plugin`, `ops_run_tests` | starting a throwaway container needs `POST /containers/create`; the filter has no such route |
 | `ops_players` | needs `POST /exec/{id}/start`; the filter has no exec route |
 | `ops_backup_now` | the helper image has no PowerShell, so `backup.ps1` cannot run here |
-| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` | T2: the game-server names are not on the filter's restart allowlist, and/or the announcement needs an exec |
 
-`ops_restart_service` (T1) is the one action that was re-enabled: the filter can
-serve exactly the route it needs.
+Both stay `"enabled": false` with a `disabled_reason` that is returned verbatim,
+so a paused tool explains itself instead of failing vaguely.
 
-Disabled is the default and the safe state; re-enabling one action is a
-one-line change in the allowlist (needs a helper restart), and re-enabling a
-`POST`-based action also needs the proxy to grant the matching method, which is
-exactly what this PR refuses to do (see the next section).
+Everything else is enabled and covered above. Disabled is still the safe default:
+re-enabling one action is a one-line change in the allowlist (needs a helper
+restart), and a `POST`-based action additionally needs the proxy to grant the
+matching method — which this PR still refuses for everything except the single
+`/containers/<name>/restart` route for exact allowlisted names.
 
 Gate order is fixed and has no bypass flag: token level + listener → kill switch →
-action enabled → confirm → armed → delay → cooldown → per-action rate limit
-(12 calls / 60 s by default). A call that passes the gates but fails during
-execution still starts its cooldown, so a broken action cannot be hammered.
+action enabled → confirm → armed → delay → no-announce acknowledgement → cooldown
+→ per-action rate limit (12 calls / 60 s by default). A call that passes the gates
+but fails during execution still starts its cooldown, so a broken action cannot
+be hammered.
 
 T2 additionally:
 
-* **announcement** — `docker exec <container> rcon-cli say …` with a fixed
-  message built from the validated service name and the integer delay. If no
-  container answers (velocity has `ENABLE_RCON=FALSE` and no `rcon-cli` in its
-  image), the result says `announced: false` and explicitly states that **no
-  in-game announcement was made** — the action still proceeds, because the gate
-  is the delay and the report, not the chat message;
-* **backup before touching anything** — see below;
+* **no announcement (and it says so)** — see below;
+* **recent backup, never a create** — see below;
 * **health check** after each restart (poll `docker inspect .State`, up to
   `deploy.health_timeout_seconds`);
 * **deploy**: rolling per service with `delay_seconds` between them, the previous
   jar kept under `/artifacts/rollback/<service>-craftcore-<sha12>.jar`, jar hash
-  verified after writing, and an automatic rollback of everything already
-  touched when a step fails (`code: health_check_failed_rolled_back`).
+  verified after writing, and an automatic rollback of everything already touched
+  when a step fails (`code: health_check_failed_rolled_back`).
+
+### Announcement: there is none (and `acknowledge_no_announce` makes that explicit)
+
+Reaching a server console needs `docker exec` (or an RCON/broadcast route the ops
+layer does not have), and the filter refuses every exec route. So a T2 action does
+**not** warn players: an `ops_restart_game` (or the restart at the end of a deploy)
+**kills the running game server process and disconnects everyone online without
+warning** — no countdown, no `/say`, no title. The helper cannot even reach the
+game console to do better today. Instead of pretending, the tier gate requires
+`acknowledge_no_announce=true` (otherwise `announcement_not_acknowledged`), and
+the result carries `announcement: { announced: false, detail: "NO in-game
+announcement was made…" }`. If a real channel is added later (e.g. an RCON line
+emitted by the Discord bot), `announcementStatus()` in `src/actions.ts` is the one
+place to change and the gate flag can then be dropped.
 
 ## Backup handling (important caveat)
 
-T2 requires a **fresh backup**: a `backups/daily-*/COMPLETE.txt` younger than
-`limits.backup_max_age_seconds` (default 900 s). The helper uses the repo's own
-`backup.ps1` — it does not invent a second backup procedure. Two honest
-limitations:
+T2 requires a **recent backup**, it never creates one: the newest
+`backups/daily-.../` directory with a `COMPLETE.txt` marker must be younger than
+`tiers.T2.backup_max_age_hours` (default **12 h**, configurable in
+`config/ops-allowlist.json`). Missing → `no_recent_backup`; too old →
+`stale_backup`, and the message says to run `backup.ps1` on the host. The
+`ops_backups_list` tool is what tells you the age.
 
-* `backup.ps1` is PowerShell and the helper image has no `pwsh`, so
-  `ops_backup_now` currently returns `backup_interpreter_missing` with the exact
-  host command (`powershell -ExecutionPolicy Bypass -File <repo>\backup.ps1`).
-  The T2 gate then accepts a *recent* backup that was made on the host, and
-  refuses the action if there is none.
-* `backup.ps1` stops lobby+survival for the duration of the copy (that is what
-  the script does), so `ops_backup_now` is T1 by the letter of the design but not
-  player-free in practice. Nils may prefer to keep backups manual/host-side and
-  leave `ops_backup_now` unused.
+`ops_backup_now` stays **paused**, because the helper image has no PowerShell and
+the repo's own `backup.ps1` also stops lobby+survival for the duration of the
+copy — i.e. it is not player-free. **Design options, deliberately not built in
+this PR:**
 
-Alternative, not implemented here: the Discord bot already does an RCON-pause +
-`tar` backup (`bot/bot.py::backup`, it has `data/lobby` and `data/survival`
-mounted read-only). Doing the same in ops-helper would mean mounting both world
-directories read-only — a bigger surface than a PowerShell interpreter, so this
-is left as a decision, not a surprise.
+1. **Host task with a fixed script allowlist** (preferred): a Windows scheduled
+   task runs `backup.ps1` nightly; the helper only ever *reads* the freshness of
+   its output. No new privilege in the helper at all, and "recent backup" is then
+   always satisfiable.
+2. **Hot backup (dump + `save-off`)** — the approach the Discord bot already uses
+   (`bot/bot.py::backup`: RCON `save-off`/`save-all flush`, then `tar`, then
+   `save-on`). Doing it from ops-helper would mean mounting `data/lobby` and
+   `data/survival` read-only *and* granting an exec/RCON route, which is a bigger
+   surface than a PowerShell interpreter and re-opens the exec question the filter
+   closed. Not worth it while option 1 exists.
+
+Alternative, not implemented here: the Discord bot already owns that RCON-pause +
+`tar` backup. Delegating "please back up now" to the bot would be a *different*
+service boundary (bot, not helper) and is left as a decision, not a surprise.
 
 ## Allowlist format (`config/ops-allowlist.json`)
 
@@ -216,7 +276,7 @@ all make the helper refuse to start.
 | `paths` | repo / backups / artifacts mounts, plugin jar file name, backup script name |
 | `services` | per action kind: `observe`, `logs`, `players`, `restart_t1`, `restart_game`, `deploy_plugin` |
 | `forbidden_services` / `forbidden_operations` | documented never-list; the mutating service lists are checked against it at load time |
-| `build` | `network` (`none`), `limits` (`cpus`/`memory`/`pids`), image + argv for the plugin build and each test target (`source`, `command`, `setup?`, `artifact?`, `test_results?`, `cache?`) |
+| `build` | `network` (`none`), `limits` (`cpus`/`memory`/`pids`), image + argv for the plugin build and each test target (`source`, `command`, `setup?`, `artifact?`, `test_results?`, `cache?`) — these are the fixed commands plugin-builder runs |
 | `deploy` | rollout order, plugin dir per service, health timeout/poll |
 | `actions` | which `ops_*` action exists, its tier, its `impl` and whether it is enabled |
 
@@ -241,7 +301,32 @@ everything else:
 | `GET` | `/containers/json` | `all`, `filters` | `ops_status` (`docker ps`) |
 | `GET` | `/containers/<ref>/json` | *(none)* | `ops_logs`, `ops_restart_service` (`docker inspect`) |
 | `GET` | `/containers/<ref>/logs` | `stdout`, `stderr`, `tail<=300`, `timestamps`, `since`, `until` | `ops_logs` |
-| `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | `ops_restart_service`, **only** for an exact name from the allowlist |
+| `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | `ops_restart_service`, `ops_restart_game`, `ops_deploy_plugin` — **only** for an exact name from `OPS_FILTER_RESTART_ALLOW` (T1) or `OPS_FILTER_RESTART_ALLOW_T2` (T2) |
+
+The restart allowlist is split in two on purpose:
+
+| Env | Contents | Who triggers it |
+| --- | --- | --- |
+| `OPS_FILTER_RESTART_ALLOW` | `mc-stack-bot-1`, `mc-stack-cloudflared-mcp-1` | T1 `ops_restart_service` |
+| `OPS_FILTER_RESTART_ALLOW_T2` | `mc-stack-lobby-1`, `mc-stack-survival-1`, `mc-stack-velocity-1` | T2 `ops_restart_game` / deploy / rollback |
+
+The Docker API has **one** restart path, so the filter accepts the union and the
+T1/T2 split is enforced one level up, by the helper's own `services.restart_t1` /
+`services.restart_game` lists (a test asserts they never overlap). The audit line
+says which list matched (`restarts: "t1" | "t2"`). `craftcore-db`, `hermes-mcp`,
+`hermes-test`, `ops-helper` and the filter itself are in **neither** list.
+
+> **What the filter does NOT enforce, plainly:** the T1/T2 separation is *only*
+> enforced by this helper. `POST /containers/<name>/restart` is a single route to
+> the Docker API, so the filter can only say yes/no per exact container name — it
+> cannot tell whether the caller is a T1 restart of `bot` or a T2 restart of
+> `lobby`. A caller that bypassed the helper and talked to the filter directly
+> (i.e. already had the internal `ops` network plus a way to reach it) could
+> therefore restart a game server without any of the T2 gates — no `OPS_ARMED`,
+> no cooldown, no recent backup, no no-announce acknowledgement. The T2 gates and
+> the local-only 8767 listener are the helper's job, and the helper is the only
+> thing allowed to speak to the filter. The `t1`/`t2` split in the filter config
+> exists to keep the *lists* auditable and disjoint, not to enforce the tiers.
 
 Everything else is refused: `POST /containers/create`, `/start`, `/stop`,
 `/kill`, `/pause`, `/rename`, `/update`, `DELETE /containers/<x>`,
@@ -252,12 +337,16 @@ duplicate `Content-Length`, `Transfer-Encoding`, `Upgrade` and any request body.
 
 A unit test reads the service block out of `compose.yaml` and asserts that
 **exactly one** service mounts the socket, that it is the filter, that it has no
-host port, that it lives only in the internal network, and that the restart
-allowlist contains the two T1 names and no game server
+host port, that it lives only in the internal network, that the restart lists keep
+the T1 names separate from the T2 game servers with no overlap, that
+`plugin-builder` has `network_mode: none`, no socket and hard CPU/RAM/PID caps,
+that its repo mount is **narrow** (sources + allowlist + `.git`, all `:ro`) and
+that it mounts **neither** `.env`/`secrets/`/`data/` **nor** the repo root, and
+that `ops-helper` still keeps the whole repo read-only on purpose
 (`tools/ops-helper/test/proxy.test.mjs`). The filter's own behaviour is covered
 by `tools/docker-socket-filter/test/filter.test.mjs` (fake upstream) and
 `tools/docker-socket-filter/test/real-daemon.sh` (real socket, throwaway
-container).
+containers).
 
 ### Why the filter replaced tecnativa/docker-socket-proxy
 
@@ -276,9 +365,10 @@ included. The path-exact filter was the only way to get the T1 restart back
 | --- | --- | --- |
 | `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_git_state` | enabled | enabled (unchanged) |
 | `ops_restart_service` (T1) | paused | **enabled** — `confirm=true` + ops token, restart by exact container name |
-| `ops_players`, `ops_build_plugin`, `ops_run_tests` | paused | still paused: they need `exec` / `create`, which the filter refuses |
+| `ops_build_plugin`, `ops_run_tests` | paused | **enabled** — they no longer create a container; the job goes to `plugin-builder` over a volume |
+| `ops_players` | paused | still paused: needs `exec`, which the filter refuses |
 | `ops_backup_now` | paused | still paused: no PowerShell in the helper image |
-| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` (T2) | paused | still paused: the game-server names are not on the filter allowlist, and the announcement needs `exec` |
+| `ops_restart_game`, `ops_deploy_plugin`, `ops_rollback_plugin` (T2) | paused | **enabled** — the T2 names are on the (separate) filter list; no announcement, so the gate demands `acknowledge_no_announce=true` |
 
 `ops_restart_service` now restarts by **container name**, never by id: the
 filter's allowlist is a list of exact names, so a name is the only reference that
@@ -295,15 +385,16 @@ The filter is tested twice, and both are automated:
   covers the allow table, every forbidden route, traversal/encoding/CRLF/
   smuggling vectors, prefix names, container ids, the `t` bounds and pipelining.
 * `tools/docker-socket-filter/test/real-daemon.sh` — builds the image, runs it
-  with the **real** `/var/run/docker.sock` on a throwaway network next to a
-  throwaway canary container, and probes it: the canary restarts (`204`), a real
-  mc-stack container / game server / container id / `create` / `exec` / `stop` /
-  every injection variant is `403`. Only `hermes-dsf-*` containers are created,
-  each self-exits, and no `docker compose up` happens.
+  with the **real** `/var/run/docker.sock` on a throwaway network next to two
+  throwaway canaries (one on the T1 list, one on the T2 list), and probes it:
+  both canaries restart (`204`), a real mc-stack container / game server /
+  database / hermes-mcp / container id / `create` / `exec` / `stop` / every
+  injection variant is `403`. Only `hermes-dsf-*` containers are created, each
+  self-exits, and no `docker compose up` happens.
 
 ```
 sh tools/docker-socket-filter/test/real-daemon.sh
-# -> REAL-DAEMON PROBE: ALL PASS   (43 cases + pipelining)
+# -> REAL-DAEMON PROBE: ALL PASS   (45 cases + pipelining)
 # -> containers still running that mount the socket: only the ones that
 #    self-exit within their timeout
 ```
@@ -324,35 +415,74 @@ The filter is a genuinely tight boundary, but it is not a sandbox:
   boundary; the filter is defence in depth, and the two now agree far more
   closely than the section-based proxy ever did.
 
-## Build containers: offline and capped
+### Why the repo mount is not narrowed (unlike plugin-builder's)
 
-Every build/test container is a throwaway that runs with:
+`ops-helper` mounts the whole repo read-only (`./:/repo:ro`). `plugin-builder`
+deliberately does **not**: it sees only `plugins-src/`, `tools/`,
+`config/ops-allowlist.json` and `.git` (see "Builds and tests" below). The
+asymmetry is intentional, and the helper's mount stays whole because narrowing it
+would change behaviour, not just blast radius:
 
-* `--network none` — no interface at all. Dependencies therefore come from
-  **pre-warmed cache volumes** mounted at the tool's canonical path
-  (`build.plugin.cache` / `build.tests.<name>.cache`): `gradle` →
-  `mc-stack-ops-gradle-cache:/home/gradle/.gradle`, `npm` →
-  `mc-stack-ops-npm-cache:/root/.npm`. The gradle commands carry `--offline` and
-  the npm setup carries `--offline`, so a missing cache fails loudly instead of
-  silently reaching the network.
-* `--cpus`, `--memory`, `--pids-limit` from `build.limits`, so a build cannot
-  starve the Minecraft servers.
-* `--rm --cap-drop ALL --security-opt no-new-privileges`, and only the volumes it
-  needs (the staged source + its cache) — never a host path.
+* `ops_git_state` runs `git status --porcelain --untracked-files=no` over the
+  **whole** worktree. With a narrowed mount every unmounted tracked file looks
+  deleted, so the tool would report a permanently dirty repo — a lying status is
+  worse than an honest read-only mount.
+* `ops_disk` runs `df` on the repo **root** and `du` on `/repo/data`. A narrower
+  mount would move the root onto the container's overlay and report the
+  container's filesystem numbers instead of the repo's.
+* `ops_deploy_plugin` / `ops_rollback_plugin` read `/repo/backup.ps1` and the T2
+  gate inspects the backup directory; deploy writes plugin jars into
+  `config/lobby-plugins` / `config/survival-plugins`.
 
-Cold-cache note: the two cache volumes must be warmed **once on the host**, which
-(of course) needs network on the host side, not in the build container:
+On top of that, the helper's trust level already equals the repo's own code —
+editing `config/ops-allowlist.json` or the helper's source requires a repo commit
+plus a restart, and the helper can already restart game servers and write plugin
+jars. Keeping `.env`, `secrets/` and `data/` out of reach matters for the service
+that *runs build commands from source* (`plugin-builder`, no network, no socket),
+not for the control plane whose whole job is host-level ops. `.env` is never read
+by the helper (no tool takes it as input, no log line contains it) and `data/` is
+only ever measured, never read — but the mount itself is whole, and that is the
+honest statement.
+
+## Builds and tests: plugin-builder, offline and capped
+
+`ops_build_plugin` and `ops_run_tests` no longer start a container. The helper
+writes a five-field job file into the shared `mc-stack-ops-jobs` volume and polls
+for the answer; **`plugin-builder`** (a permanent service in the same `ops`
+profile) reads it, re-validates everything and runs one fixed command from
+`config/ops-allowlist.json`. See `tools/plugin-builder/README.md` for the full
+protocol and threat model. The properties that matter here:
+
+* `network_mode: none` — no interface at all; dependencies come from pre-warmed
+  cache volumes (`ops-gradle-cache` → `/home/gradle/.gradle`, `ops-npm-cache` →
+  `/root/.npm`). Every gradle command carries `--offline` and the npm setup does
+  too, so a cold cache fails loudly instead of silently reaching the network.
+* CPU/RAM/PID caps (`cpus: "1.5"`, `mem_limit: 2g`, `pids_limit: 512`) so a build
+  cannot starve the Minecraft servers.
+* `read_only`, `cap_drop: ALL`, `no-new-privileges`, a tmpfs `/work` for the build
+  tree, and the repo mounted **read-only** — the builder never writes into the
+  checkout.
+* **The builder's repo mount is NARROW**: `plugins-src/`, `tools/`,
+  `config/ops-allowlist.json` and `.git` only — never the repo root, so `.env`,
+  `secrets/` and `data/` are unreachable from it (a test asserts that). It builds
+  the tree exported by `git archive <ref> -- <source>`, i.e. exactly the commit a
+  job names, and reports a diverging working tree as `dirty` / `dirty_files`
+  (a count) instead of silently baking local edits into an artifact. See
+  `tools/plugin-builder/README.md`.
+* **No Docker socket.** It is the second service the socket never touches (after
+  `ops-helper`); a test asserts it.
+
+Cold-cache warm-up (once, on the host; see the plugin-builder README for the exact
+commands):
 
 ```
 docker volume create mc-stack-ops-gradle-cache mc-stack-ops-npm-cache
-docker run --rm -v mc-stack-ops-gradle-cache:/home/gradle/.gradle -v "$PWD/plugins-src/craftcore:/src" -w /src gradle:9-jdk gradle --no-daemon dependencies
-docker run --rm -v mc-stack-ops-npm-cache:/root/.npm -v "$PWD/tools/hermes-mcp:/src" -w /src node:22-alpine npm ci --no-audit --no-fund
+# then run `gradle dependencies` / `npm ci` once with each cache mounted
 ```
 
-If a cache genuinely cannot be warmed, `build.network` can name a dedicated,
-narrowly scoped bridge network instead of `none` — `host`, `bridge` and
-`default` are rejected at load time. That is an explicit, documented exception,
-not the default.
+`build.limits` stays in the allowlist and is asserted by a test, but the enforced
+caps now live in the compose service (`plugin-builder`), which is what actually
+runs.
 
 ## Audit log
 
@@ -378,7 +508,10 @@ deletes the file.
 | `OPS_ALLOWLIST_PATH` | `/repo/config/ops-allowlist.json` | allowlist location |
 | `OPS_DATA_DIR` | `/app/data/ops-helper` | audit log, cooldown state, `DISABLED` |
 | `OPS_ARTIFACTS_DIR` | `/artifacts` | artifact volume mount |
-| `OPS_ARTIFACTS_VOLUME` / `OPS_GRADLE_CACHE_VOLUME` / `OPS_NPM_CACHE_VOLUME` | `mc-stack-ops-artifacts` / `mc-stack-ops-gradle-cache` / `mc-stack-ops-npm-cache` | named volumes handed to the throwaway build containers (no host path is ever guessed) |
+| `OPS_ARTIFACTS_VOLUME` / `OPS_GRADLE_CACHE_VOLUME` / `OPS_NPM_CACHE_VOLUME` | `mc-stack-ops-artifacts` / `mc-stack-ops-gradle-cache` / `mc-stack-ops-npm-cache` | named volumes handed to the build path (no host path is ever guessed) |
+| `OPS_JOBS_DIR` | `/jobs` | shared volume with plugin-builder: the helper writes `job-<uuid>.json` here |
+| `OPS_BUILDER_RESULTS_DIR` | `/artifacts/builder` | where plugin-builder writes `result-<uuid>.json` |
+| `OPS_BUILDER_TIMEOUT_SECONDS` / `OPS_BUILDER_POLL_MS` | `1800` / `1000` | how long to wait for a job answer, and how often to look |
 | `OPS_ACTION_TIMEOUT_SECONDS` / `OPS_BUILD_TIMEOUT_SECONDS` | `120` / `1800` | per-command and per-build timeouts |
 | `OPS_DOCKER_BIN` | `docker` | docker CLI path |
 | `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-filter:2375`; without the filter the helper cannot reach Docker at all |
@@ -394,22 +527,25 @@ deletes the file.
    HERMES_MCP_OPS_TOKEN=<openssl rand -hex 32>    # the second, elevated token
    ```
 
-2. Start the socket filter, the helper and MCP (this **recreates**
-   `hermes-mcp`: it gains a second network and the 127.0.0.1 ops port — do it in a
-   maintenance window):
+2. Start the socket filter, the helper, plugin-builder and MCP (this
+   **recreates** `hermes-mcp`: it gains a second network and the 127.0.0.1 ops
+   port — do it in a maintenance window):
 
    ```
-   docker compose --profile ops --profile mcp up -d --build docker-socket-filter ops-helper hermes-mcp
-   docker compose logs -f ops-helper docker-socket-filter
+   docker compose --profile ops --profile mcp up -d --build docker-socket-filter ops-helper plugin-builder hermes-mcp
+   docker compose logs -f ops-helper docker-socket-filter plugin-builder
    ```
 
-3. Warm the two offline build caches once (see "Build containers" above).
+3. Warm the two offline build caches once (see the plugin-builder README; the
+   builder container itself has no network).
 
 4. Verify it is locked down:
 
    ```
    docker port mc-stack-ops-helper-1                     # empty: no host port
+   docker port mc-stack-plugin-builder-1                 # empty: no host port
    docker port mc-stack-docker-socket-filter-1           # empty: no host port
+   docker inspect -f '{{.HostConfig.NetworkMode}}' mc-stack-plugin-builder-1   # none
    docker compose logs docker-socket-filter | tail       # the audit log
    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8766/healthz   # unreachable from the host
    docker exec mc-stack-hermes-mcp-1 node -e "fetch('http://ops-helper:8766/healthz').then(r=>console.log(r.status))"  # 200
@@ -419,12 +555,12 @@ deletes the file.
    ```
 
 5. Arm T2 last: set `OPS_ARMED=true` in `.env` and
-   `docker compose --profile ops up -d ops-helper`. Game-server restarts then
-   also require the ops token **and** the local listener, so they cannot be
-   triggered from the internet. **Note:** in the current allowlist the T2 actions
-   are `"enabled": false` anyway (their container names are not on the filter's
-   restart allowlist), so arming alone does not enable them — see "Disabled
-   actions".
+   `docker compose --profile ops up -d ops-helper`. Game-server restarts, plugin
+   deploys and rollbacks then also require the ops token **and** the local
+   listener, so they cannot be triggered from the internet. **Note:** every T2
+   action additionally needs `confirm=true`, `delay_seconds >= 60`, a backup
+   younger than 12 h and `acknowledge_no_announce=true`, so arming is not the same
+   as "one call and it happens".
 
 ## Tests
 
@@ -433,17 +569,19 @@ cd tools/ops-helper
 npm ci && npm test          # node --test over dist/, no docker and no network
 ```
 
-The suite never talks to Docker, to a container or to the internet: the runner is
-faked, so running it cannot touch the running stack. It covers allowlist
-validation (bad impl, bad service names, `..`, argv tokens with shell
+The suite never talks to Docker, to a container or to the internet: the runner and
+the job channel are faked, so running it cannot touch the running stack. It covers
+allowlist validation (bad impl, bad service names, `..`, argv tokens with shell
 metacharacters, forbidden services, T0/T2 invariants, the mandatory build
-limits/`network`), the tier gates (T2 without armed/confirm/delay, kill switch,
-cooldown, rate limit), injection attempts (`bot; rm -rf /`, `$(id)`,
-`../../etc/passwd`, smuggled `argv`/`command` keys, prototype-shaped action
-names), the build container argv (`--network none`, `--cpus`, `--memory`,
-`--pids-limit`, the offline cache mount), the audit log (append-only, redacted,
-truncated), the kill switch, and the T2 deploy/rollback flow end-to-end against a
-fake runner (including the automatic rollback when a health check fails).
+limits/`network`, the T2 backup window), the tier gates (T2 without armed/confirm/
+delay/acknowledgement, kill switch, cooldown, rate limit), injection attempts
+(`bot; rm -rf /`, `$(id)`, `../../etc/passwd`, smuggled `argv`/`command` keys,
+prototype-shaped action names), the job the helper hands to plugin-builder (exact
+key set, sha shape, no container started), the artifact hash re-check, the audit
+log (append-only, redacted, truncated), the kill switch, the real `docker ps`
+NDJSON lines that used to blank `ops_status`, and the T2 deploy/rollback flow
+end-to-end against a fake runner (including the automatic rollback when a health
+check fails).
 
 Two suites are specific to this PR:
 
@@ -451,16 +589,16 @@ Two suites are specific to this PR:
   **exactly one** service mounts the Docker socket (the filter), that it has no
   host port, lives only in the internal `mc-stack-ops` network, is hardened
   (`read_only`, `cap_drop: ALL`, `no-new-privileges`), that `ops-helper` mounts
-  no socket and talks to it over TCP, and that the restart allowlist contains the
-  two T1 names and **no** game server — so the boundary cannot drift without a
-  red test;
-* the disabled actions are asserted twice: `allowlist.test.mjs` proves the
-  shipped allowlist pauses the right actions (and enables exactly
-  `ops_restart_service` on top of the read-only set) and that each paused action
-  carries a `disabled_reason`, and `dispatch.test.mjs` proves a paused action
-  returns `action_disabled` with that reason **and never reaches Docker**. The
-  implementations themselves stay covered by forcing those actions enabled in a
-  test-local copy of the allowlist.
+  no socket and talks to it over TCP, that the two restart lists are disjoint and
+  contain no forbidden container, and that `plugin-builder` has `network_mode:
+  none`, no socket, no host port and hard resource caps — so the boundary cannot
+  drift without a red test;
+* the paused actions are asserted twice: `allowlist.test.mjs` proves the shipped
+  allowlist pauses exactly `ops_players` and `ops_backup_now` (and enables the
+  rest), and `dispatch.test.mjs` proves a paused action returns `action_disabled`
+  with that reason **and never reaches Docker**. The implementations themselves
+  stay covered by forcing those actions enabled in a test-local copy of the
+  allowlist.
 
 The filter itself has its own suite in `tools/docker-socket-filter/`:
 `test/filter.test.mjs` (fake upstream, unit + live TCP) and
@@ -469,6 +607,10 @@ The filter itself has its own suite in `tools/docker-socket-filter/`:
 
 ## Not in phase 1 (documented concepts, deliberately not implemented)
 
+* **`ops_backup_now`.** Stays paused; the design options (host task with a fixed
+  script allowlist vs. a hot dump + `save-off`) are written down under "Backup
+  handling" — deliberately not built here, because both need access this PR is
+  not willing to grant.
 * **Website deploy.** Needs a Cloudflare API token that the helper does not have
   and must not get in this PR. Concept if it is ever wanted: a *separate* token
   with the narrowest possible scope (Workers Scripts:Edit for that one script

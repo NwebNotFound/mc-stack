@@ -20,10 +20,20 @@ const SERVICE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * Deliberately an explicit template instead of `{{json .}}`: with `{{json .}}`
  * the CLI adds `size=1` to `GET /containers/json`, and the path-exact socket
  * filter refuses unknown query keys. This template asks for exactly the fields
- * the tools read (and keeps the same key names, so nothing downstream changes).
+ * the tools read.
+ *
+ * Every value goes through the template `json` function, so the CLI emits a
+ * *properly JSON-escaped* string (quotes included). Naively wrapping raw fields
+ * in `"{{.X}}"` is broken: `{{.Labels}}` on Docker Desktop carries the host path
+ * `C:\Users\...` with single backslashes, which is not a valid JSON escape
+ * (`Bad escaped character`), and a label value containing a `"` would break it
+ * too. When that happened, every such line was silently dropped to `{}` by the
+ * parser, so `ops_status` reported rows with `service/name/image/state/status`
+ * all null and `known: false`. `{{json .X}}` makes the line valid JSON for any
+ * value (see the regression test with real NDJSON lines in the test suite).
  */
 export const PS_FORMAT =
-  '{"Names":"{{.Names}}","Image":"{{.Image}}","State":"{{.State}}","Status":"{{.Status}}","Labels":"{{.Labels}}"}'
+  '{"Names":{{json .Names}},"Image":{{json .Image}},"State":{{json .State}},"Status":{{json .Status}},"Labels":{{json .Labels}}}'
 
 export interface ContainerState {
   id: string;
@@ -216,17 +226,30 @@ export class DockerCli {
     if (!res.ok) {
       throw new DockerError("docker_failed", `docker ps failed: ${(res.stderr || res.error || "").trim().slice(0, 300)}`);
     }
-    return res.stdout
+    const lines = res.stdout
       .split("\n")
       .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          return {};
-        }
-      });
+      .filter(Boolean);
+    const rows: Array<Record<string, unknown>> = [];
+    for (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        // Never degrade silently to `{}` rows (that is how an escape bug in
+        // PS_FORMAT turned into "all fields null, known: false"). Fail loudly
+        // with a hint instead of reporting empty containers.
+        throw new DockerError(
+          "unexpected_docker_output",
+          `docker ps returned a line that is not JSON (check PS_FORMAT escaping): ${line.slice(0, 120)}`,
+        );
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new DockerError("unexpected_docker_output", "docker ps returned a non-object JSON line");
+      }
+      rows.push(parsed as Record<string, unknown>);
+    }
+    return rows;
   }
 
   private async inspectState(ref: string): Promise<ContainerState> {

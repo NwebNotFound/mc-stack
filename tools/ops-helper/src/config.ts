@@ -39,6 +39,19 @@ export interface OpsConfig {
   gradleCacheVolume: string;
   /** Named volume for the npm cache of the node build/test containers. */
   npmCacheVolume: string;
+  /**
+   * Shared volume with `plugin-builder`: the helper drops `job-<uuid>.json` here
+   * and the builder only ever reads from it. The helper no longer starts a
+   * container itself (the socket filter refuses `create`), so this is the single
+   * build/test channel.
+   */
+  jobsDir: string;
+  /** Where plugin-builder writes `result-<uuid>.json` (inside the artifact volume). */
+  builderResultsDir: string;
+  /** Timeout for one build/test job handed to plugin-builder. */
+  builderTimeoutSeconds: number;
+  /** Poll interval while waiting for a job result. */
+  builderPollMs: number;
 
   dockerBin: string;
   /** Timeout for one fixed docker command. */
@@ -98,6 +111,10 @@ export function loadConfig(): OpsConfig {
     artifactsVolume: str("OPS_ARTIFACTS_VOLUME"),
     gradleCacheVolume: str("OPS_GRADLE_CACHE_VOLUME"),
     npmCacheVolume: str("OPS_NPM_CACHE_VOLUME"),
+    jobsDir: str("OPS_JOBS_DIR", "/jobs"),
+    builderResultsDir: str("OPS_BUILDER_RESULTS_DIR", `${str("OPS_ARTIFACTS_DIR", "/artifacts")}/builder`),
+    builderTimeoutSeconds: num("OPS_BUILDER_TIMEOUT_SECONDS", 1800, 60, 7200),
+    builderPollMs: num("OPS_BUILDER_POLL_MS", 1000, 100, 30000),
     dockerBin: str("OPS_DOCKER_BIN", "docker"),
     actionTimeoutSeconds: num("OPS_ACTION_TIMEOUT_SECONDS", 120, 5, 3600),
     buildTimeoutSeconds: num("OPS_BUILD_TIMEOUT_SECONDS", 1800, 60, 7200),

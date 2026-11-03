@@ -11,9 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -22,12 +20,13 @@ import {
   statfsSync,
   writeFileSync,
 } from "node:fs";
-import type { ActionSpec, Allowlist, BuildSpec, Impl, ServiceList } from "./allowlist.js";
+import type { ActionSpec, Allowlist, Impl, ServiceList } from "./allowlist.js";
 import { actionOf } from "./allowlist.js";
 import type { AuditLog } from "./audit.js";
 import type { OpsConfig } from "./config.js";
 import { DockerCli, DockerError, pluginDir } from "./docker.js";
 import { checkGates } from "./gates.js";
+import { makeJob, newJobId, REF_RE, type BuilderResult, type JobClient } from "./jobs.js";
 import { logger } from "./logger.js";
 import { redactText } from "./redact.js";
 import { findExecutable, type Runner } from "./runner.js";
@@ -40,6 +39,8 @@ export interface ActionDeps {
   runner: Runner;
   audit: AuditLog;
   state: OpsState;
+  /** Build/test jobs go to plugin-builder through this channel. */
+  jobs: JobClient;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -193,40 +194,66 @@ function validate(action: ActionSpec, rawParams: unknown, allow: Allowlist): Val
       return { ok: true, params: { service: service.value, confirm: params.confirm === true } };
     }
     case "restart_game": {
-      const unknown = rejectUnknownKeys(params, ["service", "confirm", "delay_seconds"]);
+      const unknown = rejectUnknownKeys(params, ["service", "confirm", "delay_seconds", "acknowledge_no_announce"]);
       if (unknown) return bad(unknown);
       const service = serviceParam(params, allow, "restartGame", true);
       if (service.error) return bad(service.error);
       const confirm = boolParam(params, "confirm");
       if (confirm) return bad(confirm);
+      const ack = boolParam(params, "acknowledge_no_announce");
+      if (ack) return bad(ack);
       const delay = intParam(params, "delay_seconds", 1, 3600, true);
       if (delay.error) return bad(delay.error);
       return {
         ok: true,
-        params: { service: service.value, confirm: params.confirm === true, delay_seconds: delay.value },
+        params: {
+          service: service.value,
+          confirm: params.confirm === true,
+          delay_seconds: delay.value,
+          acknowledge_no_announce: params.acknowledge_no_announce === true,
+        },
       };
     }
     case "deploy_plugin": {
-      const unknown = rejectUnknownKeys(params, ["confirm", "delay_seconds", "artifact_sha256"]);
+      const unknown = rejectUnknownKeys(params, ["confirm", "delay_seconds", "artifact_sha256", "acknowledge_no_announce"]);
       if (unknown) return bad(unknown);
       const confirm = boolParam(params, "confirm");
       if (confirm) return bad(confirm);
+      const ack = boolParam(params, "acknowledge_no_announce");
+      if (ack) return bad(ack);
       const delay = intParam(params, "delay_seconds", 1, 3600, true);
       if (delay.error) return bad(delay.error);
       const sha = params.artifact_sha256;
       if (typeof sha !== "string" || !SHA256_RE.test(sha)) {
         return bad(`parameter "artifact_sha256" must be the sha256 of the last ops_build_plugin artifact`);
       }
-      return { ok: true, params: { confirm: params.confirm === true, delay_seconds: delay.value, artifact_sha256: sha } };
+      return {
+        ok: true,
+        params: {
+          confirm: params.confirm === true,
+          delay_seconds: delay.value,
+          artifact_sha256: sha,
+          acknowledge_no_announce: params.acknowledge_no_announce === true,
+        },
+      };
     }
     case "rollback_plugin": {
-      const unknown = rejectUnknownKeys(params, ["confirm", "delay_seconds"]);
+      const unknown = rejectUnknownKeys(params, ["confirm", "delay_seconds", "acknowledge_no_announce"]);
       if (unknown) return bad(unknown);
       const confirm = boolParam(params, "confirm");
       if (confirm) return bad(confirm);
+      const ack = boolParam(params, "acknowledge_no_announce");
+      if (ack) return bad(ack);
       const delay = intParam(params, "delay_seconds", 1, 3600, true);
       if (delay.error) return bad(delay.error);
-      return { ok: true, params: { confirm: params.confirm === true, delay_seconds: delay.value } };
+      return {
+        ok: true,
+        params: {
+          confirm: params.confirm === true,
+          delay_seconds: delay.value,
+          acknowledge_no_announce: params.acknowledge_no_announce === true,
+        },
+      };
     }
     case "disk":
     case "backups_list":
@@ -624,159 +651,116 @@ async function opGitState(deps: ActionDeps): Promise<OpResult> {
 }
 
 /* ------------------------------------------------------------------ */
-/* T0: development                                                     */
+/* T0: development (build/test via the plugin-builder job channel)     */
 /* ------------------------------------------------------------------ */
 
-function buildId(now: number): string {
-  const d = new Date(now);
-  const stamp = [
-    d.getUTCFullYear(),
-    String(d.getUTCMonth() + 1).padStart(2, "0"),
-    String(d.getUTCDate()).padStart(2, "0"),
-  ].join("") + "-" + [
-    String(d.getUTCHours()).padStart(2, "0"),
-    String(d.getUTCMinutes()).padStart(2, "0"),
-    String(d.getUTCSeconds()).padStart(2, "0"),
-  ].join("");
-  const rand = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
-  return `${stamp}-${rand}`;
+/** Resolve the commit the local repo is checked out at (the builder asserts it). */
+async function repoHeadSha(deps: ActionDeps): Promise<string> {
+  const res = await deps.runner.run(["git", "-C", deps.allow.paths.repo, "rev-parse", "HEAD"], {
+    env: { GIT_OPTIONAL_LOCKS: "0" },
+    timeoutMs: deps.cfg.actionTimeoutSeconds * 1000,
+    maxBytes: 4096,
+  });
+  const sha = res.ok ? res.stdout.trim() : "";
+  if (!REF_RE.test(sha)) {
+    throw new DockerError("git_failed", `could not read the current commit of ${deps.allow.paths.repo} (git rev-parse HEAD)`);
+  }
+  return sha;
 }
 
-/** Copy a repo subtree into the shared artifact volume (build containers see it there). */
-function stageSource(deps: ActionDeps, id: string, spec: BuildSpec): string {
-  if (!deps.cfg.artifactsVolume) {
+/**
+ * Hand ONE job to plugin-builder and wait for its answer.
+ *
+ * ops-helper never starts a container itself: the socket filter refuses
+ * `POST /containers/create` (that route is host root), so the only build/test
+ * channel is the shared `ops-jobs` volume. A job carries nothing but an action,
+ * the current commit sha and - for a test - a target from the allowlist; the
+ * builder re-validates all three and runs one fixed command.
+ */
+async function runJob(deps: ActionDeps, action: "build" | "test", target?: string): Promise<BuilderResult> {
+  const ref = await repoHeadSha(deps);
+  const id = newJobId();
+  try {
+    deps.jobs.submit(makeJob(action, ref, target, id, new Date(deps.now()).toISOString()));
+  } catch (exc) {
     throw new DockerError(
-      "artifacts_volume_unset",
-      "OPS_ARTIFACTS_VOLUME is not set: build/test containers need the named volume, otherwise the daemon would create an empty host path",
+      "builder_unavailable",
+      `could not hand a job to plugin-builder (${(exc as Error).message}); is the ops profile up and is ${deps.cfg.jobsDir} mounted?`,
     );
   }
-  const source = `${deps.allow.paths.repo}/${spec.source}`;
-  if (!existsSync(source)) {
-    throw new DockerError("source_missing", `build source ${spec.source} does not exist in the repo`);
+  logger.info("job submitted", { job_id: id, action, ref });
+  const result = await deps.jobs.awaitResult(id, deps.cfg.builderTimeoutSeconds * 1000);
+  if (!result || result.id !== id) {
+    throw new DockerError(
+      "builder_timeout",
+      `plugin-builder did not answer job ${id} within ${deps.cfg.builderTimeoutSeconds}s (is the plugin-builder service running?)`,
+    );
   }
-  const root = `${deps.cfg.artifactsDir}/build/${id}`;
-  mkdirSync(root, { recursive: true, mode: 0o777 });
-  cpSync(source, `${root}/src`, {
-    recursive: true,
-    filter: (src) => !/[/\\](node_modules|\.git|\.gradle|build|target)([/\\]|$)/.test(src),
-  });
-  // Build containers run as uid 1000 (gradle/node images); the staged tree must
-  // be writable for them.
-  chmodSync(`${root}/src`, 0o777);
-  return root;
-}
-
-async function runInContainer(
-  deps: ActionDeps,
-  opts: { id: string; spec: BuildSpec; command: string[] },
-): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string; timedOut: boolean; root: string }> {
-  const root = stageSource(deps, opts.id, opts.spec);
-  const volumes = [`${deps.cfg.artifactsVolume}:${deps.cfg.artifactsDir}`];
-  if (opts.spec.cache === "gradle" && deps.cfg.gradleCacheVolume) {
-    volumes.push(`${deps.cfg.gradleCacheVolume}:/home/gradle/.gradle`);
-  }
-  if (opts.spec.cache === "npm" && deps.cfg.npmCacheVolume) {
-    volumes.push(`${deps.cfg.npmCacheVolume}:/root/.npm`);
-  }
-  const res = await deps.docker.runContainer(
-    {
-      image: opts.spec.image,
-      command: opts.command,
-      volumes,
-      workdir: `${deps.cfg.artifactsDir}/build/${opts.id}/src`,
-      // Hardened build: no network at all (dependencies come from the pre-warmed
-      // cache volume) and CPU/RAM/PID caps so a build cannot starve the servers.
-      network: deps.allow.build.network,
-      cpus: deps.allow.build.limits.cpus,
-      memory: deps.allow.build.limits.memory,
-      pidsLimit: deps.allow.build.limits.pids,
-    },
-    deps.cfg.buildTimeoutSeconds * 1000,
-  );
-  return { ok: res.ok, code: res.code, stdout: res.stdout, stderr: res.stderr, timedOut: res.timedOut, root };
-}
-
-interface TestCounts {
-  tests: number;
-  failures: number;
-  errors: number;
-  skipped: number;
-}
-
-function readJUnitCounts(dir: string): TestCounts | null {
-  if (!existsSync(dir)) return null;
-  const totals: TestCounts = { tests: 0, failures: 0, errors: 0, skipped: 0 };
-  let seen = 0;
-  for (const entry of readdirSync(dir)) {
-    if (!entry.endsWith(".xml")) continue;
-    let content: string;
-    try {
-      content = readFileSync(`${dir}/${entry}`, "utf8");
-    } catch {
-      continue;
-    }
-    const m = /<testsuite\b[^>]*>/.exec(content);
-    if (!m) continue;
-    const attr = (name: string) => Number(new RegExp(`${name}="(\\d+)"`).exec(m[0])?.[1] ?? "0");
-    totals.tests += attr("tests");
-    totals.failures += attr("failures");
-    totals.errors += attr("errors");
-    totals.skipped += attr("skipped");
-    seen += 1;
-  }
-  return seen > 0 ? totals : null;
+  return result;
 }
 
 async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
   const spec = deps.allow.build.plugin;
-  const id = buildId(deps.now());
-  const run = await runInContainer(deps, { id, spec, command: spec.command });
-  const tests = spec.test_results ? readJUnitCounts(`${run.root}/src/${spec.test_results}`) : null;
-  const output = redactCap([run.stdout, run.stderr].filter(Boolean).join("\n"), 8192);
+  const job = await runJob(deps, "build");
+  const output = redactCap(typeof job.output_tail === "string" ? job.output_tail : "", 8192);
+  const truncated = output.truncated || job.truncated === true;
+  const tests = job.tests ?? null;
+  // The artifact is built from the commit, so local edits are reported, not
+  // fatal - surface that fact to the caller (count only, never file names).
+  const dirty = { dirty: job.dirty ?? null, dirty_files: job.dirty_files ?? null };
 
-  if (!run.ok) {
+  if (!job.ok) {
     return {
       ok: false,
-      code: run.timedOut ? "build_timeout" : "build_failed",
-      message: `gradle build failed (exit ${run.code ?? "?"}) in ${spec.image}`,
-      result: { build_id: id, tests, output_tail: output.text, truncated: output.truncated },
+      code: job.code ?? "build_failed",
+      message: `plugin-builder reported a failed gradle build (${job.code ?? "build_failed"})`,
+      result: { build_id: job.id, source: spec.source, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
 
-  const artifactPath = `${run.root}/src/${spec.artifact}`;
-  if (!existsSync(artifactPath)) {
+  const artifact = job.artifact ?? null;
+  const artifactPath = artifact && typeof artifact.path === "string" ? artifact.path : "";
+  const sha = artifact && typeof artifact.sha256 === "string" ? artifact.sha256 : "";
+  if (!artifactPath || !SHA256_RE.test(sha) || !existsSync(artifactPath)) {
     return {
       ok: false,
       code: "artifact_missing",
-      message: `build succeeded but ${spec.artifact} is missing`,
-      result: { build_id: id, tests, output_tail: output.text },
+      message: "the build reported success but the recorded artifact is missing from the artifact volume",
+      result: { build_id: job.id, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
-  const sha = sha256File(artifactPath);
+  // Re-hash in the helper's own process: the artifact volume is shared, so the
+  // hash the builder recorded is not trusted on its own.
+  if (sha256File(artifactPath) !== sha) {
+    return {
+      ok: false,
+      code: "artifact_hash_mismatch",
+      message: "the artifact's sha256 does not match the file in the artifact volume",
+      result: { build_id: job.id, ref: job.ref, artifact, ...dirty },
+    };
+  }
   const size = statSync(artifactPath).size;
-  const kept = `${deps.cfg.artifactsDir}/artifacts/craftcore-${sha.slice(0, 12)}.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/artifacts`, { recursive: true, mode: 0o777 });
-  copyFileSync(artifactPath, kept);
   const record = {
-    build_id: id,
+    build_id: job.id,
     sha256: sha,
     size_bytes: size,
-    artifact_path: kept,
+    artifact_path: artifactPath,
     source: spec.source,
+    ref: job.ref,
     tests,
+    ...dirty,
     at: new Date(deps.now()).toISOString(),
   };
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true, mode: 0o777 });
-  writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o644 });
+  writeJson(`${deps.cfg.artifactsDir}/state/last-build.json`, record);
 
   return {
     ok: true,
     result: {
       ...record,
       deployed: false,
-      note: "the artifact is NOT deployed; ops_deploy_plugin needs this sha256 and the armed switch",
+      note: "the artifact is NOT deployed; ops_deploy_plugin needs this sha256, the armed switch and a recent backup",
       output_tail: output.text,
-      truncated: output.truncated,
+      truncated,
     },
   };
 }
@@ -784,54 +768,25 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
 async function opRunTests(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const target = params.target as string;
   const spec = deps.allow.build.tests[target];
-  const id = buildId(deps.now());
-  let root = "";
-  const outputs: string[] = [];
-
-  if (spec.setup && spec.setup.length > 0) {
-    const setup = await runInContainer(deps, { id, spec, command: spec.setup });
-    root = setup.root;
-    outputs.push(redactCap([setup.stdout, setup.stderr].join("\n"), 4096).text);
-    if (!setup.ok) {
-      return {
-        ok: false,
-        code: setup.timedOut ? "setup_timeout" : "setup_failed",
-        message: `setup step ${spec.setup.join(" ")} failed (exit ${setup.code ?? "?"})`,
-        result: { target, output_tail: outputs.join("\n").slice(-4096) },
-      };
-    }
-  }
-
-  const run = await runInContainer(deps, { id, spec, command: spec.command });
-  root = run.root;
-  outputs.push(redactCap([run.stdout, run.stderr].join("\n"), 8192).text);
-
-  const tests = spec.test_results
-    ? readJUnitCounts(`${root}/src/${spec.test_results}`)
-    : (() => {
-        const pass = /# pass (\d+)/.exec(run.stdout);
-        const fail = /# fail (\d+)/.exec(run.stdout);
-        if (!pass && !fail) return null;
-        return {
-          tests: Number(pass?.[1] ?? 0) + Number(fail?.[1] ?? 0),
-          failures: Number(fail?.[1] ?? 0),
-          errors: 0,
-          skipped: 0,
-        };
-      })();
-
+  const job = await runJob(deps, "test", target);
+  const output = redactCap(typeof job.output_tail === "string" ? job.output_tail : "", 8192);
   const result = {
+    job_id: job.id,
     target,
     image: spec.image,
     command: spec.command,
-    tests,
-    output_tail: outputs.join("\n").slice(-8192),
+    ref: job.ref,
+    tests: job.tests ?? null,
+    dirty: job.dirty ?? null,
+    dirty_files: job.dirty_files ?? null,
+    output_tail: output.text,
+    truncated: output.truncated || job.truncated === true,
   };
-  if (!run.ok) {
+  if (!job.ok) {
     return {
       ok: false,
-      code: run.timedOut ? "test_timeout" : "tests_failed",
-      message: `${target} tests failed (exit ${run.code ?? "?"})`,
+      code: job.code ?? "tests_failed",
+      message: `plugin-builder reported failing ${target} tests (${job.code ?? "tests_failed"})`,
       result,
     };
   }
@@ -880,6 +835,50 @@ function findFreshBackup(deps: ActionDeps): Record<string, unknown> | null {
   const ageSeconds = Math.round((deps.now() - createdAt) / 1000);
   if (ageSeconds > deps.allow.limits.backupMaxAgeSeconds) return { ...fresh, age_seconds: ageSeconds, fresh: false };
   return { ...fresh, age_seconds: ageSeconds, fresh: true };
+}
+
+/** Newest complete backup with its age, or null when there is none. */
+export function newestCompleteBackup(deps: Pick<ActionDeps, "allow" | "now">): Record<string, unknown> | null {
+  const entries = readBackupEntries(deps.allow.paths.backups);
+  const fresh = entries.find((entry) => entry.complete === true);
+  if (!fresh) return null;
+  const createdAt = fresh.created_at ? Date.parse(String(fresh.created_at)) : NaN;
+  if (!Number.isFinite(createdAt)) return { ...fresh, age_seconds: null, age_hours: null };
+  const ageSeconds = Math.round((deps.now() - createdAt) / 1000);
+  return { ...fresh, age_seconds: ageSeconds, age_hours: Math.round((ageSeconds / 3600) * 10) / 10 };
+}
+
+/**
+ * The backup gate for a T2 action.
+ *
+ * `ops_backup_now` stays paused (the helper image has no PowerShell), so a T2
+ * action does NOT create a backup - it requires a *recent* one that was made on
+ * the host: the newest `backups/daily-...` directory with a `COMPLETE.txt`
+ * marker, younger than `tiers.T2.backup_max_age_hours` (default 12). Older or
+ * missing -> refuse, with the age in the answer so the host can just run
+ * `backup.ps1`.
+ */
+function ensureRecentBackup(deps: ActionDeps): BackupCheck {
+  const maxAgeHours = deps.allow.tiers.T2.backup_max_age_hours ?? 12;
+  const latest = newestCompleteBackup(deps);
+  const maxAgeSeconds = maxAgeHours * 3600;
+  if (!latest || typeof latest.age_seconds !== "number") {
+    return {
+      ok: false,
+      code: "no_recent_backup",
+      message: `no complete backup found under ${deps.allow.paths.backups}; run backup.ps1 on the host first (a T2 action needs one younger than ${maxAgeHours}h)`,
+      result: { mode: "recent_only", latest: latest ?? null, max_age_hours: maxAgeHours },
+    };
+  }
+  if (latest.age_seconds > maxAgeSeconds) {
+    return {
+      ok: false,
+      code: "stale_backup",
+      message: `the newest complete backup is ${latest.age_hours}h old, which is older than the allowed ${maxAgeHours}h; run backup.ps1 on the host first`,
+      result: { mode: "recent_only", latest, max_age_hours: maxAgeHours },
+    };
+  }
+  return { ok: true, result: { mode: "recent_backup", backup: latest, created: false, max_age_hours: maxAgeHours } };
 }
 
 /**
@@ -961,28 +960,26 @@ async function opBackupNow(deps: ActionDeps): Promise<OpResult> {
   return { ok: true, result: check.result };
 }
 
-async function announce(deps: ActionDeps, service: string, delaySeconds: number): Promise<Record<string, unknown>> {
-  const candidates = deps.allow.services.players.includes(service) ? [service, "velocity"] : ["velocity", service];
-  const message = `Server ${service} startet in ${delaySeconds} Sekunden neu (Wartung).`;
-  for (const candidate of candidates) {
-    let id: string;
-    try {
-      id = await deps.docker.containerId(candidate);
-    } catch {
-      continue;
-    }
-    const res = await deps.docker.exec(id, ["rcon-cli", `say ${message}`]);
-    if (res.ok) {
-      return { announced: true, via: candidate, message };
-    }
-  }
+/**
+ * The announcement status for a T2 action.
+ *
+ * This stack has NO in-game announcement channel that the ops layer may use:
+ * messaging a server console needs `docker exec` (or an RCON/broadcast route),
+ * and docker-socket-filter refuses every exec route on purpose - neither
+ * velocity nor the Paper servers are reachable from here. So a T2 action never
+ * warns players, reports that honestly, and the tier gate requires the caller to
+ * pass `acknowledge_no_announce=true` (see gates.ts). If a real announcement
+ * channel is added later (e.g. an RCON line emitted by the bot), this is the one
+ * place that changes.
+ */
+function announcementStatus(service: string, delaySeconds: number): Record<string, unknown> {
   return {
     announced: false,
     via: null,
-    message,
+    message: `Server ${service} startet in ${delaySeconds} Sekunden neu (Wartung).`,
     detail:
-      "no container answered `rcon-cli say` (velocity has ENABLE_RCON=false and its image has no rcon-cli) - " +
-      "NO in-game announcement was made, players were not warned",
+      "NO in-game announcement was made: reaching a server console needs docker exec (or an RCON broadcast), " +
+      "and docker-socket-filter refuses every exec route. The caller confirmed this with acknowledge_no_announce=true.",
   };
 }
 
@@ -1000,25 +997,50 @@ async function waitForHealthy(deps: ActionDeps, service: string): Promise<{ heal
   }
 }
 
+/**
+ * Restart one compose service by its exact container NAME and return the name.
+ * The socket filter allowlists names for `/containers/<name>/restart`, so a
+ * restart by id (a 12-hex id is not a name) would be a 403.
+ */
+async function restartServiceByName(deps: ActionDeps, service: string): Promise<string> {
+  const name = await deps.docker.containerName(service);
+  await deps.docker.restartByName(name, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+  return name;
+}
+
 async function opRestartGame(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const service = params.service as string;
   const delay = params.delay_seconds as number;
-  const id = await deps.docker.containerId(service);
-  const announcement = await announce(deps, service, delay);
+  // Restart by NAME (the filter's restart allowlist holds exact names), and only
+  // after a recent backup exists: a restart can lose in-flight world writes.
+  const name = await deps.docker.containerName(service);
+  const backup = ensureRecentBackup(deps);
+  if (!backup.ok) {
+    return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
+  }
+  const announcement = announcementStatus(service, delay);
   await deps.sleep(delay * 1000);
-  await deps.docker.restart(id, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+  await deps.docker.restartByName(name, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
   const health = await waitForHealthy(deps, service);
   if (!health.healthy) {
     return {
       ok: false,
       code: "health_check_failed",
       message: `${service} did not become healthy within ${deps.allow.deploy.healthTimeoutSeconds}s after the restart`,
-      result: { service, announcement, state: health.state },
+      result: { service, container: name, announcement, backup, state: health.state },
     };
   }
   return {
     ok: true,
-    result: { service, container: id.slice(0, 12), announcement, state: health.state, delay_seconds: delay },
+    result: {
+      service,
+      container: name,
+      announcement,
+      backup,
+      state: health.state,
+      delay_seconds: delay,
+      note: "restarted through the socket filter by exact container name; T2 gates (armed, confirm, delay, recent backup, ack) all passed",
+    },
   };
 }
 
@@ -1056,9 +1078,9 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     return { ok: false, code: "artifact_missing", message: "the recorded artifact file is gone; rebuild first" };
   }
 
-  const backup = await ensureFreshBackup(deps, true);
+  const backup = ensureRecentBackup(deps);
   if (!backup.ok) {
-    return { ok: false, code: backup.code ?? "backup_failed", message: backup.message ?? "backup failed", result: backup.result };
+    return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
   }
 
   const rollbackDir = `${deps.cfg.artifactsDir}/rollback`;
@@ -1081,7 +1103,7 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     previous,
   });
 
-  const announcement = await announce(deps, deps.allow.deploy.order[0], delay);
+  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
   await deps.sleep(delay * 1000);
 
   const steps: Array<Record<string, unknown>> = [];
@@ -1100,7 +1122,7 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
       };
     }
     try {
-      await deps.docker.restart(await deps.docker.containerId(service), (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+      await restartServiceByName(deps, service);
     } catch (exc) {
       const rolled = await rollbackServices(deps, previous, steps);
       return {
@@ -1152,7 +1174,7 @@ async function rollbackServices(
     }
     try {
       copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
-      await deps.docker.restart(await deps.docker.containerId(service), (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+      await restartServiceByName(deps, service);
       const health = await waitForHealthy(deps, service);
       out.push({ service, restored: true, healthy: health.healthy, state: health.state });
     } catch (exc) {
@@ -1170,7 +1192,11 @@ async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDep
     return { ok: false, code: "no_rollback_available", message: "no recorded deploy to roll back" };
   }
   const previous = record.previous as Record<string, Record<string, unknown>>;
-  const announcement = await announce(deps, deps.allow.deploy.order[0], delay);
+  const backup = ensureRecentBackup(deps);
+  if (!backup.ok) {
+    return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
+  }
+  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
   await deps.sleep(delay * 1000);
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
@@ -1182,7 +1208,7 @@ async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDep
       continue;
     }
     copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
-    await deps.docker.restart(await deps.docker.containerId(service), (deps.cfg.actionTimeoutSeconds + 60) * 1000);
+    await restartServiceByName(deps, service);
     const health = await waitForHealthy(deps, service);
     steps.push({ service, restored: true, healthy: health.healthy, state: health.state });
   }

@@ -39,10 +39,44 @@ export const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_MAX_LOG_TARGET = 512;
 
 /**
- * Restart allowlist default. Names are the real compose container names
+ * Restart allowlists. Names are the real compose container names
  * (`<project>-<service>-<index>`), matched EXACTLY.
+ *
+ * There are TWO lists on purpose (one path, two intents):
+ *  - T1 are the reversible helper services (bot, cloudflared-mcp);
+ *  - T2 are the game servers (lobby, survival, velocity).
+ * The filter itself cannot tell a T1 call from a T2 call - the Docker API has a
+ * single `/containers/<name>/restart` path - so the union is what passes here and
+ * the T1/T2 split is enforced one level up, by the helper's own
+ * `services.restart_t1` / `services.restart_game` allowlists. Keeping the two
+ * lists separate in configuration means a game-server restart can only ever be
+ * triggered by the T2 action, and it is visible in the audit line which list
+ * matched (`restarts: "t1" | "t2"`).
  */
-export const DEFAULT_RESTART_ALLOW = ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"];
+export const DEFAULT_RESTART_ALLOW_T1 = ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"];
+export const DEFAULT_RESTART_ALLOW_T2 = ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1"];
+
+/**
+ * @deprecated kept as the union for callers that only need "what may restart at
+ * all". Prefer resolveRestartAllow().
+ */
+export const DEFAULT_RESTART_ALLOW = [...DEFAULT_RESTART_ALLOW_T1, ...DEFAULT_RESTART_ALLOW_T2];
+
+/** Which of the two lists a name belongs to, or null when it belongs to neither. */
+export function restartTierOf(name, cfg = {}) {
+  const t1 = cfg.restartAllow ?? DEFAULT_RESTART_ALLOW_T1;
+  const t2 = cfg.restartAllowT2 ?? DEFAULT_RESTART_ALLOW_T2;
+  if (t1.includes(name)) return "t1";
+  if (t2.includes(name)) return "t2";
+  return null;
+}
+
+/** The union of both lists: what may be restarted through this filter at all. */
+export function resolveRestartAllow(cfg = {}) {
+  const t1 = cfg.restartAllow ?? DEFAULT_RESTART_ALLOW_T1;
+  const t2 = cfg.restartAllowT2 ?? DEFAULT_RESTART_ALLOW_T2;
+  return [...new Set([...t1, ...t2])];
+}
 
 /** Container name / id shape accepted in a path segment. */
 export const REF_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -157,7 +191,7 @@ function splitTarget(target) {
  */
 export function classify(method, target, cfg) {
   const { segments, query } = splitTarget(target);
-  const allowed = cfg.restartAllow ?? DEFAULT_RESTART_ALLOW;
+  const allowed = resolveRestartAllow(cfg);
 
   const keysAllowed = (route) => {
     for (const key of query.keys()) {
@@ -229,7 +263,7 @@ export function classify(method, target, cfg) {
       if (!/^\d{1,2}$/.test(t)) deny("bad_restart_timeout");
       if (Number(t) > 30) deny("restart_timeout_too_large");
     }
-    return { route: "container_restart", ref, query };
+    return { route: "container_restart", ref, query, restarts: restartTierOf(ref, cfg) };
   }
 
   deny("route_not_allowed");
@@ -442,7 +476,7 @@ export function createFilterServer(cfg) {
             return;
           }
 
-          record({ event: "allowed", route: route.route, ref: route.ref, method: req.method, target: req.target.slice(0, maxLogTarget) });
+          record({ event: "allowed", route: route.route, ref: route.ref, restarts: route.restarts, method: req.method, target: req.target.slice(0, maxLogTarget) });
 
           const upstream = await connectUnix(cfg.upstreamSocketPath).catch(() => null);
           if (!upstream) {

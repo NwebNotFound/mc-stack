@@ -113,20 +113,95 @@ test("docker-socket-filter is hardened and self-contained", () => {
   assert.match(text, /OPS_FILTER_UPSTREAM: "\/var\/run\/docker\.sock"/);
 });
 
-test("the filter restart allowlist names the T1 containers and no game server", () => {
+function fallbackOf(raw) {
+  return raw.includes(":-") ? raw.slice(raw.indexOf(":-") + 2).replace(/\}$/, "") : raw;
+}
+
+test("the filter keeps the T1 and the T2 restart names in separate lists", () => {
   const env = envOf(blockOf("docker-socket-filter"));
-  const raw = env.OPS_FILTER_RESTART_ALLOW;
-  assert.ok(raw, "OPS_FILTER_RESTART_ALLOW must be set");
-  // The default in compose is written as ${VAR:-a,b}; take the fallback list.
-  const fallback = raw.includes(":-") ? raw.slice(raw.indexOf(":-") + 2).replace(/\}$/, "") : raw;
-  const names = fallback.split(",").map((v) => v.trim()).filter(Boolean);
-  assert.deepEqual(names, ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"]);
-  for (const forbidden of ["lobby", "survival", "velocity", "craftcore-db", "hermes-mcp", "hermes-test"]) {
+  const t1 = fallbackOf(env.OPS_FILTER_RESTART_ALLOW ?? "");
+  const t2 = fallbackOf(env.OPS_FILTER_RESTART_ALLOW_T2 ?? "");
+  assert.ok(t1, "OPS_FILTER_RESTART_ALLOW must be set");
+  assert.ok(t2, "OPS_FILTER_RESTART_ALLOW_T2 must be set");
+  assert.deepEqual(t1.split(",").map((v) => v.trim()), ["mc-stack-bot-1", "mc-stack-cloudflared-mcp-1"]);
+  assert.deepEqual(t2.split(",").map((v) => v.trim()), ["mc-stack-lobby-1", "mc-stack-survival-1", "mc-stack-velocity-1"]);
+  const overlap = t1.split(",").filter((name) => t2.split(",").includes(name));
+  assert.deepEqual(overlap, [], "the two restart lists must stay disjoint (T1 vs T2)");
+});
+
+test("no forbidden container is restartable through the filter", () => {
+  const env = envOf(blockOf("docker-socket-filter"));
+  const names = [env.OPS_FILTER_RESTART_ALLOW, env.OPS_FILTER_RESTART_ALLOW_T2]
+    .map((raw) => fallbackOf(raw ?? ""))
+    .join(",")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  for (const forbidden of ["craftcore-db", "hermes-mcp", "hermes-test", "ops-helper", "docker-socket-filter"]) {
     assert.ok(
       !names.some((name) => name.includes(forbidden)),
       `${forbidden} must never be restartable through the filter`,
     );
   }
+});
+
+test("plugin-builder has no socket, no network and hard resource caps", () => {
+  const block = blockOf("plugin-builder");
+  const text = block.join("\n");
+  assert.equal(mountsSocket(block), false, "plugin-builder must not mount the docker socket");
+  assert.equal(hasHostPorts(block), false, "plugin-builder must not publish a host port");
+  assert.match(text, /^ {4}network_mode: none$/m, "plugin-builder must have no interface at all");
+  assert.match(text, /^ {4}read_only: true$/m, "read_only: true");
+  assert.match(text, /^ {6}- ALL$/m, "cap_drop: ALL");
+  assert.match(text, /no-new-privileges:true/, "no-new-privileges");
+  assert.match(text, /^ {4}cpus: "1\.5"$/m, "CPU cap");
+  assert.match(text, /^ {4}mem_limit: 2g$/m, "memory cap");
+  assert.match(text, /^ {4}pids_limit: \d+$/m, "PID cap");
+  assert.match(text, /^ {4}build: \.\/tools\/plugin-builder$/m, "built from this repo");
+  assert.match(text, /^ {6}- ops-jobs:\/jobs$/m, "the job volume is the only channel from ops-helper");
+  // The repo is mounted NARROWLY and read-only: the two source trees the
+  // allowlist can build/test, the allowlist file and `.git` - never the root.
+  assert.match(text, /^ {6}- \.\/plugins-src:\/repo\/plugins-src:ro$/m, "the craftcore source tree, read-only");
+  assert.match(text, /^ {6}- \.\/tools:\/repo\/tools:ro$/m, "the JS test sources, read-only");
+  assert.match(text, /^ {6}- \.\/config\/ops-allowlist\.json:\/repo\/config\/ops-allowlist\.json:ro$/m, "the allowlist file, read-only");
+  assert.match(text, /^ {6}- \.\/\.git:\/repo\/\.git:ro$/m, "`.git` for the commit assertion, read-only");
+  assert.equal(/^ {6}- \.\/:\/repo:ro$/m.test(text), false, "the repo ROOT must not be mounted");
+});
+
+test("plugin-builder cannot reach .env, secrets/ or data/ at all", () => {
+  const block = blockOf("plugin-builder");
+  const mounts = block.filter((line) => /^ {6}- /.test(line));
+  assert.ok(mounts.length > 0, "expected the plugin-builder volume list");
+  for (const forbidden of [".env", "secrets", "data", "backups"]) {
+    const re = new RegExp(`(^|[/:])${forbidden.replace(".", "\\.")}([/:]|$)`);
+    assert.ok(
+      !mounts.some((line) => re.test(line)),
+      `${forbidden} must not be mounted into plugin-builder (mounts: ${mounts.join(" | ")})`,
+    );
+  }
+  assert.ok(
+    !mounts.some((line) => /- \.\/[:]/.test(line) || /- \.\/$/.test(line)),
+    "the repo root must never be mounted into plugin-builder",
+  );
+  // Every mount that does reach into the repo is read-only.
+  for (const line of mounts.filter((l) => l.includes("/repo"))) {
+    assert.match(line, /:ro$/, `repo mount must be read-only: ${line}`);
+  }
+});
+
+test("ops-helper keeps the whole repo read-only (narrowing it would break git state and df)", () => {
+  const block = blockOf("ops-helper");
+  const mounts = block.filter((line) => /^ {6}- /.test(line));
+  assert.ok(mounts.includes("      - ./:/repo:ro"), "ops-helper reads the whole repo, read-only");
+  assert.ok(
+    !mounts.some((line) => /^ {6}- \.\/(\.env|secrets)/.test(line)),
+    "ops-helper must not mount .env or secrets/ separately",
+  );
+});
+
+test("only ops-helper and plugin-builder share the job volume (no other new socket holder)", () => {
+  const holders = [...BLOCKS.entries()].filter(([, block]) => block.some((line) => /^- ops-jobs:\/jobs\s*$/.test(line.trim()))).map(([name]) => name);
+  assert.deepEqual(holders.sort(), ["ops-helper", "plugin-builder"].sort());
 });
 
 test("ops-helper keeps no socket and talks to the filter over TCP", () => {
