@@ -28,13 +28,38 @@ export interface Config {
   /** Host header allowlist (DNS rebinding protection). */
   allowedHosts: string[];
   maxActiveRunsPerProfile: number;
+  /** Hard cap on runs started per UTC day across all profiles. */
+  maxRunsPerDay: number;
   pollIntervalMs: number;
   maxRunSeconds: number;
+  /** A run waiting for approval longer than this is stopped (never approved). */
+  approvalWaitSeconds: number;
+  /** An `unknown` run older than this is marked `timed_out`. */
+  unknownTimeoutSeconds: number;
+
+  /** Peers allowed to set X-Forwarded-For (empty: never trust the header). */
+  trustedProxies: string[];
+  /** Consecutive bad tokens before an IP is locked out. */
+  lockoutAfter: number;
+  /** Longest exponential lockout in seconds (also the first-block length). */
+  lockoutMaxSeconds: number;
+
+  /** Models accepted by start_run(model=...). Empty disables overrides. */
+  allowedModels: string[];
+  /** Providers accepted by start_run(provider=...). Empty disables overrides. */
+  allowedProviders: string[];
+  /** reasoning_effort values accepted by start_run. */
+  allowedReasoningEfforts: string[];
 
   backend: Backend;
   /** Only used by the host-only CLI backend. */
   cliCommand: string;
 }
+
+const DEFAULT_ALLOWED_MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5"];
+const DEFAULT_ALLOWED_PROVIDERS = ["openrouter", "anthropic"];
+/** Highest effort we accept: `xhigh`/`none` are deliberately excluded. */
+const DEFAULT_ALLOWED_EFFORTS = ["minimal", "low", "medium", "high"];
 
 function str(name: string, fallback = ""): string {
   const v = process.env[name];
@@ -49,6 +74,15 @@ function num(name: string, fallback: number, min: number, max: number): number {
     throw new Error(`${name} must be a number between ${min} and ${max}`);
   }
   return n;
+}
+
+function list(name: string, fallback: string[]): string[] {
+  const raw = str(name);
+  if (!raw) return fallback;
+  return raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 function parseProfileKeys(raw: string): Record<string, string> {
@@ -125,8 +159,19 @@ export function loadConfig(): Config {
 
     allowedHosts,
     maxActiveRunsPerProfile: num("HERMES_MCP_MAX_ACTIVE_RUNS_PER_PROFILE", 2, 1, 20),
+    maxRunsPerDay: num("HERMES_MCP_MAX_RUNS_PER_DAY", 50, 1, 100000),
     pollIntervalMs: num("HERMES_MCP_POLL_MS", 2500, 500, 60000),
     maxRunSeconds: num("HERMES_MCP_MAX_RUN_SECONDS", 7200, 60, 86400),
+    approvalWaitSeconds: num("HERMES_MCP_APPROVAL_WAIT_SECONDS", 900, 30, 86400),
+    unknownTimeoutSeconds: num("HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS", 7200, 60, 86400),
+
+    trustedProxies: list("HERMES_MCP_TRUSTED_PROXIES", []),
+    lockoutAfter: num("HERMES_MCP_LOCKOUT_AFTER", 5, 1, 1000),
+    lockoutMaxSeconds: num("HERMES_MCP_LOCKOUT_SECONDS", 300, 1, 86400),
+
+    allowedModels: list("HERMES_MCP_ALLOWED_MODELS", DEFAULT_ALLOWED_MODELS),
+    allowedProviders: list("HERMES_MCP_ALLOWED_PROVIDERS", DEFAULT_ALLOWED_PROVIDERS),
+    allowedReasoningEfforts: list("HERMES_MCP_ALLOWED_REASONING_EFFORTS", DEFAULT_ALLOWED_EFFORTS),
 
     backend: backendRaw,
     cliCommand: str("HERMES_CLI", "hermes"),
@@ -138,6 +183,9 @@ export function loadConfig(): Config {
     profiles: Object.keys(cfg.profileKeys),
     auth: cfg.tokens.length,
     port: cfg.port,
+    trusted_proxies: cfg.trustedProxies.length,
+    allowed_models: cfg.allowedModels.length,
+    max_runs_per_day: cfg.maxRunsPerDay,
   });
 
   return cfg;

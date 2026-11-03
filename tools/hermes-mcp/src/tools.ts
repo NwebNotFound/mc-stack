@@ -10,11 +10,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { GatewayClient, GatewayError, isTerminal } from "./hermes.js";
+import { redactStrings } from "./redact.js";
 import type { RunManager } from "./runner.js";
 import type { RunRecord, RunStore } from "./store.js";
 
+/** Every tool response is redacted (value-only) before it leaves the process. */
 function json(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(redactStrings(payload), null, 2) }] };
 }
 
 function fail(error: unknown): { isError: true; content: Array<{ type: "text"; text: string }> } {
@@ -24,18 +26,28 @@ function fail(error: unknown): { isError: true; content: Array<{ type: "text"; t
       content: [
         {
           type: "text",
-          text: JSON.stringify({ error: error.message, code: error.code, status: error.status }, null, 2),
+          text: JSON.stringify(
+            redactStrings({ error: error.message, code: error.code, status: error.status }),
+            null,
+            2,
+          ),
         },
       ],
     };
   }
   return {
     isError: true,
-    content: [{ type: "text", text: JSON.stringify({ error: (error as Error).message ?? "unknown error" }, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(redactStrings({ error: (error as Error).message ?? "unknown error" }), null, 2),
+      },
+    ],
   };
 }
 
-function summarize(rec: RunRecord) {
+function summarize(rec: RunRecord, opts: { includeOutput?: boolean } = {}) {
+  const includeOutput = opts.includeOutput ?? true;
   return {
     run_id: rec.run_id,
     profile: rec.profile,
@@ -51,11 +63,13 @@ function summarize(rec: RunRecord) {
     reasoning_effort: rec.reasoning_effort,
     prompt_preview: rec.prompt_preview,
     error: rec.error,
-    output: rec.output ? rec.output.slice(0, 1500) : undefined,
+    output: includeOutput ? (rec.output ? rec.output.slice(0, OUTPUT_PREVIEW_CHARS) : undefined) : undefined,
   };
 }
 
 const REASONING = ["minimal", "low", "medium", "high", "xhigh", "none"] as const;
+/** Hard cap on the single output text a tool returns. */
+const OUTPUT_PREVIEW_CHARS = 1500;
 
 export interface ToolDeps {
   cfg: Config;
@@ -187,7 +201,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Start run",
       description:
-        "Start an agent run on a profile. Returns immediately with a run_id; poll get_run / get_run_logs. The run executes with that profile's full tool access, so keep prompts explicit.",
+        "Start an agent run on a profile. Returns immediately with a run_id; poll get_run / get_run_logs. " +
+        "model/provider/reasoning_effort must be on the server allowlist (omit them to use the profile default); " +
+        "a daily run budget applies. The run executes with that profile's full tool access, so keep prompts explicit.",
       inputSchema: {
         profile: z.string().describe("Hermes profile name (see list_profiles)"),
         prompt: z.string().min(1).max(20000).describe("The task/prompt for the agent"),
@@ -232,7 +248,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         Math.round(((rec.finished_at ? Date.parse(rec.finished_at) : Date.now()) - Date.parse(rec.created_at)) / 1000),
       );
       return json({
-        ...summarize(rec),
+        ...summarize(rec, { includeOutput: false }),
         progress: {
           stage: rec.status,
           last_event: rec.last_event ?? null,
@@ -241,7 +257,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           elapsed_seconds: elapsed,
           terminal: isTerminal(rec.status),
         },
-        last_output: rec.output ?? null,
+        // Single output text, hard-capped — do not also ship it via summarize().
+        last_output: rec.output ? rec.output.slice(0, OUTPUT_PREVIEW_CHARS) : null,
+        output_truncated: Boolean(rec.output && rec.output.length > OUTPUT_PREVIEW_CHARS),
         usage: rec.usage ?? null,
       });
     },
@@ -255,7 +273,18 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         profile: z.string().optional().describe("Filter by profile"),
         status: z
-          .enum(["queued", "running", "waiting_for_approval", "stopping", "completed", "failed", "cancelled", "interrupted", "unknown"])
+          .enum([
+            "queued",
+            "running",
+            "waiting_for_approval",
+            "stopping",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "unknown",
+            "timed_out",
+          ])
           .optional()
           .describe("Filter by status"),
         limit: z.number().int().min(1).max(100).optional().describe("Max rows (default 25)"),
@@ -264,7 +293,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     },
     async ({ profile, status, limit }) => {
       const rows = store.list({ profile, status, limit: limit ?? 25 });
-      return json({ runs: rows.map(summarize), count: rows.length });
+      return json({ runs: rows.map((r) => summarize(r)), count: rows.length });
     },
   );
 

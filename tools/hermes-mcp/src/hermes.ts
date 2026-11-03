@@ -36,10 +36,20 @@ export interface GatewayRunStatus {
   [key: string]: unknown;
 }
 
-const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);
+const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "timed_out"]);
 
+/** A status that will not change again without a new run. */
 export function isTerminal(status: string): boolean {
   return TERMINAL.has(status);
+}
+
+/**
+ * A run that still occupies a profile slot: anything the gateway has not
+ * finished. `unknown` counts here on purpose — a run we lost sight of may still
+ * be alive, and it only frees its slot once resolved or timed out.
+ */
+export function isUnresolved(status: string): boolean {
+  return !TERMINAL.has(status);
 }
 
 export class GatewayClient {

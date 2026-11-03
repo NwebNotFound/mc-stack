@@ -3,28 +3,10 @@
  *
  * Every line is scanned for secret-looking keys and bearer tokens before it is
  * written, so a stray `Authorization` header or API key can never reach the
- * container log (which ends up in `docker compose logs`).
+ * container log (which ends up in `docker compose logs`). The same redaction is
+ * applied to the persisted run store — see redact.ts.
  */
-
-const SECRET_KEY_RE = /(token|secret|key|password|authorization|cookie|credential)/i;
-const BEARER_RE = /\b(bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi;
-const LONG_HEX_RE = /\b[a-f0-9]{40,}\b/gi;
-
-function redactValue(value: unknown, depth = 0): unknown {
-  if (depth > 6) return "[depth]";
-  if (typeof value === "string") {
-    return value.replace(BEARER_RE, "$1[redacted]").replace(LONG_HEX_RE, "[redacted]");
-  }
-  if (Array.isArray(value)) return value.slice(0, 50).map((v) => redactValue(v, depth + 1));
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) ? "[redacted]" : redactValue(v, depth + 1);
-    }
-    return out;
-  }
-  return value;
-}
+import { SECRET_KEY_RE, redactValue } from "./redact.js";
 
 type Level = "debug" | "info" | "warn" | "error";
 

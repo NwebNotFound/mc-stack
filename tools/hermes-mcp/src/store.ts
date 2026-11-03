@@ -5,10 +5,16 @@
  * (a preview of the prompt, the terminal output and the agent's lifecycle
  * events), and it survives container restarts so get_run/list_runs keep working
  * while the gateway still holds the run in memory.
+ *
+ * Everything written here runs through the same redaction as the log
+ * (redact.ts), and the read paths redact again, so a secret echoed back by an
+ * agent never ends up in the run file or in a get_run / get_run_logs response.
  */
 import fs from "node:fs";
 import path from "node:path";
+import { isUnresolved } from "./hermes.js";
 import { logger } from "./logger.js";
+import { redactStrings, redactText } from "./redact.js";
 
 export interface RunEvent {
   seq?: number;
@@ -42,6 +48,7 @@ export interface RunRecord {
 
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_LOG_LINES = 5_000;
+const FINISHED_STATUSES = ["completed", "failed", "cancelled", "interrupted", "timed_out"];
 
 export class RunStore {
   private readonly runs = new Map<string, RunRecord>();
@@ -110,30 +117,36 @@ export class RunStore {
     const rec = this.runs.get(runId);
     if (!rec) return undefined;
     const next: RunRecord = { ...rec, ...patch, updated_at: new Date().toISOString() };
-    if (patch.status && ["completed", "failed", "cancelled", "interrupted", "unknown"].includes(patch.status)) {
+    if (patch.status && FINISHED_STATUSES.includes(patch.status)) {
       next.finished_at = next.finished_at ?? next.updated_at;
     }
-    if (typeof next.output === "string" && next.output.length > MAX_OUTPUT_CHARS) {
-      next.output = next.output.slice(0, MAX_OUTPUT_CHARS) + "\n[truncated]";
+    if (typeof next.output === "string") {
+      next.output = redactText(next.output);
+      if (next.output.length > MAX_OUTPUT_CHARS) {
+        next.output = next.output.slice(0, MAX_OUTPUT_CHARS) + "\n[truncated]";
+      }
     }
+    if (typeof next.error === "string") next.error = redactText(next.error);
+    if (next.prompt_preview) next.prompt_preview = redactText(next.prompt_preview);
     this.runs.set(runId, next);
     this.persist(next);
     return next;
   }
 
   appendEvent(runId: string, event: RunEvent): void {
+    const safe = redactStrings(event) as RunEvent;
     const rec = this.runs.get(runId);
     if (rec) {
       rec.event_count += 1;
-      if (typeof event.event === "string" && event.event.startsWith("tool.")) {
-        if (event.event === "tool.started") rec.tool_calls += 1;
+      if (typeof safe.event === "string" && safe.event.startsWith("tool.")) {
+        if (safe.event === "tool.started") rec.tool_calls += 1;
       }
-      if (typeof event.event === "string") rec.last_event = event.event;
+      if (typeof safe.event === "string") rec.last_event = safe.event;
       rec.updated_at = new Date().toISOString();
       this.persist(rec);
     }
     try {
-      fs.appendFileSync(this.logPath(runId), JSON.stringify(event) + "\n", { encoding: "utf8", mode: 0o600 });
+      fs.appendFileSync(this.logPath(runId), JSON.stringify(safe) + "\n", { encoding: "utf8", mode: 0o600 });
     } catch (exc) {
       logger.warn("failed to append run event", { run_id: runId, error: (exc as Error).message });
     }
@@ -143,7 +156,7 @@ export class RunStore {
     try {
       fs.appendFileSync(
         this.logPath(runId),
-        JSON.stringify({ event: "log", timestamp: Date.now() / 1000, line: line.slice(0, 4000) }) + "\n",
+        JSON.stringify({ event: "log", timestamp: Date.now() / 1000, line: redactText(line.slice(0, 4000)) }) + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
     } catch {
@@ -164,7 +177,7 @@ export class RunStore {
       .slice(Math.max(0, lines.length - Math.min(tail, MAX_LOG_LINES)))
       .flatMap((line) => {
         try {
-          return [JSON.parse(line) as Record<string, unknown>];
+          return [redactStrings(JSON.parse(line)) as Record<string, unknown>];
         } catch {
           return [];
         }
@@ -179,9 +192,23 @@ export class RunStore {
     return out.slice(0, filter.limit ?? 25);
   }
 
+  /** Runs that still hold a profile slot (everything not finished, incl. unknown). */
+  unresolved(profile?: string): RunRecord[] {
+    let out = [...this.runs.values()].filter((r) => isUnresolved(r.status));
+    if (profile) out = out.filter((r) => r.profile === profile);
+    return out;
+  }
+
   nonTerminal(): RunRecord[] {
-    return [...this.runs.values()].filter(
-      (r) => !["completed", "failed", "cancelled", "interrupted", "unknown"].includes(r.status),
-    );
+    return this.unresolved();
+  }
+
+  /** How many runs were created at or after `since` (ISO 8601), for the daily cap. */
+  countCreatedSince(since: string): number {
+    let n = 0;
+    for (const rec of this.runs.values()) {
+      if (rec.created_at >= since) n += 1;
+    }
+    return n;
   }
 }
