@@ -705,13 +705,16 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
   const output = redactCap(typeof job.output_tail === "string" ? job.output_tail : "", 8192);
   const truncated = output.truncated || job.truncated === true;
   const tests = job.tests ?? null;
+  // The artifact is built from the commit, so local edits are reported, not
+  // fatal - surface that fact to the caller (count only, never file names).
+  const dirty = { dirty: job.dirty ?? null, dirty_files: job.dirty_files ?? null };
 
   if (!job.ok) {
     return {
       ok: false,
       code: job.code ?? "build_failed",
       message: `plugin-builder reported a failed gradle build (${job.code ?? "build_failed"})`,
-      result: { build_id: job.id, source: spec.source, ref: job.ref, tests, output_tail: output.text, truncated },
+      result: { build_id: job.id, source: spec.source, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
 
@@ -723,7 +726,7 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       ok: false,
       code: "artifact_missing",
       message: "the build reported success but the recorded artifact is missing from the artifact volume",
-      result: { build_id: job.id, ref: job.ref, tests, output_tail: output.text, truncated },
+      result: { build_id: job.id, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
   // Re-hash in the helper's own process: the artifact volume is shared, so the
@@ -733,7 +736,7 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       ok: false,
       code: "artifact_hash_mismatch",
       message: "the artifact's sha256 does not match the file in the artifact volume",
-      result: { build_id: job.id, ref: job.ref, artifact },
+      result: { build_id: job.id, ref: job.ref, artifact, ...dirty },
     };
   }
   const size = statSync(artifactPath).size;
@@ -745,6 +748,7 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
     source: spec.source,
     ref: job.ref,
     tests,
+    ...dirty,
     at: new Date(deps.now()).toISOString(),
   };
   writeJson(`${deps.cfg.artifactsDir}/state/last-build.json`, record);
@@ -773,6 +777,8 @@ async function opRunTests(params: Record<string, unknown>, deps: ActionDeps): Pr
     command: spec.command,
     ref: job.ref,
     tests: job.tests ?? null,
+    dirty: job.dirty ?? null,
+    dirty_files: job.dirty_files ?? null,
     output_tail: output.text,
     truncated: output.truncated || job.truncated === true,
   };

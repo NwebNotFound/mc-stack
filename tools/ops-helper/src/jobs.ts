@@ -58,6 +58,9 @@ export interface BuilderResult {
   started_at?: string;
   finished_at?: string;
   tests?: { tests: number; failures: number; errors: number; skipped: number } | null;
+  /** Whether the builder's working tree diverged from the commit (a count only). */
+  dirty?: boolean | null;
+  dirty_files?: number | null;
   artifact?: BuilderArtifact | null;
   output_tail?: string;
   truncated?: boolean;

@@ -31,6 +31,8 @@ function builderResult(over = {}) {
     code: null,
     ref: "b".repeat(40),
     tests: null,
+    dirty: null,
+    dirty_files: null,
     artifact: null,
     output_tail: "",
     truncated: false,
@@ -278,12 +280,23 @@ test("a non-object params payload is refused", async () => {
 
 test("ops_run_tests hands one strictly shaped job to plugin-builder", async () => {
   const jobs = new FakeJobClient({
-    result: builderResult({ action: "test", target: "hermes-mcp", tests: { tests: 25, failures: 0, errors: 0, skipped: 0 }, output_tail: "# pass 25\n" }),
+    result: builderResult({
+      action: "test",
+      target: "hermes-mcp",
+      tests: { tests: 25, failures: 0, errors: 0, skipped: 0 },
+      dirty: true,
+      dirty_files: 2,
+      output_tail: "# pass 25\n",
+    }),
   });
   const deps = makeDeps({ jobs, now: () => 1_700_000_000_000 });
   const out = await handleOp("ops_run_tests", { target: "hermes-mcp" }, deps);
   assert.equal(out.ok, true, out.message);
   assert.deepEqual(out.result.tests, { tests: 25, failures: 0, errors: 0, skipped: 0 });
+  // Provenance: the artifact came from the commit, so a diverging working tree is
+  // reported to the caller as a count instead of failing the run.
+  assert.equal(out.result.dirty, true);
+  assert.equal(out.result.dirty_files, 2);
   assert.equal(jobs.submitted.length, 1);
   const job = jobs.submitted[0];
   // The exact key set: nothing but an action, the commit sha and a target.
@@ -325,6 +338,7 @@ test("ops_build_plugin verifies the artifact hash itself and does not deploy", a
   assert.equal(out.result.sha256, sha);
   assert.deepEqual(out.result.tests, { tests: 441, failures: 0, errors: 0, skipped: 13 });
   assert.equal(out.result.deployed, false);
+  assert.equal(out.result.dirty, null, "a builder that could not inspect the tree reports null, not false");
   assert.ok(existsSync(out.result.artifact_path), "the artifact must stay in the artifact volume");
   const state = JSON.parse(readFileSync(`${dir}/artifacts/state/last-build.json`, "utf8"));
   assert.equal(state.sha256, sha);

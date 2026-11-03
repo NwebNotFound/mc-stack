@@ -159,8 +159,44 @@ test("plugin-builder has no socket, no network and hard resource caps", () => {
   assert.match(text, /^ {4}pids_limit: \d+$/m, "PID cap");
   assert.match(text, /^ {4}build: \.\/tools\/plugin-builder$/m, "built from this repo");
   assert.match(text, /^ {6}- ops-jobs:\/jobs$/m, "the job volume is the only channel from ops-helper");
-  // The repo is mounted read-only: the builder never writes into the checkout.
-  assert.match(text, /^ {6}- \.\/:\/repo:ro$/m, "the repo must be read-only");
+  // The repo is mounted NARROWLY and read-only: the two source trees the
+  // allowlist can build/test, the allowlist file and `.git` - never the root.
+  assert.match(text, /^ {6}- \.\/plugins-src:\/repo\/plugins-src:ro$/m, "the craftcore source tree, read-only");
+  assert.match(text, /^ {6}- \.\/tools:\/repo\/tools:ro$/m, "the JS test sources, read-only");
+  assert.match(text, /^ {6}- \.\/config\/ops-allowlist\.json:\/repo\/config\/ops-allowlist\.json:ro$/m, "the allowlist file, read-only");
+  assert.match(text, /^ {6}- \.\/\.git:\/repo\/\.git:ro$/m, "`.git` for the commit assertion, read-only");
+  assert.equal(/^ {6}- \.\/:\/repo:ro$/m.test(text), false, "the repo ROOT must not be mounted");
+});
+
+test("plugin-builder cannot reach .env, secrets/ or data/ at all", () => {
+  const block = blockOf("plugin-builder");
+  const mounts = block.filter((line) => /^ {6}- /.test(line));
+  assert.ok(mounts.length > 0, "expected the plugin-builder volume list");
+  for (const forbidden of [".env", "secrets", "data", "backups"]) {
+    const re = new RegExp(`(^|[/:])${forbidden.replace(".", "\\.")}([/:]|$)`);
+    assert.ok(
+      !mounts.some((line) => re.test(line)),
+      `${forbidden} must not be mounted into plugin-builder (mounts: ${mounts.join(" | ")})`,
+    );
+  }
+  assert.ok(
+    !mounts.some((line) => /- \.\/[:]/.test(line) || /- \.\/$/.test(line)),
+    "the repo root must never be mounted into plugin-builder",
+  );
+  // Every mount that does reach into the repo is read-only.
+  for (const line of mounts.filter((l) => l.includes("/repo"))) {
+    assert.match(line, /:ro$/, `repo mount must be read-only: ${line}`);
+  }
+});
+
+test("ops-helper keeps the whole repo read-only (narrowing it would break git state and df)", () => {
+  const block = blockOf("ops-helper");
+  const mounts = block.filter((line) => /^ {6}- /.test(line));
+  assert.ok(mounts.includes("      - ./:/repo:ro"), "ops-helper reads the whole repo, read-only");
+  assert.ok(
+    !mounts.some((line) => /^ {6}- \.\/(\.env|secrets)/.test(line)),
+    "ops-helper must not mount .env or secrets/ separately",
+  );
 });
 
 test("only ops-helper and plugin-builder share the job volume (no other new socket holder)", () => {

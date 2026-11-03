@@ -13,11 +13,18 @@
 # suites) so a single service can serve every fixed command in
 # config/ops-allowlist.json. Dependencies come from pre-warmed cache volumes
 # (see README), never from the network.
-FROM gradle:9-jdk
+#
+# Pinned by digest (not tag): the tag is mutable, so `gradle:9-jdk` could change
+# under us between two builds of the same commit. The digest is the OCI image
+# INDEX digest of `gradle:9-jdk` (multi-arch, verified with
+# `docker buildx imagetools inspect gradle:9-jdk`), so it resolves per platform.
+# To update: change the tag and refresh the digest in the same commit.
+FROM gradle:9-jdk@sha256:e46e15353757ef9c9be0197a243653e88d25ebcd4c3c841057cf839c11fcf898
 
 USER root
-# git is only used for one read-only assertion (`git rev-parse HEAD` against the
-# read-only repo mount); node runs the poller and the JS test suites.
+# git is only used read-only against the repo mount (`git rev-parse HEAD`,
+# `git archive <ref> -- <source>` and `git status --porcelain -- <source>`);
+# node runs the poller and the JS test suites.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends nodejs git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -27,6 +34,7 @@ ENV BUILDER_JOBS_DIR=/jobs \
     BUILDER_RESULTS_DIR=/artifacts/builder \
     BUILDER_REPO=/repo \
     BUILDER_ALLOWLIST_PATH=/repo/config/ops-allowlist.json \
+    BUILDER_SOURCE_ROOTS=plugins-src,tools \
     BUILDER_WORK_DIR=/work \
     BUILDER_POLL_MS=1000 \
     BUILDER_JOB_TIMEOUT_SECONDS=1800 \

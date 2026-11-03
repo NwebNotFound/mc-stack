@@ -43,16 +43,27 @@ The job file is written by `ops-helper`, but this service does **not** trust it:
 2. **Action enum and sha shape.** `action` is `build` or `test`; `ref` must be a
    full lower-case 40-hex commit sha; a `test` target must look like a service
    name **and** exist in `build.tests` of the allowlist.
-3. **Commit assertion.** The repo is mounted read-only, so nothing can check out
-   a different revision here. Instead the builder asserts that
-   `git rev-parse HEAD` of the mount equals the job's `ref` (`ref_mismatch`
-   otherwise) and then builds the checked-out tree. The `ref` is therefore a
-   *claim about which tree was built*, verified, not a revision selector.
-4. **Fixed commands only.** The argv is read from `config/ops-allowlist.json`
+3. **Commit assertion and provenance.** The repo is mounted read-only, and only
+   NARROWLY: `plugins-src/`, `tools/`, `config/ops-allowlist.json` and `.git`
+   (see "Mounts"). A build/test exports the tree of the job's `ref` directly from
+   the object store with `git archive <ref> -- <source>`, unpacks it into a
+   disposable directory and builds there. `git rev-parse HEAD` is still asserted
+   to equal the job's `ref` (`ref_mismatch` otherwise), so the `ref` is a verified
+   claim about which commit was built — and, unlike a working-tree copy, the
+   artifact now contains exactly that commit. Nothing but source code is reachable
+   from this container: `.env`, `secrets/` and `data/` are not mounted at all.
+4. **Diverging working tree is reported, not built.** Local, uncommitted edits
+   can no longer leak into an artifact (see above), so they are not an error: the
+   result carries `dirty: true|false|null` and `dirty_files: <count>` from
+   `git status --porcelain -- <source>` — a COUNT only, never file names. `null`
+   means the tree could not be inspected, which is not the same as "clean".
+5. **Fixed commands only.** The argv is read from `config/ops-allowlist.json`
    (`build.plugin`, `build.tests.<name>`), never from the job. A spec that names
    an image this container does not declare (`BUILDER_TOOLCHAINS`) is refused
-   (`unknown_toolchain`) rather than run on the wrong toolchain.
-5. **No network, no socket.** `network_mode: none`, no `/var/run/docker.sock`,
+   (`unknown_toolchain`) rather than run on the wrong toolchain, and a spec whose
+   `source` is outside the mounted roots (`BUILDER_SOURCE_ROOTS`) is refused with
+   `source_not_mounted`.
+6. **No network, no socket.** `network_mode: none`, no `/var/run/docker.sock`,
    `cap_drop: ALL`, `no-new-privileges`, read-only rootfs and explicit CPU/RAM/PID
    caps. A build cannot reach the internet, the Minecraft servers, the socket or
    the helper.
@@ -84,7 +95,7 @@ docker run --rm -v mc-stack-ops-npm-cache:/root/.npm \
 A cold cache fails loudly: every gradle command carries `--offline` and the npm
 setup uses `--offline`.
 
-## Volumes and limits
+## Mounts
 
 | Volume | Mount | Mode |
 | --- | --- | --- |
@@ -92,10 +103,34 @@ setup uses `--offline`.
 | `mc-stack-ops-artifacts` | `/artifacts` | rw (results + jar) |
 | `mc-stack-ops-gradle-cache` | `/home/gradle/.gradle` | rw |
 | `mc-stack-ops-npm-cache` | `/root/.npm` | rw |
-| repo | `/repo` | **ro** |
+| `./plugins-src` | `/repo/plugins-src` | **ro** |
+| `./tools` | `/repo/tools` | **ro** |
+| `./config/ops-allowlist.json` | `/repo/config/ops-allowlist.json` | **ro** |
+| `./.git` | `/repo/.git` | **ro** |
 
-`/work` and `/tmp` are tmpfs (2 GB / default); the build happens on a copy of the
-source under `/work`, never in `/repo`.
+The repo is mounted NARROWLY on purpose: only the two source trees the allowlist
+can build/test, the allowlist file itself and `.git`. The repo **root** is not
+mounted, so `.env`, `secrets/` and `data/` are not reachable from this service at
+all — a build must never be able to read them (or bake them into a jar that is
+then deployed). A compose test asserts exactly that
+(`tools/ops-helper/test/proxy.test.mjs`).
+
+`.git` is all `git archive` and `git status` need, and both run with
+`GIT_OPTIONAL_LOCKS=0`, so nothing tries to write the index of the read-only
+mount. `ops-helper` keeps the whole repo mounted read-only — deliberately, and
+for a different reason: see "Why the repo mount is not narrowed" in
+`tools/ops-helper/README.md`.
+
+`/work` and `/tmp` are tmpfs (2 GB / default); the tree is exported from git and
+built under `/work`, never in `/repo`.
+
+## Image pinning
+
+`FROM gradle:9-jdk@sha256:…` is pinned by **digest**, not tag: a tag is mutable,
+so the same commit could otherwise build against a different base image. The
+digest is the OCI image **index** digest, so it still resolves per platform.
+Refreshing it is a deliberate, reviewable commit (see the comment in the
+Dockerfile).
 
 ## Tests
 
@@ -103,6 +138,9 @@ source under `/work`, never in `/repo`.
 cd tools/plugin-builder && node --test test/*.test.mjs
 ```
 
-No docker, no network: the suite hammers the job validator with smuggled
-commands, unknown keys, bad shas, path traversal in the file name and oversized
-bodies.
+No docker, no network. `test/validate.test.mjs` hammers the job validator with
+smuggled commands, unknown keys, bad shas, path traversal in the file name and
+oversized bodies. `test/provenance.test.mjs` needs `git` and `tar` (it skips
+itself without them): it makes a throwaway repo with a local, uncommitted edit,
+puts `.git` in read-only mode like the real mount, and asserts the edit does
+**not** reach the exported tree while the tree is reported as `dirty`.

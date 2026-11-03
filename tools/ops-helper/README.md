@@ -221,7 +221,10 @@ T2 additionally:
 
 Reaching a server console needs `docker exec` (or an RCON/broadcast route the ops
 layer does not have), and the filter refuses every exec route. So a T2 action does
-**not** warn players. Instead of pretending, the tier gate requires
+**not** warn players: an `ops_restart_game` (or the restart at the end of a deploy)
+**kills the running game server process and disconnects everyone online without
+warning** — no countdown, no `/say`, no title. The helper cannot even reach the
+game console to do better today. Instead of pretending, the tier gate requires
 `acknowledge_no_announce=true` (otherwise `announcement_not_acknowledged`), and
 the result carries `announcement: { announced: false, detail: "NO in-game
 announcement was made…" }`. If a real channel is added later (e.g. an RCON line
@@ -313,6 +316,18 @@ T1/T2 split is enforced one level up, by the helper's own `services.restart_t1` 
 says which list matched (`restarts: "t1" | "t2"`). `craftcore-db`, `hermes-mcp`,
 `hermes-test`, `ops-helper` and the filter itself are in **neither** list.
 
+> **What the filter does NOT enforce, plainly:** the T1/T2 separation is *only*
+> enforced by this helper. `POST /containers/<name>/restart` is a single route to
+> the Docker API, so the filter can only say yes/no per exact container name — it
+> cannot tell whether the caller is a T1 restart of `bot` or a T2 restart of
+> `lobby`. A caller that bypassed the helper and talked to the filter directly
+> (i.e. already had the internal `ops` network plus a way to reach it) could
+> therefore restart a game server without any of the T2 gates — no `OPS_ARMED`,
+> no cooldown, no recent backup, no no-announce acknowledgement. The T2 gates and
+> the local-only 8767 listener are the helper's job, and the helper is the only
+> thing allowed to speak to the filter. The `t1`/`t2` split in the filter config
+> exists to keep the *lists* auditable and disjoint, not to enforce the tiers.
+
 Everything else is refused: `POST /containers/create`, `/start`, `/stop`,
 `/kill`, `/pause`, `/rename`, `/update`, `DELETE /containers/<x>`,
 `/containers/prune`, `/exec/...`, `/volumes`, `/images`, `/networks`, `/build`,
@@ -323,8 +338,11 @@ duplicate `Content-Length`, `Transfer-Encoding`, `Upgrade` and any request body.
 A unit test reads the service block out of `compose.yaml` and asserts that
 **exactly one** service mounts the socket, that it is the filter, that it has no
 host port, that it lives only in the internal network, that the restart lists keep
-the T1 names separate from the T2 game servers with no overlap, and that
-`plugin-builder` has `network_mode: none`, no socket and hard CPU/RAM/PID caps
+the T1 names separate from the T2 game servers with no overlap, that
+`plugin-builder` has `network_mode: none`, no socket and hard CPU/RAM/PID caps,
+that its repo mount is **narrow** (sources + allowlist + `.git`, all `:ro`) and
+that it mounts **neither** `.env`/`secrets/`/`data/` **nor** the repo root, and
+that `ops-helper` still keeps the whole repo read-only on purpose
 (`tools/ops-helper/test/proxy.test.mjs`). The filter's own behaviour is covered
 by `tools/docker-socket-filter/test/filter.test.mjs` (fake upstream) and
 `tools/docker-socket-filter/test/real-daemon.sh` (real socket, throwaway
@@ -397,6 +415,35 @@ The filter is a genuinely tight boundary, but it is not a sandbox:
   boundary; the filter is defence in depth, and the two now agree far more
   closely than the section-based proxy ever did.
 
+### Why the repo mount is not narrowed (unlike plugin-builder's)
+
+`ops-helper` mounts the whole repo read-only (`./:/repo:ro`). `plugin-builder`
+deliberately does **not**: it sees only `plugins-src/`, `tools/`,
+`config/ops-allowlist.json` and `.git` (see "Builds and tests" below). The
+asymmetry is intentional, and the helper's mount stays whole because narrowing it
+would change behaviour, not just blast radius:
+
+* `ops_git_state` runs `git status --porcelain --untracked-files=no` over the
+  **whole** worktree. With a narrowed mount every unmounted tracked file looks
+  deleted, so the tool would report a permanently dirty repo — a lying status is
+  worse than an honest read-only mount.
+* `ops_disk` runs `df` on the repo **root** and `du` on `/repo/data`. A narrower
+  mount would move the root onto the container's overlay and report the
+  container's filesystem numbers instead of the repo's.
+* `ops_deploy_plugin` / `ops_rollback_plugin` read `/repo/backup.ps1` and the T2
+  gate inspects the backup directory; deploy writes plugin jars into
+  `config/lobby-plugins` / `config/survival-plugins`.
+
+On top of that, the helper's trust level already equals the repo's own code —
+editing `config/ops-allowlist.json` or the helper's source requires a repo commit
+plus a restart, and the helper can already restart game servers and write plugin
+jars. Keeping `.env`, `secrets/` and `data/` out of reach matters for the service
+that *runs build commands from source* (`plugin-builder`, no network, no socket),
+not for the control plane whose whole job is host-level ops. `.env` is never read
+by the helper (no tool takes it as input, no log line contains it) and `data/` is
+only ever measured, never read — but the mount itself is whole, and that is the
+honest statement.
+
 ## Builds and tests: plugin-builder, offline and capped
 
 `ops_build_plugin` and `ops_run_tests` no longer start a container. The helper
@@ -413,8 +460,15 @@ protocol and threat model. The properties that matter here:
 * CPU/RAM/PID caps (`cpus: "1.5"`, `mem_limit: 2g`, `pids_limit: 512`) so a build
   cannot starve the Minecraft servers.
 * `read_only`, `cap_drop: ALL`, `no-new-privileges`, a tmpfs `/work` for the build
-  copy, and the repo mounted **read-only** — the builder never writes into the
+  tree, and the repo mounted **read-only** — the builder never writes into the
   checkout.
+* **The builder's repo mount is NARROW**: `plugins-src/`, `tools/`,
+  `config/ops-allowlist.json` and `.git` only — never the repo root, so `.env`,
+  `secrets/` and `data/` are unreachable from it (a test asserts that). It builds
+  the tree exported by `git archive <ref> -- <source>`, i.e. exactly the commit a
+  job names, and reports a diverging working tree as `dirty` / `dirty_files`
+  (a count) instead of silently baking local edits into an artifact. See
+  `tools/plugin-builder/README.md`.
 * **No Docker socket.** It is the second service the socket never touches (after
   `ops-helper`); a test asserts it.
 

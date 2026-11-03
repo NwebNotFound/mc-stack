@@ -17,15 +17,22 @@
  * can therefore at most ask this service to build/test something it is already
  * allowed to build/test.
  *
+ * Provenance: the tree that is built is exported with `git archive <ref> -- <source>`
+ * from the read-only `.git` mount, i.e. exactly the commit - never a copy of the
+ * working tree. Uncommitted edits therefore cannot end up in an artifact that
+ * carries a commit's name; a diverging working tree is only reported as a count
+ * (`dirty` / `dirty_files`).
+ *
  * Only files this service itself names are written: `job-*.json` is consumed and
  * removed, the result lands in the artifact volume, and the build happens in a
  * disposable directory under the work dir.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_MAX_JOB_BYTES, JOB_FILE_RE, JOB_VERSION, validateJob } from "./validate.mjs";
+import { extractCommit, worktreeStatus } from "./git.mjs";
 
 const JOBS_DIR = process.env.BUILDER_JOBS_DIR ?? "/jobs";
 const ARTIFACTS_DIR = process.env.BUILDER_ARTIFACTS_DIR ?? "/artifacts";
@@ -39,6 +46,13 @@ const MAX_JOB_BYTES = Number(process.env.BUILDER_MAX_JOB_BYTES ?? String(DEFAULT
 const LOG_TAIL_BYTES = Number(process.env.BUILDER_LOG_TAIL_BYTES ?? "8192");
 /** Toolchains this container declares it can run; a spec naming anything else is refused. */
 const TOOLCHAINS = (process.env.BUILDER_TOOLCHAINS ?? "gradle:9-jdk,node:22-alpine").split(",").map((v) => v.trim()).filter(Boolean);
+/**
+ * Repo-relative roots a spec's `source` may live under. The repo is mounted
+ * NARROWLY (only these roots, the allowlist file and `.git`), so this is both a
+ * description of the mount and a second check: even a tampered allowlist cannot
+ * make the builder read something outside the mounted trees.
+ */
+const SOURCE_ROOTS = (process.env.BUILDER_SOURCE_ROOTS ?? "plugins-src,tools").split(",").map((v) => v.trim()).filter(Boolean);
 
 const log = (entry) => console.log(JSON.stringify({ ts: new Date().toISOString(), service: "plugin-builder", ...entry }));
 
@@ -159,26 +173,46 @@ function assertRepoHead(ref) {
   });
 }
 
-/** Run one spec (setup + command) against a copy of the source in the work dir. */
-async function runSpec(spec, workRoot, extraCommand) {
+/** Is the spec's `source` a repo-relative path inside one of the mounted source roots? */
+function sourceIsMounted(source) {
+  if (typeof source !== "string" || source.length === 0) return false;
+  if (source.startsWith("/") || source.split("/").includes("..")) return false;
+  return SOURCE_ROOTS.some((root) => source === root || source.startsWith(`${root}/`));
+}
+
+/**
+ * Build/test EXACTLY the commit `ref` for one spec.
+ *
+ * The tree is exported from git (`git archive`) into a disposable directory under
+ * the work dir - never copied from the working tree - so uncommitted edits cannot
+ * end up in an artifact that carries a commit's name. The command comes from the
+ * allowlist, never from the job, and runs as an argv list with `shell: false`.
+ */
+async function runSpec(spec, workRoot, ref) {
   if (!TOOLCHAINS.includes(spec.image)) {
-    return { ok: false, code: "unknown_toolchain", stdout: "", stderr: `spec image ${spec.image} is not among ${TOOLCHAINS.join(", ")}`, timedOut: false, truncated: false, root: workRoot };
+    return { ok: false, code: "unknown_toolchain", stdout: "", stderr: `spec image ${spec.image} is not among ${TOOLCHAINS.join(", ")}`, timedOut: false, truncated: false, root: null, source_dir: null };
   }
-  const source = join(REPO_DIR, spec.source);
-  if (!existsSync(source)) return { ok: false, code: "source_missing", stdout: "", stderr: `${spec.source} not in the repo mount`, timedOut: false, truncated: false, root: workRoot };
+  if (!sourceIsMounted(spec.source)) {
+    return { ok: false, code: "source_not_mounted", stdout: "", stderr: `spec source ${spec.source} is not under a mounted source root (${SOURCE_ROOTS.join(", ")})`, timedOut: false, truncated: false, root: null, source_dir: null };
+  }
   const root = mkdtempSync(join(workRoot, "job-"));
-  cpSync(source, join(root, "src"), {
-    recursive: true,
-    filter: (src) => !/[/\\](node_modules|\.git|\.gradle|build|target)([/\\]|$)/.test(src),
-  });
-  const cwd = join(root, "src");
+  const tree = join(root, "tree");
+  mkdirSync(tree, { recursive: true });
+  const archive = await extractCommit({ repoDir: REPO_DIR, ref, source: spec.source, destDir: tree, timeoutMs: JOB_TIMEOUT_SECONDS * 1000 });
+  if (!archive.ok) {
+    return { ok: false, code: archive.code ?? "archive_failed", stdout: "", stderr: archive.stderr, timedOut: archive.code === "archive_timeout", truncated: false, root, source_dir: null };
+  }
+  const source_dir = join(tree, spec.source);
+  if (!existsSync(source_dir)) {
+    return { ok: false, code: "source_missing", stdout: "", stderr: `${spec.source} is not part of commit ${ref}`, timedOut: false, truncated: false, root, source_dir: null };
+  }
   const limit = { timeoutMs: JOB_TIMEOUT_SECONDS * 1000, maxBytes: LOG_TAIL_BYTES * 2 };
   if (spec.setup && spec.setup.length > 0) {
-    const setup = await run(spec.setup, { cwd, ...limit });
-    if (!setup.ok) return { ...setup, code: setup.timedOut ? "setup_timeout" : "setup_failed", root };
+    const setup = await run(spec.setup, { cwd: source_dir, ...limit });
+    if (!setup.ok) return { ...setup, code: setup.timedOut ? "setup_timeout" : "setup_failed", root, source_dir };
   }
-  const res = await run(extraCommand ?? spec.command, { cwd, ...limit });
-  return { ...res, root };
+  const res = await run(spec.command, { cwd: source_dir, ...limit });
+  return { ...res, root, source_dir };
 }
 
 async function handleJob(job) {
@@ -195,22 +229,28 @@ async function handleJob(job) {
   if (!spec) return { ...base, ok: false, code: "unknown_target", finished_at: new Date().toISOString() };
 
   mkdirSync(WORK_DIR, { recursive: true });
-  const result = await runSpec(spec, WORK_DIR);
+  const result = await runSpec(spec, WORK_DIR, job.ref);
   const tailed = tail([result.stdout, result.stderr].filter(Boolean).join("\n"), LOG_TAIL_BYTES);
-  const tests = spec.test_results ? readJUnitCounts(join(result.root, "src", spec.test_results)) : null;
+  const tests = spec.test_results && result.source_dir ? readJUnitCounts(join(result.source_dir, spec.test_results)) : null;
+  // The artifact is built from the commit, so a diverging working tree is no
+  // longer an error - it is reported as a COUNT and nothing else. A path whose
+  // tree could not be inspected reports null rather than a wrong "clean".
+  const status = typeof spec.source === "string" ? await worktreeStatus({ repoDir: REPO_DIR, source: spec.source }) : { ok: false, count: null };
   const out = {
     ...base,
     ok: result.ok,
     code: result.ok ? null : result.code ?? (result.timedOut ? "timeout" : "failed"),
     finished_at: new Date().toISOString(),
+    dirty: status.ok ? status.count > 0 : null,
+    dirty_files: status.ok ? status.count : null,
     tests,
     output_tail: tailed.text,
     truncated: tailed.truncated || result.truncated === true,
   };
 
   // Keep a successful build's jar, with its own sha256, in the artifact volume.
-  if (result.ok && job.action === "build" && spec.artifact) {
-    const built = join(result.root, "src", spec.artifact);
+  if (result.ok && job.action === "build" && spec.artifact && result.source_dir) {
+    const built = join(result.source_dir, spec.artifact);
     if (!existsSync(built)) {
       out.ok = false;
       out.code = "artifact_missing";
@@ -223,7 +263,7 @@ async function handleJob(job) {
     }
   }
   try {
-    rmSync(result.root, { recursive: true, force: true });
+    if (result.root) rmSync(result.root, { recursive: true, force: true });
   } catch {
     // best effort cleanup of our own scratch dir
   }
@@ -292,7 +332,7 @@ async function main() {
   mkdirSync(JOBS_DIR, { recursive: true });
   mkdirSync(RESULTS_DIR, { recursive: true });
   mkdirSync(WORK_DIR, { recursive: true });
-  log({ event: "start", jobs_dir: JOBS_DIR, results_dir: RESULTS_DIR, repo: REPO_DIR, toolchains: TOOLCHAINS, poll_ms: POLL_MS });
+  log({ event: "start", jobs_dir: JOBS_DIR, results_dir: RESULTS_DIR, repo: REPO_DIR, toolchains: TOOLCHAINS, source_roots: SOURCE_ROOTS, poll_ms: POLL_MS });
   for (;;) {
     try {
       await pollOnce();
