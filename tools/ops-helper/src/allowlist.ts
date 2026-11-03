@@ -37,6 +37,13 @@ export interface TierRules {
   cooldown_seconds: number;
   min_delay_seconds?: number;
   backup_required?: boolean;
+  /**
+   * How old the newest complete backup may be for a T2 action, in hours.
+   * `ops_backup_now` stays paused (the helper image has no PowerShell), so a T2
+   * action does not *create* a backup - it requires a recent one that was made on
+   * the host. Default 12.
+   */
+  backup_max_age_hours?: number;
 }
 
 export interface ActionSpec {
@@ -262,12 +269,18 @@ export function parseAllowlist(raw: unknown): Allowlist {
     if (t.backup_required !== undefined) {
       rules.backup_required = bool(t.backup_required, `tiers.${tier}.backup_required`);
     }
+    if (t.backup_max_age_hours !== undefined) {
+      rules.backup_max_age_hours = int(t.backup_max_age_hours, `tiers.${tier}.backup_max_age_hours`, 1, 168);
+    }
     tiers[tier] = rules;
   }
   if (tiers.T0.armed_required || tiers.T0.confirm_required) fail("tiers.T0 must stay ungated (read-only)");
   if (!tiers.T2.armed_required) fail("tiers.T2 must require the global armed switch");
   if (tiers.T2.min_delay_seconds === undefined || tiers.T2.min_delay_seconds < 1) {
     fail("tiers.T2 must declare min_delay_seconds >= 1");
+  }
+  if (tiers.T2.backup_required === true && tiers.T2.backup_max_age_hours === undefined) {
+    tiers.T2.backup_max_age_hours = 12;
   }
 
   const pathsRaw = obj(root.paths, "paths");

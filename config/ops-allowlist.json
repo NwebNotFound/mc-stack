@@ -25,7 +25,8 @@
       "armed_required": true,
       "min_delay_seconds": 60,
       "cooldown_seconds": 1800,
-      "backup_required": true
+      "backup_required": true,
+      "backup_max_age_hours": 12
     }
   },
   "paths": {
@@ -124,14 +125,12 @@
     "ops_build_plugin": {
       "tier": "T0",
       "impl": "build_plugin",
-      "enabled": false,
-      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-filter refuses (create is not on the route allowlist)."
+      "enabled": true
     },
     "ops_run_tests": {
       "tier": "T0",
       "impl": "run_tests",
-      "enabled": false,
-      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-filter refuses (create is not on the route allowlist)."
+      "enabled": true
     },
     "ops_restart_service": {
       "tier": "T1",
@@ -147,20 +146,17 @@
     "ops_restart_game": {
       "tier": "T2",
       "impl": "restart_game",
-      "enabled": false,
-      "disabled_reason": "paused (T2): the game-server container names (lobby/survival/velocity) are deliberately NOT on the docker-socket-filter restart allowlist, so the restart would be a 403; the announcement also needs docker exec, which the filter refuses."
+      "enabled": true
     },
     "ops_deploy_plugin": {
       "tier": "T2",
       "impl": "deploy_plugin",
-      "enabled": false,
-      "disabled_reason": "paused (T2): needs a built artifact (POST /containers/create) and docker exec for the announcement; docker-socket-filter refuses both."
+      "enabled": true
     },
     "ops_rollback_plugin": {
       "tier": "T2",
       "impl": "rollback_plugin",
-      "enabled": false,
-      "disabled_reason": "paused (T2): needs a game-server restart (not on the docker-socket-filter restart allowlist) and docker exec for the announcement; the filter refuses both."
+      "enabled": true
     }
   }
 }
