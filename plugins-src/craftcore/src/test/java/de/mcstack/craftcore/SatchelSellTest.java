@@ -17,10 +17,16 @@ class SatchelSellTest {
   }
 
   @Test void taggedRewardsStaySellableWhenTheMaterialHasAPrice() {
-    assertTrue(SatchelSell.tradable(true, true, false, true));
+    assertTrue(SatchelSell.tradable(true, true, false, false));
     assertFalse(SatchelSell.tradable(true, false, true, false));
     assertFalse(SatchelSell.tradable(false, true, false, false));
     assertFalse(SatchelSell.tradable(false, true, true, true));
     assertTrue(SatchelSell.tradable(false, true, true, false));
+  }
+
+  @Test void unsellableBlocklistAlsoBlocksTaggedRewards() {
+    assertFalse(SatchelSell.tradable(true, true, false, true));
+    assertFalse(SatchelSell.tradable(true, true, true, true));
+    assertFalse(SatchelSell.tradable(true, false, false, false));
   }
 }

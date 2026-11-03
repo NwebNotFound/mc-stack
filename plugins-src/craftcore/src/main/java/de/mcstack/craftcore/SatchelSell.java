@@ -17,9 +17,13 @@ final class SatchelSell {
     return total;
   }
 
-  /** A tagged reward sells when the material has a market price, even with custom name or lore. */
+  /**
+   * A tagged reward sells when the material has a market price, even with custom name or lore.
+   * The admin blocklist still wins: a material in {@code market.unsellable} is not sellable as a
+   * tagged reward either. An untagged item additionally needs to pass the vanilla rules.
+   */
   static boolean tradable(boolean tagged, boolean hasPrice, boolean vanillaEligible, boolean unsellable) {
-    if (!hasPrice) return false;
-    return tagged || (vanillaEligible && !unsellable);
+    if (!hasPrice || unsellable) return false;
+    return tagged || vanillaEligible;
   }
 }

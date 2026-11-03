@@ -1,10 +1,10 @@
 package de.mcstack.craftcore;
 
+import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -165,7 +165,7 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
     UUID id = player.getUniqueId();
     Bukkit.getScheduler().runTaskAsynchronously(core, () -> {
       SatchelStore.Buy purchase;
-      try { purchase = core.tx(c -> SatchelStore.buy(c, id.toString(), name, count, new Random())); }
+      try { purchase = core.tx(c -> SatchelStore.buy(c, id.toString(), name, count, new SecureRandom())); }
       catch (Exception ex) {
         busy.remove(id);
         core.getLogger().warning("Satchel-Kauf: " + ex.getClass().getSimpleName());

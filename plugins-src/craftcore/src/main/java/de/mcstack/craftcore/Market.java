@@ -762,8 +762,17 @@ final class Market implements Listener {
     return m != null && SurvivalItems.obtainable(cfg, m) && PriceCatalog.eligible(cfg, m)
         && !cfg.getStringList("market.unsellable").contains(m.name());
   }
+  /**
+   * Market-star, material and item rules for the bank buyback. A satchel reward is capped at the
+   * pull price, so its tagged stack is sellable even though name, lore or NBT make it
+   * non-vanilla; {@code market.unsellable} still blocks it.
+   */
   private boolean canSell(ItemStack real){
-    return real!=null && VipStarGuard.sellable(real) && sellable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType());
+    if(real==null || !VipStarGuard.sellable(real)) return false;
+    Material m=real.getType();
+    boolean vanillaEligible=sellable(core.getConfig(),m) && eligible(real);
+    return SatchelSell.tradable(SatchelItems.tagged(real),hasPrice(m),vanillaEligible,
+        core.getConfig().getStringList("market.unsellable").contains(m.name()));
   }
   private void finishSale(String id) {
     try { core.tx(c->{
