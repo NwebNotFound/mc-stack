@@ -757,6 +757,15 @@ Branch `feat/vip-rework` (Worktree `C:\Users\nilsw\vip-worktree`), Basis `92ad8b
 - Build: `docker run --rm -v craftcore-gradle-cache:/home/gradle/.gradle -v <worktree>:/w -w /w/plugins-src/craftcore gradle:9-jdk gradle build --no-daemon` -> BUILD SUCCESSFUL, 441 Tests, 0 Fehler (13 uebersprungen). Neu: `VipLimitsTest`, `VipConfigTest`, `VipStartProgressTest`, `VipStartCoordinatorTest` (12 Faelle inkl. Nebenlaeufigkeit, Timeout und Abbruch), `VipAddonsTest`, `VipMemberRulesTest`, `VipStoreMembersTest`, `VipStarRulesTest`, `VipSqlMigrationTest`, `VipKickTest`, `VipOwnerLimitTest`, `VipConnectRetryTest`, `VipAddonRulesTest`.
 - Offen: Migration ausfuehren und Deploy, Ingame-Test mit echtem Client (GUIs, Bossbar, Einladen/Kicken, Sterntransfer), Admin-Sicht auf fremde Welten im Hub (nur per `/vw <aktion> <owner:name>`), Presence auf VIP-Slots, Website-Queue und `/lobby`-Velocity-Plugin (separater PR).
 
+## hermes-mcp (03.11.2026)
+
+- Neu: `tools/hermes-mcp` (TypeScript, `@modelcontextprotocol/sdk` 1.32.2) als Remote-MCP-Server mit Streamable HTTP unter `/mcp`. Tools: `list_profiles`, `list_models`, `start_run`, `get_run`, `list_runs`, `get_run_logs`, `cancel_run` (nur mit `confirm=true`), `health`.
+- Compose: neuer Dienst `hermes-mcp` im Profil `mcp`, nur im Netz `minecraft` (kein Host-Port, `expose: 8765`, `read_only`, `cap_drop: ALL`), Daten unter `data/hermes-mcp/`. Zusaetzlich `cloudflared-mcp` im Profil `mcp-tunnel` vorbereitet (nicht gestartet).
+- Gateway: benannte Profile brauchen ihren eigenen `API_SERVER_KEY` in `profiles/<name>/.env`, sonst antwortet `/p/<profile>/v1/runs` mit `Invalid gateway API key`; unbekannte Namen mit `Unknown or unconfigured profile`. Fuer cloudflare, discord, homelab und minecraft wurde je ein eigener Key erzeugt (Backups: `.env.bak-20261103-mcp`), die Zuordnung liegt als `HERMES_PROFILE_KEYS` in `.env`. Kein Gateway-Neustart noetig, der Profil-Rescan greift sofort.
+- Verifiziert gegen den echten Gateway: `health`, `list_profiles`, `list_models`, `start_run` (Antwort `PONG`, Status `completed`), `get_run_logs`, `list_runs`, `cancel_run` (laufender Run -> `cancelled`), sowohl lokal (Host) als auch im Container. `docker port` liefert nichts, also kein Host-Port.
+- Offen: Cloudflare-Tunnel fuer `mcp.nwebnotfound.dev` anlegen, DNS und `MCP_TUNNEL_TOKEN` setzen, dann `docker compose --profile mcp --profile mcp-tunnel up -d`. Fuer claude.ai fehlt noch der OAuth-2.1-Teil (Connector kann keinen statischen Bearer-Header); Claude Code funktioniert mit Bearer-Header.
+- Backup vor dem Deploy: `backups/daily-20261103-114945-855`.
+
 ## TODO
 
 - ParkourBridge: move() kehrt fruehzeitig zurueck, wenn sich der Y-Wert nicht aendert (Y-Early-Return). Beim ebenen Hineinlaufen in eine Wasserstroemung wird daher der Wasser-Reset nicht ausgeloest. Spaeter pruefen, ob die Wasserpruefung vor diesem Early-Return stattfinden sollte.
