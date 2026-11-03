@@ -374,9 +374,9 @@ services:
 
   # Optional dedicated tunnel for mcp.nwebnotfound.dev. Prepared only: start it
   # with `--profile mcp-tunnel` AFTER the tunnel exists in Cloudflare, its public
-  # hostname points at http://hermes-mcp:8765 and MCP_TUNNEL_TOKEN is in .env.
-  # A tunnel that serves hermes-mcp must live in the `mcp` network (that is the
-  # network hermes-mcp is attached to); see tools/hermes-mcp/README.md.
+  # hostname points at http://hermes-mcp:8765 and HERMES_MCP_TUNNEL_TOKEN is in
+  # .env. It runs in the `mcp` network (same network as hermes-mcp), so it needs
+  # no published host port and no extra compose file; see tools/hermes-mcp/README.md.
   # See tools/hermes-mcp/cloudflared.config.example.yml for the local-config variant.
   cloudflared-mcp:
     image: cloudflare/cloudflared:2026.10.0
@@ -384,8 +384,8 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: "${MCP_TUNNEL_TOKEN:-}"
-    networks: [minecraft]
+      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-}"
+    networks: [mcp]
 
   cloudflared:
     image: cloudflare/cloudflared:2026.10.0
@@ -399,8 +399,9 @@ services:
 networks:
   minecraft:
     driver: bridge
-  # Dedicated network for hermes-mcp with a fixed name, so an external compose
-  # file (e.g. the cloudflared tunnel) can join it via `external: true`.
+  # Dedicated network for hermes-mcp with a fixed name; the `cloudflared-mcp`
+  # tunnel service runs in this same network, so no external compose file and no
+  # `external: true` wiring is needed.
   mcp:
     name: mcp
 

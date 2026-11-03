@@ -121,14 +121,15 @@ it live:
 
 1. Zero Trust → Networks → Tunnels → **Create a tunnel** (cloudflared, free).
 2. Public hostname: `mcp.nwebnotfound.dev` → `http://hermes-mcp:8765`
-   (the tunnel lives in the `mcp` network — the compose network name is fixed
-   to `mcp`, so a separate compose file can join it as `external: true` —
-   so no host port is needed).
-3. Copy the tunnel token into `.env` as `MCP_TUNNEL_TOKEN=…` (never in git).
-4. Start it: `docker compose --profile mcp --profile mcp-tunnel up -d`.
-   The tunnel container must be attached to the `mcp` network to reach
-   `hermes-mcp`; an external compose file can join it with
-   `networks: { mcp: { external: true } }`.
+   (the tunnel runs only in the `mcp` network, the same network as
+   `hermes-mcp`, so no host port is published and no hostname/port mapping on
+   the host is needed).
+3. Put the tunnel token into `.env` as `HERMES_MCP_TUNNEL_TOKEN=…` (never in git).
+4. Start it:
+   `docker compose --profile mcp-tunnel --env-file .env up -d --no-deps cloudflared-mcp`
+   The `cloudflared-mcp` service is defined in `compose.yaml` and attaches only
+   to the `mcp` network, so it reaches `hermes-mcp` directly; no separate
+   compose file and no `external: true` wiring is needed.
 5. Optional hardening in Cloudflare: WAF rule on `/mcp` limiting to your
    countries/ASN, and Access (service token) in front of the hostname.
 6. Verify: `curl -sS -o /dev/null -w '%{http_code}\n' https://mcp.nwebnotfound.dev/healthz`
