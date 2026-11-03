@@ -208,7 +208,7 @@ final class Market implements Listener {
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
     return new Price(total, CurvePrice.mid(base,end), buy?"auf":"ab");
   }
-  private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config) throws SQLException {
+  private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config, Long satchelCap) throws SQLException {
     long now=System.currentTimeMillis();
     double base=config.base();
     CurvePrice.Factors factors=CurvePrice.factors(core.getConfig());
@@ -222,7 +222,7 @@ final class Market implements Listener {
     long total=0;
     for(int i=0;i<amount;i++) {
       long unit=Math.min(CurvePrice.sellCents(CurvePrice.mid(base,net-i),cap,factors),config.maxSell());
-      total=Math.addExact(total,sellBreakdown(m,unit,enchants,damage,config.pricing()).total());
+      total=Math.addExact(total,SatchelSell.payout(sellBreakdown(m,unit,enchants,damage,config.pricing()).total(),satchelCap));
     }
     double end=net-amount;
     CurvePrice.save(c,m.name(),end,now);
@@ -321,19 +321,19 @@ final class Market implements Listener {
   private void sell(Player p, Material m) throws Exception {
     if(!SurvivalItems.obtainable(core.getConfig(), m)) { p.sendMessage("Dieses Item gibt es im Survival nicht."); return; }
     PlayerInventory inv=p.getInventory(); int slot=-1;
-    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && eligible(stack)) { slot=i; break; } }
+    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && (eligible(stack) || SatchelItems.tagged(stack))) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
     ItemStack before=inv.getItem(slot).clone(); ItemStack after=before.clone(); after.setAmount(before.getAmount()-1); inv.setItem(slot,after.getAmount()==0?null:after);
     int damage=before.getItemMeta() instanceof Damageable d ? d.getDamage() : 0;
     try {
-      if(!sellUnit(p.getUniqueId(),m,damage,sellEnchants(before),pricingConfig(core.getConfig()))){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht.");return;}
+      if(!sellUnit(p.getUniqueId(),m,damage,sellEnchants(before),pricingConfig(core.getConfig()),SatchelItems.cap(before))){inv.setItem(slot,before);p.sendMessage("Tageslimit erreicht.");return;}
     } catch(Exception ex) { inv.setItem(slot,before); throw ex; }
     p.sendMessage("Verkauf abgeschlossen.");
   }
-  private boolean sellUnit(UUID player, Material m, int damage, List<SellPricing.Enchant> enchants, SellPricing.Config config) throws Exception {
+  private boolean sellUnit(UUID player, Material m, int damage, List<SellPricing.Enchant> enchants, SellPricing.Config config, Long satchelCap) throws Exception {
     String id=UUID.randomUUID().toString();
     return core.tx(c->{String day=dayKey(); String owner=DiscordRevenue.lock(c,player.toString(),day);
-      long cp=sellBreakdown(m,price(c,m,false,false).cents(),enchants,damage,config).total();
+      long cp=SatchelSell.payout(sellBreakdown(m,price(c,m,false,false).cents(),enchants,damage,config).total(),satchelCap);
       if(cp<=0 || affordable(DiscordRevenue.remainingOwner(c,owner,day,revenueLimit()),cp,1)==0) return false;
       if(!BuybackCaps.reserve(c,core.getConfig(),owner,m,day)) return false;
       if(cp>0 && !DiscordRevenue.reserve(c,owner,day,cp,revenueLimit())) throw new SQLException("Tageslimit konnte nicht reserviert werden");
@@ -403,7 +403,7 @@ final class Market implements Listener {
           Long cents=priceCache.get(real.getType());
           if(cents==null){cents=core.tx(c->price(c,real.getType(),false,false,config).cents());priceCache.put(real.getType(),cents);}
           breakdown=sellBreakdown(real.getType(),cents,sellEnchants(real),damage,config.pricing());
-          long unitTotal=breakdown.total();
+          long unitTotal=SatchelSell.payout(breakdown.total(),SatchelItems.cap(real));
           if(unitTotal==0)reason="Wert 0 CP (komplett beschaedigt)";
           else {
             String key=real.getType().name()+"|"+unitTotal; Boolean allowed=allowedCache.get(key);
@@ -413,7 +413,8 @@ final class Market implements Listener {
         }
         if(reason!=null) lore.add(org.bukkit.ChatColor.GRAY+reason);
         else {
-          long unit=breakdown.total(); menu.sellable[i]=true; menu.total=Math.addExact(menu.total,total(unit,real.getAmount())); menu.count+=real.getAmount();
+          long unit=SatchelSell.payout(breakdown.total(),SatchelItems.cap(real)); menu.sellable[i]=true; menu.total=Math.addExact(menu.total,total(unit,real.getAmount())); menu.count+=real.getAmount();
+          if(SatchelItems.tagged(real)) lore.add("Satchel-Deckel: "+Money.format(SatchelItems.cap(real)));
           lore.add("Preis/Stueck: "+Money.format(unit)); lore.add("Preis/Stack ("+real.getAmount()+"): "+Money.format(total(unit,real.getAmount())));
           lore.add("Basis: "+Money.format(breakdown.base())); lore.add("Abzug Haltbarkeit: "+Money.format(breakdown.durabilityReduction()));
           lore.add("Roher Bonus: "+Money.format(breakdown.enchantBonus())); lore.add("Bonus-Deckel: "+Money.format(configCap())+"; nach Deckel: "+Money.format(breakdown.enchantBonusCapped()));
@@ -498,7 +499,7 @@ final class Market implements Listener {
           SellTransaction.run(c,key,tx->{
             String day=DailyRevenue.dayKey(java.time.Instant.now(),config.zone(),config.resetHour()), owner=DiscordRevenue.lock(tx,uuid.toString(),day);
             if(amount<1 || amount>CurvePrice.MAX_QTY) throw new SellLimit();
-            cp[0]=commitSell(tx,material,amount,enchants,damage,config);
+            cp[0]=commitSell(tx,material,amount,enchants,damage,config,SatchelItems.cap(stack));
             if(cp[0]<=0) throw new SellLimit();
             if(affordable(DiscordRevenue.remainingOwner(tx,owner,day,config.revenueLimit()),cp[0],1)<1) throw new SellLimit();
             for(int i=0;i<amount;i++) if(!BuybackCaps.reserve(tx,config.perDay(),owner,material,day)) throw new SellLimit();
@@ -761,8 +762,17 @@ final class Market implements Listener {
     return m != null && SurvivalItems.obtainable(cfg, m) && PriceCatalog.eligible(cfg, m)
         && !cfg.getStringList("market.unsellable").contains(m.name());
   }
+  /**
+   * Market-star, material and item rules for the bank buyback. A satchel reward is capped at the
+   * pull price, so its tagged stack is sellable even though name, lore or NBT make it
+   * non-vanilla; {@code market.unsellable} still blocks it.
+   */
   private boolean canSell(ItemStack real){
-    return real!=null && VipStarGuard.sellable(real) && sellable(core.getConfig(), real.getType()) && eligible(real) && hasPrice(real.getType());
+    if(real==null || !VipStarGuard.sellable(real)) return false;
+    Material m=real.getType();
+    boolean vanillaEligible=sellable(core.getConfig(),m) && eligible(real);
+    return SatchelSell.tradable(SatchelItems.tagged(real),hasPrice(m),vanillaEligible,
+        core.getConfig().getStringList("market.unsellable").contains(m.name()));
   }
   private void finishSale(String id) {
     try { core.tx(c->{

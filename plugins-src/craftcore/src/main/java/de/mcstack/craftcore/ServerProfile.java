@@ -6,7 +6,7 @@ import java.util.Set;
 
 public final class ServerProfile {
   public static final Set<String> ECONOMY_COMMANDS = Set.of(
-      "balance", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "testrun");
+      "balance", "pay", "bank", "verkaufen", "market", "shop", "ah", "trade", "abholen", "testrun", "satchel");
 
   private ServerProfile() {}
 

@@ -158,6 +158,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         catch(Exception ex) { getLogger().warning("GRANT "+view+" fuer creepy_ro nicht moeglich: "+ex.getClass().getSimpleName()); }
       }
       new Market(this).start();
+      if (SpawnRoute.isSurvival(server)) new Satchels(this).start();
       new Shop(this).start();
       new Auction(this).start();
       Deliveries.migrate(this);

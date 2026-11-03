@@ -170,6 +170,11 @@ auction:
   fee-basis-points: 500
 
 # Drei zufaellige Aufgaben je Zeitraum; identische Konfiguration auf beiden Backends.
+# Mystery Satchels. Anlegen und Items passieren live in der Datenbank.
+satchels:
+  pity-sr: 10
+  pity-ssr: 50
+
 challenges:
   zone: Europe/Berlin
   reset-hour: 5
