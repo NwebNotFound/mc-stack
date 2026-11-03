@@ -173,10 +173,26 @@ test("ops_run_tests runs the fixed argv and reads the node test summary", async 
   assert.deepEqual(out.result.tests, { tests: 25, failures: 0, errors: 0, skipped: 0 });
   const runs = deps.runner.calls.filter((call) => call.argv[1] === "run");
   assert.equal(runs.length, 2, "setup (npm ci) then the test command");
-  assert.deepEqual(runs[0].argv.slice(-4), ["npm", "ci", "--no-audit", "--no-fund"]);
+  assert.deepEqual(runs[0].argv.slice(-5), ["npm", "ci", "--no-audit", "--no-fund", "--offline"]);
   assert.deepEqual(runs[1].argv.slice(-2), ["npm", "test"]);
   assert.ok(runs[0].argv.includes("--cap-drop"));
   assert.ok(runs[0].argv.includes("no-new-privileges"));
+});
+
+test("build and test containers run with --network none and hard CPU/RAM/PID caps", async () => {
+  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  repoAllow.paths.repo = REPO_ROOT;
+  const deps = makeDeps({ allow: repoAllow, runner: dockerRunner({}) });
+  deps.runner.responses.unshift({ match: (argv) => argv[1] === "run", reply: { stdout: "# tests 1\n# pass 1\n# fail 0\n" } });
+
+  await handleOp("ops_run_tests", { target: "ops-helper" }, deps);
+  const argv = deps.runner.calls.find((call) => call.argv[1] === "run").argv;
+  assert.deepEqual(argv.slice(argv.indexOf("--network"), argv.indexOf("--network") + 2), ["--network", "none"]);
+  assert.deepEqual(argv.slice(argv.indexOf("--cpus"), argv.indexOf("--cpus") + 2), ["--cpus", repoAllow.build.limits.cpus]);
+  assert.deepEqual(argv.slice(argv.indexOf("--memory"), argv.indexOf("--memory") + 2), ["--memory", repoAllow.build.limits.memory]);
+  assert.deepEqual(argv.slice(argv.indexOf("--pids-limit"), argv.indexOf("--pids-limit") + 2), ["--pids-limit", String(repoAllow.build.limits.pids)]);
+  assert.ok(argv.includes("mc-stack-ops-npm-cache:/root/.npm"), "the pre-warmed npm cache must be mounted for offline installs");
+  assert.equal(argv.includes("host"), false, "a build must never share the host network");
 });
 
 test("ops_build_plugin stages the source, hashes the artifact and does not deploy", async () => {

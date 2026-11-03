@@ -11,7 +11,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { GatewayClient, GatewayError, isTerminal } from "./hermes.js";
 import { OpsClient } from "./ops.js";
-import { registerOpsTools } from "./ops-tools.js";
+import { registerOpsTools, type OpsLevel } from "./ops-tools.js";
 import { fail, json } from "./responses.js";
 import type { RunManager } from "./runner.js";
 import type { RunRecord, RunStore } from "./store.js";
@@ -46,6 +46,10 @@ export interface ToolDeps {
   client: GatewayClient;
   runs: RunManager;
   store: RunStore;
+  /** Token level of the current request (only used for the ops tools). */
+  authLevel?: OpsLevel;
+  /** True only on the local-only listener (enables T2). */
+  allowT2?: boolean;
 }
 
 export function registerTools(server: McpServer, deps: ToolDeps): void {
@@ -326,5 +330,12 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   // Ops tools are only advertised when the helper is actually configured: a
   // capability that would fail closed on every call is worse than no tool.
   const ops = new OpsClient(cfg);
-  if (ops.enabled()) registerOpsTools(server, { cfg, ops });
+  if (ops.enabled()) {
+    registerOpsTools(server, {
+      cfg,
+      ops,
+      authLevel: deps.authLevel ?? "base",
+      allowT2: deps.allowT2 === true,
+    });
+  }
 }

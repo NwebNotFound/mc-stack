@@ -144,16 +144,114 @@ const OPS_TOOLS = [
   "ops_rollback_plugin",
 ];
 
-test("registerOpsTools exposes the phase-1 tools and marks the read-only ones", () => {
+const T1_TOOLS = ["ops_restart_service", "ops_backup_now"];
+const T2_TOOLS = ["ops_restart_game", "ops_deploy_plugin", "ops_rollback_plugin"];
+
+/** Register the ops tools for one (level, listener) combination. */
+function opsServer(over = {}) {
   const server = fakeServer();
-  registerOpsTools(server, { cfg: baseCfg(), ops: { call: async () => ({ ok: true, result: {} }) } });
+  registerOpsTools(server, {
+    cfg: baseCfg(),
+    ops: { call: async () => ({ ok: true, result: {} }) },
+    authLevel: "ops",
+    allowT2: true,
+    ...over,
+  });
+  return server;
+}
+
+test("the token levels are ordered: base < ops, unknown is rejected", async () => {
+  const { resolveLevel, tokenMatches } = await import("../dist/auth.js");
+  const cfg = { tokens: ["base-token-0123456789abcdef"], opsTokens: ["ops-token-0123456789abcdefg"] };
+
+  assert.equal(resolveLevel(cfg.tokens[0], cfg), "base");
+  assert.equal(resolveLevel(cfg.opsTokens[0], cfg), "ops", "the ops token is a superset of base");
+  assert.equal(resolveLevel("something-else-0123456789abcdef", cfg), null);
+  assert.equal(resolveLevel("", cfg), null);
+
+  // Fail closed: with no ops token configured nobody reaches the ops level.
+  assert.equal(resolveLevel(cfg.tokens[0], { tokens: cfg.tokens, opsTokens: [] }), "base");
+  assert.equal(resolveLevel(cfg.opsTokens[0], { tokens: cfg.tokens, opsTokens: [] }), null);
+
+  assert.equal(tokenMatches("a".repeat(40), ["a".repeat(40)]), true);
+  assert.equal(tokenMatches("a".repeat(40), ["b".repeat(40)]), false);
+  assert.equal(tokenMatches("", []), false);
+});
+
+test("opsAccess: T0 is free, T1 needs the ops token, T2 needs the local listener", async () => {
+  const { opsAccess, OPS_TOKEN_REQUIRED, OPS_T2_LOCAL_ONLY } = await import("../dist/ops-tools.js");
+
+  assert.equal(opsAccess("T0", "base", false), null);
+  assert.equal(opsAccess("T0", "ops", true), null);
+
+  assert.equal(opsAccess("T1", "base", true), OPS_TOKEN_REQUIRED);
+  assert.equal(opsAccess("T1", "ops", false), null, "T1 is allowed on the tunnel listener with the ops token");
+
+  assert.equal(opsAccess("T2", "base", true), OPS_TOKEN_REQUIRED);
+  assert.equal(opsAccess("T2", "ops", false), OPS_T2_LOCAL_ONLY, "T2 must be refused on the tunnel listener");
+  assert.equal(opsAccess("T2", "ops", true), null);
+});
+
+test("registerOpsTools exposes the phase-1 tools and marks the read-only ones", () => {
+  const server = opsServer();
   for (const name of OPS_TOOLS) assert.ok(server.handlers[name], `${name} must be registered`);
   for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_players", "ops_git_state", "ops_build_plugin", "ops_run_tests"]) {
     assert.equal(server.handlers[name].def.annotations.readOnlyHint, true, `${name} is read-only`);
   }
-  for (const name of ["ops_restart_game", "ops_deploy_plugin", "ops_rollback_plugin"]) {
+  for (const name of T2_TOOLS) {
     assert.equal(server.handlers[name].def.annotations.destructiveHint, true, `${name} is destructive`);
   }
+});
+
+test("T1/T2 tools are not advertised without the ops token, and T2 not without the local listener", () => {
+  const base = opsServer({ authLevel: "base", allowT2: false });
+  for (const name of T1_TOOLS.concat(T2_TOOLS)) {
+    assert.equal(base.handlers[name], undefined, `${name} must not be advertised to a base-token caller`);
+  }
+  for (const name of OPS_TOOLS.slice(0, 8)) {
+    assert.ok(base.handlers[name], `${name} is a T0 tool and stays available`);
+  }
+
+  // Ops token through the tunnel-facing listener: T1 yes, T2 no.
+  const tunnelled = opsServer({ authLevel: "ops", allowT2: false });
+  assert.ok(tunnelled.handlers.ops_restart_service, "T1 is allowed on the tunnel listener");
+  assert.ok(tunnelled.handlers.ops_backup_now);
+  for (const name of T2_TOOLS) {
+    assert.equal(tunnelled.handlers[name], undefined, `${name} must never be advertised on the tunnel listener`);
+  }
+});
+
+test("a T1/T2 tool is not registered at all for a base-token caller", async () => {
+  const calls = [];
+  const server = opsServer({
+    authLevel: "base",
+    allowT2: false,
+    ops: {
+      call: async (a) => {
+        calls.push(a);
+        return { ok: true, result: {} };
+      },
+    },
+  });
+  assert.ok(server.handlers.ops_status, "T0 stays available to the base token");
+  assert.equal(server.handlers.ops_restart_service, undefined, "T1 needs the ops token");
+  assert.equal(server.handlers.ops_restart_game, undefined, "T2 needs the ops token and the local listener");
+  assert.deepEqual(calls, [], "a refused action must not reach ops-helper");
+
+  // Ops token on the local listener: the handler exists and forwards.
+  const local = opsServer({
+    authLevel: "ops",
+    allowT2: true,
+    ops: {
+      call: async (a, params) => {
+        calls.push(a);
+        return { ok: true, action: a, tier: "T2", impl: "restart_game", code: null, message: null, result: params, audit_id: "z" };
+      },
+    },
+  });
+  const ok = await local.handlers.ops_restart_game.handler({ service: "lobby", confirm: true, delay_seconds: 60 });
+  assert.equal(parse(ok).ok, true);
+  assert.deepEqual(calls, ["ops_restart_game"]);
 });
 
 test("an ops tool forwards the call and merges the helper answer", async () => {
@@ -178,9 +276,7 @@ test("an ops tool forwards the call and merges the helper answer", async () => {
 });
 
 test("a refused ops action comes back as isError with the helper's code", async () => {
-  const server = fakeServer();
-  registerOpsTools(server, {
-    cfg: baseCfg(),
+  const server = opsServer({
     ops: {
       call: async () => ({
         ok: false,
@@ -204,9 +300,7 @@ test("a refused ops action comes back as isError with the helper's code", async 
 
 test("the T2 parameters are forwarded unchanged", async () => {
   const calls = [];
-  const server = fakeServer();
-  registerOpsTools(server, {
-    cfg: baseCfg(),
+  const server = opsServer({
     ops: {
       call: async (action, params, opts) => {
         calls.push({ action, params, opts });
@@ -258,4 +352,19 @@ test("registerTools advertises the ops tools only when the helper is configured"
   });
   assert.ok(withOps.handlers.ops_status, "ops_status must be advertised once the helper is configured");
   assert.ok(withOps.handlers.cancel_run, "the run tools stay untouched");
+  // Without a level/listener the caller may only see the read-only tools.
+  for (const name of T1_TOOLS.concat(T2_TOOLS)) {
+    assert.equal(withOps.handlers[name], undefined, `${name} must not be advertised by default`);
+  }
+
+  const elevated = fakeServer();
+  registerTools(elevated, {
+    cfg: baseCfg({ opsHelperUrl: "http://ops-helper:8766", opsHelperToken: TOKEN }),
+    client: {},
+    runs: {},
+    store: null,
+    authLevel: "ops",
+    allowT2: true,
+  });
+  for (const name of OPS_TOOLS) assert.ok(elevated.handlers[name], `${name} must be advertised at the local ops level`);
 });

@@ -66,10 +66,13 @@
     "any change to hermes-test, the Hermes gateway or the ops-helper itself"
   ],
   "build": {
+    "network": "none",
+    "limits": { "cpus": "1.5", "memory": "2g", "pids": 512 },
     "plugin": {
       "source": "plugins-src/craftcore",
       "image": "gradle:9-jdk",
-      "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain"],
+      "cache": "gradle",
+      "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain", "--offline"],
       "artifact": "build/libs/craftcore.jar",
       "test_results": "build/test-results/test"
     },
@@ -77,19 +80,22 @@
       "hermes-mcp": {
         "source": "tools/hermes-mcp",
         "image": "node:22-alpine",
-        "setup": ["npm", "ci", "--no-audit", "--no-fund"],
+        "cache": "npm",
+        "setup": ["npm", "ci", "--no-audit", "--no-fund", "--offline"],
         "command": ["npm", "test"]
       },
       "ops-helper": {
         "source": "tools/ops-helper",
         "image": "node:22-alpine",
-        "setup": ["npm", "ci", "--no-audit", "--no-fund"],
+        "cache": "npm",
+        "setup": ["npm", "ci", "--no-audit", "--no-fund", "--offline"],
         "command": ["npm", "test"]
       },
       "craftcore": {
         "source": "plugins-src/craftcore",
         "image": "gradle:9-jdk",
-        "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain"],
+        "cache": "gradle",
+        "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain", "--offline"],
         "test_results": "build/test-results/test"
       }
     }

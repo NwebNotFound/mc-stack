@@ -2,7 +2,7 @@
   "name": "ops-helper",
   "version": "1.0.0",
   "private": true,
-  "description": "Privileged ops executor for hermes-mcp: holds the Docker socket, runs only fixed allowlisted argv lists.",
+  "description": "Privileged ops executor for hermes-mcp: speaks to a docker-socket-proxy over TCP and runs only fixed allowlisted argv lists.",
   "type": "module",
   "main": "dist/index.js",
   "engines": {

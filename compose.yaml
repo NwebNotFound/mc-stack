@@ -376,11 +376,22 @@ services:
       OPS_HELPER_URL: "${OPS_HELPER_URL:-http://ops-helper:8766}"
       OPS_HELPER_TOKEN: "${OPS_HELPER_TOKEN:-}"
       OPS_HELPER_TIMEOUT_SECONDS: "${OPS_HELPER_TIMEOUT_SECONDS:-120}"
+      # Second token level: T1/T2 ops tools require this token (fail closed when
+      # unset). T2 additionally requires the local listener below.
+      HERMES_MCP_OPS_TOKEN: "${HERMES_MCP_OPS_TOKEN:-}"
+      # Local-only listener. It serves the T2 tools and is published on
+      # 127.0.0.1 ONLY (see `ports`). The tunnel must never point at it.
+      HERMES_MCP_OPS_PORT: "${HERMES_MCP_OPS_PORT:-8767}"
+      HERMES_MCP_OPS_LOCKOUT_AFTER: "${HERMES_MCP_OPS_LOCKOUT_AFTER:-3}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [mcp, ops]
+    ports:
+      # Local T2 entry point: loopback only, never routed by cloudflared-mcp.
+      - "127.0.0.1:${HERMES_MCP_OPS_PORT:-8767}:${HERMES_MCP_OPS_PORT:-8767}"
     expose:
       - "8765/tcp"
+      - "${HERMES_MCP_OPS_PORT:-8767}/tcp"
     volumes:
       - ./data/hermes-mcp:/app/data
     read_only: true
@@ -393,15 +404,15 @@ services:
 
   # Privileged ops executor for hermes-mcp (see tools/ops-helper/README.md).
   #
-  # This is the ONLY service in the stack that gets the Docker socket. It runs
-  # exactly the actions listed in config/ops-allowlist.json with fixed argv
-  # lists (no shell, no free arguments), behind confirm/tier/armed/delay/backup
-  # gates, and writes an append-only audit log. hermes-mcp reaches it only over
-  # the internal network `ops` with the shared OPS_HELPER_TOKEN.
+  # It runs exactly the actions listed in config/ops-allowlist.json with fixed
+  # argv lists (no shell, no free arguments), behind confirm/tier/armed/delay/
+  # backup gates, and writes an append-only audit log. hermes-mcp reaches it only
+  # over the internal network `ops` with the shared OPS_HELPER_TOKEN. It holds NO
+  # raw Docker socket: the only socket holder is docker-socket-proxy below.
   #
   # Profile "ops": nothing starts by itself, and T2 (game servers, deploys) stays
   # refused until OPS_ARMED=true. Start it explicitly:
-  #   docker compose --profile ops --profile mcp up -d ops-helper hermes-mcp
+  #   docker compose --profile ops --profile mcp up -d docker-socket-proxy ops-helper hermes-mcp
   ops-helper:
     build: ./tools/ops-helper
     profiles: ["ops"]
@@ -418,16 +429,21 @@ services:
       OPS_ALLOWLIST_PATH: "/repo/config/ops-allowlist.json"
       OPS_DATA_DIR: "/app/data/ops-helper"
       OPS_ARTIFACTS_DIR: "/artifacts"
+      # Docker API access goes through docker-socket-proxy (below), never through
+      # a raw socket mount. The proxy exposes only /containers + /exec and
+      # refuses volumes/images/networks/system/build/swarm.
+      DOCKER_HOST: "tcp://docker-socket-proxy:2375"
       # Named volumes (not host paths): build containers mount the same volume at
       # the same path, so no host path ever has to be guessed.
       OPS_ARTIFACTS_VOLUME: "mc-stack-ops-artifacts"
       OPS_GRADLE_CACHE_VOLUME: "mc-stack-ops-gradle-cache"
+      OPS_NPM_CACHE_VOLUME: "mc-stack-ops-npm-cache"
       OPS_ACTION_TIMEOUT_SECONDS: "${OPS_ACTION_TIMEOUT_SECONDS:-120}"
       OPS_BUILD_TIMEOUT_SECONDS: "${OPS_BUILD_TIMEOUT_SECONDS:-1800}"
+    depends_on:
+      - docker-socket-proxy
     volumes:
-      # The socket is the whole point of this service: read-only would not allow
-      # a restart. It is never exposed to hermes-mcp or to any other service.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # NO docker socket here: the helper talks to docker-socket-proxy over TCP.
       # The repo is read-only for this service...
       - ./:/repo:ro
       # ...except the backup directory and the two plugin templates a deploy
@@ -443,6 +459,46 @@ services:
       - "8766/tcp"
     read_only: true
     tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # The ONLY holder of the Docker socket (see tools/ops-helper/README.md).
+  #
+  # tecnativa/docker-socket-proxy is an HAProxy in front of the socket that
+  # returns 403 for every API section it was not explicitly granted. It has no
+  # host port and lives only in the internal `ops` network, so ops-helper (and
+  # nothing else) can reach it. Granted here:
+  #   CONTAINERS     - GET /containers/* (ps, inspect, logs) and the
+  #                    create/attach/wait paths a `docker run` needs
+  #   POST           - the method gate for POST requests
+  #   ALLOW_RESTARTS - POST /containers/{id}/restart
+  #   EXEC           - POST /exec/{id}/start, needed for the rcon-cli reads
+  #                    (ops_players) and the T2 announcement
+  # Everything else (VOLUMES, IMAGES, NETWORKS, SYSTEM, BUILD, SWARM, AUTH,
+  # SECRETS, EVENTS, ...) stays at its secure default of 0. See the README for
+  # the residual risk this leaves.
+  docker-socket-proxy:
+    # Pinned by digest on purpose: this container is a privilege boundary.
+    image: tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    profiles: ["ops"]
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      POST: "1"
+      ALLOW_RESTARTS: "1"
+      EXEC: "1"
+      EVENTS: "0"
+      DISABLE_IPV6: "1"
+      LOG_LEVEL: "warning"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [ops]
+    read_only: true
+    tmpfs:
+      - /run
       - /tmp
     security_opt:
       - no-new-privileges:true
@@ -481,9 +537,11 @@ networks:
   # `external: true` wiring is needed.
   mcp:
     name: mcp
-  # Private network between hermes-mcp and ops-helper only. `internal: true`
-  # means it has no route off the host: the helper cannot reach the internet, and
-  # nothing outside these two services can reach the helper.
+  # Private network between hermes-mcp, ops-helper and docker-socket-proxy only.
+  # `internal: true` means it has no route off the host: the helper cannot reach
+  # the internet, the socket proxy cannot call out, and nothing outside these
+  # three services (in particular NOT cloudflared-mcp, which lives only in `mcp`)
+  # can reach any of them.
   ops:
     name: mc-stack-ops
     internal: true
@@ -492,9 +550,10 @@ volumes:
   craftcore-db:
   bot-plugin:
   bot-pending:
-  # Build artifacts and the gradle cache of the ops-helper build containers.
+  # Build artifacts and the offline caches of the ops-helper build containers.
   ops-artifacts:
   ops-gradle-cache:
+  ops-npm-cache:
 
 secrets:
   forwarding_secret:

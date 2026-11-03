@@ -35,8 +35,10 @@ export interface OpsConfig {
   artifactsDir: string;
   /** Name of that volume, as mounted into throwaway build containers. */
   artifactsVolume: string;
-  /** Named volume for the gradle cache of build containers. */
+  /** Named volume for the gradle cache of build containers (offline builds). */
   gradleCacheVolume: string;
+  /** Named volume for the npm cache of the node build/test containers. */
+  npmCacheVolume: string;
 
   dockerBin: string;
   /** Timeout for one fixed docker command. */
@@ -95,6 +97,7 @@ export function loadConfig(): OpsConfig {
     artifactsDir: str("OPS_ARTIFACTS_DIR", "/artifacts"),
     artifactsVolume: str("OPS_ARTIFACTS_VOLUME"),
     gradleCacheVolume: str("OPS_GRADLE_CACHE_VOLUME"),
+    npmCacheVolume: str("OPS_NPM_CACHE_VOLUME"),
     dockerBin: str("OPS_DOCKER_BIN", "docker"),
     actionTimeoutSeconds: num("OPS_ACTION_TIMEOUT_SECONDS", 120, 5, 3600),
     buildTimeoutSeconds: num("OPS_BUILD_TIMEOUT_SECONDS", 1800, 60, 7200),

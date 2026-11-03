@@ -26,15 +26,74 @@ const TIMEOUTS: Record<string, number> = {
   ops_players: 60,
 };
 
+/** Which token level the caller presented at the MCP boundary. */
+import type { OpsLevel } from "./auth.js";
+export type { OpsLevel };
+
 export interface OpsToolDeps {
   cfg: Config;
   ops: OpsClient;
+  /** Which token level the caller presented. */
+  authLevel: OpsLevel;
+  /** True only on the local-only listener; a tunnel request is never T2-capable. */
+  allowT2: boolean;
+}
+
+/**
+ * Two token levels at the MCP boundary: a plain HERMES_MCP_TOKEN is `base`
+ * (read-only T0 tools), a HERMES_MCP_OPS_TOKEN is `ops`. T2 additionally
+ * requires the local-only listener, so a caller that reaches hermes-mcp through
+ * the public tunnel can never restart a game server even with the ops token.
+ *
+ * Pure function so every rule is unit-testable without a socket.
+ */
+export const OPS_TOKEN_REQUIRED = "ops_token_required";
+export const OPS_T2_LOCAL_ONLY = "ops_t2_local_only";
+
+export function opsAccess(tier: string, level: OpsLevel, allowT2: boolean): string | null {
+  if (tier === "T0") return null;
+  if (level !== "ops") return OPS_TOKEN_REQUIRED;
+  if (tier === "T2" && !allowT2) return OPS_T2_LOCAL_ONLY;
+  return null;
 }
 
 export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
-  const { ops } = deps;
+  const { ops, authLevel, allowT2 } = deps;
 
-  const forward = async (action: string, params: Record<string, unknown>) => {
+  const denied = (action: string, code: string) => ({
+    isError: true,
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          {
+            ok: false,
+            action,
+            code,
+            message:
+              code === OPS_T2_LOCAL_ONLY
+                ? `${action} is a T2 action and is only reachable over the local listener (never through the tunnel)`
+                : `${action} needs the second token: present HERMES_MCP_OPS_TOKEN as the bearer token`,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  });
+
+  /**
+   * Every call re-checks its tier before it reaches ops-helper (defence in
+   * depth: the same `opsAccess` rule already decided whether the tool was
+   * advertised at all).
+   */
+  const forward = async (
+    action: string,
+    params: Record<string, unknown>,
+    tier: "T0" | "T1" | "T2" = "T0",
+  ) => {
+    const code = opsAccess(tier, authLevel, allowT2);
+    if (code) return denied(action, code);
     try {
       const res = await ops.call(action, params, { timeoutSeconds: TIMEOUTS[action] ?? 120 });
       if (!res.ok) {
@@ -173,85 +232,89 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     async ({ target }) => forward("ops_run_tests", { target }),
   );
 
-  /* ---------------- T1: reversible, no player impact ---------------- */
+  /* ---------------- T1: reversible, no player impact (needs the ops token) ---------------- */
 
-  server.registerTool(
-    "ops_restart_service",
-    {
-      title: "Ops restart service (T1)",
-      description:
-        "Restart one reversible helper service (allowlist: bot, cloudflared-mcp). Requires confirm=true. Never touches the game servers, the database or hermes-mcp/ops-helper themselves.",
-      inputSchema: {
-        service: z.string().describe("Compose service name from the T1 allowlist, e.g. 'bot'"),
-        confirm: z.boolean().describe("Must be true. Guards against accidental restarts."),
+  if (opsAccess("T1", authLevel, allowT2) === null) {
+    server.registerTool(
+      "ops_restart_service",
+      {
+        title: "Ops restart service (T1)",
+        description:
+          "Restart one reversible helper service (allowlist: bot, cloudflared-mcp). Requires confirm=true. Never touches the game servers, the database or hermes-mcp/ops-helper themselves.",
+        inputSchema: {
+          service: z.string().describe("Compose service name from the T1 allowlist, e.g. 'bot'"),
+          confirm: z.boolean().describe("Must be true. Guards against accidental restarts."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    async ({ service, confirm }) => forward("ops_restart_service", { service, confirm }),
-  );
+      async ({ service, confirm }) => forward("ops_restart_service", { service, confirm }, "T1"),
+    );
 
-  server.registerTool(
-    "ops_backup_now",
-    {
-      title: "Ops backup now (T1)",
-      description:
-        "Run the repo's own backup.ps1 (never a second backup implementation). Requires confirm=true. Note: backup.ps1 stops and restarts lobby+survival briefly, and it needs PowerShell in the helper image - without it the tool reports backup_interpreter_missing and tells you the host command.",
-      inputSchema: {
-        confirm: z.boolean().describe("Must be true."),
+    server.registerTool(
+      "ops_backup_now",
+      {
+        title: "Ops backup now (T1)",
+        description:
+          "Run the repo's own backup.ps1 (never a second backup implementation). Requires confirm=true. Note: backup.ps1 stops and restarts lobby+survival briefly, and it needs PowerShell in the helper image - without it the tool reports backup_interpreter_missing and tells you the host command.",
+        inputSchema: {
+          confirm: z.boolean().describe("Must be true."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-    },
-    async ({ confirm }) => forward("ops_backup_now", { confirm }),
-  );
+      async ({ confirm }) => forward("ops_backup_now", { confirm }, "T1"),
+    );
+  }
 
-  /* ---------------- T2: player impact, disarmed by default ---------------- */
+  /* ---------------- T2: player impact, ops token + local listener only ---------------- */
 
-  server.registerTool(
-    "ops_restart_game",
-    {
-      title: "Ops restart game server (T2)",
-      description:
-        "Restart lobby, survival or velocity. T2: requires confirm=true, an integer delay_seconds >= 60 (players are warned first, best effort) and a fresh backup; the helper must be armed (OPS_ARMED=true). A health check follows the restart.",
-      inputSchema: {
-        service: z.enum(["lobby", "survival", "velocity"]).describe("Which game server to restart"),
-        confirm: z.boolean().describe("Must be true."),
-        delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time before the restart (>= 60)"),
+  if (opsAccess("T2", authLevel, allowT2) === null) {
+    server.registerTool(
+      "ops_restart_game",
+      {
+        title: "Ops restart game server (T2)",
+        description:
+          "Restart lobby, survival or velocity. T2: requires confirm=true, an integer delay_seconds >= 60 (players are warned first, best effort) and a fresh backup; the helper must be armed (OPS_ARMED=true). A health check follows the restart.",
+        inputSchema: {
+          service: z.enum(["lobby", "survival", "velocity"]).describe("Which game server to restart"),
+          confirm: z.boolean().describe("Must be true."),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time before the restart (>= 60)"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-    },
-    async ({ service, confirm, delay_seconds }) =>
-      forward("ops_restart_game", { service, confirm, delay_seconds }),
-  );
+      async ({ service, confirm, delay_seconds }) =>
+        forward("ops_restart_game", { service, confirm, delay_seconds }, "T2"),
+    );
 
-  server.registerTool(
-    "ops_deploy_plugin",
-    {
-      title: "Ops deploy plugin (T2)",
-      description:
-        "Deploy the last ops_build_plugin artifact (artifact_sha256 must match it) into config/lobby-plugins and config/survival-plugins, rolling one service at a time with delay_seconds between them, health check after each restart, automatic rollback to the kept jars on failure. T2: confirm=true, delay_seconds >= 60, armed helper and a fresh backup.",
-      inputSchema: {
-        artifact_sha256: z.string().describe("sha256 returned by ops_build_plugin"),
-        confirm: z.boolean().describe("Must be true."),
-        delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+    server.registerTool(
+      "ops_deploy_plugin",
+      {
+        title: "Ops deploy plugin (T2)",
+        description:
+          "Deploy the last ops_build_plugin artifact (artifact_sha256 must match it) into config/lobby-plugins and config/survival-plugins, rolling one service at a time with delay_seconds between them, health check after each restart, automatic rollback to the kept jars on failure. T2: confirm=true, delay_seconds >= 60, armed helper and a fresh backup.",
+        inputSchema: {
+          artifact_sha256: z.string().describe("sha256 returned by ops_build_plugin"),
+          confirm: z.boolean().describe("Must be true."),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-    },
-    async ({ artifact_sha256, confirm, delay_seconds }) =>
-      forward("ops_deploy_plugin", { artifact_sha256, confirm, delay_seconds }),
-  );
+      async ({ artifact_sha256, confirm, delay_seconds }) =>
+        forward("ops_deploy_plugin", { artifact_sha256, confirm, delay_seconds }, "T2"),
+    );
 
-  server.registerTool(
-    "ops_rollback_plugin",
-    {
-      title: "Ops rollback plugin (T2)",
-      description:
-        "Restore the jars that ops_deploy_plugin kept before its last rollout (rolling, with delay_seconds between services and a health check each). T2: confirm=true, delay_seconds >= 60 and an armed helper.",
-      inputSchema: {
-        confirm: z.boolean().describe("Must be true."),
-        delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+    server.registerTool(
+      "ops_rollback_plugin",
+      {
+        title: "Ops rollback plugin (T2)",
+        description:
+          "Restore the jars that ops_deploy_plugin kept before its last rollout (rolling, with delay_seconds between services and a health check each). T2: confirm=true, delay_seconds >= 60 and an armed helper.",
+        inputSchema: {
+          confirm: z.boolean().describe("Must be true."),
+          delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-    },
-    async ({ confirm, delay_seconds }) => forward("ops_rollback_plugin", { confirm, delay_seconds }),
-  );
+      async ({ confirm, delay_seconds }) => forward("ops_rollback_plugin", { confirm, delay_seconds }, "T2"),
+    );
+  }
 }

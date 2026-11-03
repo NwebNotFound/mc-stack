@@ -53,6 +53,20 @@ export interface BuildSpec {
   setup?: string[];
   artifact?: string;
   test_results?: string;
+  /**
+   * Which pre-warmed offline cache volume to mount into the throwaway container.
+   * The build runs with `--network none`, so its dependencies must already be in
+   * the cache: "gradle" -> the gradle cache volume at /home/gradle/.gradle,
+   * "npm" -> the npm cache volume at /root/.npm.
+   */
+  cache?: "gradle" | "npm";
+}
+
+/** Hard resource caps for the throwaway build/test containers. */
+export interface BuildLimits {
+  cpus: string;
+  memory: string;
+  pids: number;
 }
 
 export interface Allowlist {
@@ -83,7 +97,7 @@ export interface Allowlist {
   };
   forbiddenServices: string[];
   forbiddenOperations: string[];
-  build: { plugin: BuildSpec; tests: Record<string, BuildSpec> };
+  build: { plugin: BuildSpec; tests: Record<string, BuildSpec>; network: string; limits: BuildLimits };
   deploy: {
     order: string[];
     pluginDirs: Record<string, string>;
@@ -159,6 +173,43 @@ function argvList(v: unknown, what: string): string[] {
   return v.map((entry, i) => str(entry, `${what}[${i}]`, TOKEN_RE));
 }
 
+const BUILD_NETWORK_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+const CPU_RE = /^\d{1,3}(\.\d{1,3})?$/;
+const MEMORY_RE = /^\d{1,6}[bkmg]?$/i;
+
+/**
+ * Network for the throwaway build/test containers. `none` (no interface at all)
+ * is the only supported default; a dedicated, narrowly scoped bridge network may
+ * be named explicitly when an offline cache truly cannot be warmed. `host`,
+ * `bridge` and `container:*` are refused: a build must never share the host or
+ * another container's network namespace.
+ */
+function buildNetwork(v: unknown): string {
+  if (v === undefined) return "none";
+  const s = str(v, "build.network", BUILD_NETWORK_RE);
+  if (["host", "bridge", "default"].includes(s)) {
+    fail(`build.network "${s}" is not allowed: use "none" or a dedicated bridge network`);
+  }
+  return s;
+}
+
+function smallNumber(v: unknown, what: string, min: number, max: number): string {
+  const s = typeof v === "number" ? String(v) : str(v, what);
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < min || n > max) fail(`${what} must be between ${min} and ${max}`);
+  return s;
+}
+
+/** Mandatory CPU/RAM/PID caps for every build/test container (no unlimited build). */
+function buildLimits(v: unknown): BuildLimits {
+  const o = obj(v, "build.limits");
+  const cpus = smallNumber(o.cpus, "build.limits.cpus", 0.1, 16);
+  if (!CPU_RE.test(cpus)) fail("build.limits.cpus must look like 1 or 1.5");
+  const memory = str(o.memory, "build.limits.memory", MEMORY_RE);
+  const pids = int(o.pids, "build.limits.pids", 16, 65536);
+  return { cpus, memory, pids };
+}
+
 function buildSpec(v: unknown, what: string): BuildSpec {
   const o = obj(v, what);
   const spec: BuildSpec = {
@@ -169,6 +220,11 @@ function buildSpec(v: unknown, what: string): BuildSpec {
   if (o.setup !== undefined) spec.setup = argvList(o.setup, `${what}.setup`);
   if (o.artifact !== undefined) spec.artifact = relPath(o.artifact, `${what}.artifact`);
   if (o.test_results !== undefined) spec.test_results = relPath(o.test_results, `${what}.test_results`);
+  if (o.cache !== undefined) {
+    const cache = str(o.cache, `${what}.cache`);
+    if (cache !== "gradle" && cache !== "npm") fail(`${what}.cache must be "gradle" or "npm"`);
+    spec.cache = cache;
+  }
   return spec;
 }
 
@@ -258,6 +314,8 @@ export function parseAllowlist(raw: unknown): Allowlist {
       if (Object.keys(out).length === 0) fail("build.tests must not be empty");
       return out;
     })(),
+    network: buildNetwork(buildRaw.network),
+    limits: buildLimits(buildRaw.limits),
   };
   if (build.plugin.artifact === undefined) fail("build.plugin.artifact is required");
 

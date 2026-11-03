@@ -672,13 +672,24 @@ async function runInContainer(
 ): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string; timedOut: boolean; root: string }> {
   const root = stageSource(deps, opts.id, opts.spec);
   const volumes = [`${deps.cfg.artifactsVolume}:${deps.cfg.artifactsDir}`];
-  if (deps.cfg.gradleCacheVolume) volumes.push(`${deps.cfg.gradleCacheVolume}:/home/gradle/.gradle`);
+  if (opts.spec.cache === "gradle" && deps.cfg.gradleCacheVolume) {
+    volumes.push(`${deps.cfg.gradleCacheVolume}:/home/gradle/.gradle`);
+  }
+  if (opts.spec.cache === "npm" && deps.cfg.npmCacheVolume) {
+    volumes.push(`${deps.cfg.npmCacheVolume}:/root/.npm`);
+  }
   const res = await deps.docker.runContainer(
     {
       image: opts.spec.image,
       command: opts.command,
       volumes,
       workdir: `${deps.cfg.artifactsDir}/build/${opts.id}/src`,
+      // Hardened build: no network at all (dependencies come from the pre-warmed
+      // cache volume) and CPU/RAM/PID caps so a build cannot starve the servers.
+      network: deps.allow.build.network,
+      cpus: deps.allow.build.limits.cpus,
+      memory: deps.allow.build.limits.memory,
+      pidsLimit: deps.allow.build.limits.pids,
     },
     deps.cfg.buildTimeoutSeconds * 1000,
   );

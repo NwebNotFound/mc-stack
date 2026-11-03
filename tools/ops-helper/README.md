@@ -8,17 +8,22 @@ Docker socket.
 Claude Code / claude.ai
         │  HTTPS + Bearer token
         ▼
-Cloudflare Tunnel (prepared, NOT created)
-        │
+Cloudflare Tunnel  mcp.nwebnotfound.dev  (already live; the tunnel maps ONLY
+        │                                   to hermes-mcp:8765, never to 8767)
         ▼
-hermes-mcp            (compose network `mcp`; read_only, cap_drop ALL,
-        │              no-new-privileges, NO docker socket)
+hermes-mcp            (compose networks `mcp` + `mc-stack-ops`; read_only,
+        │              cap_drop ALL, no-new-privileges, NO docker socket)
+        │              listener 8765 = tunnel-facing  -> T0/T1 only
+        │              listener 8767 = 127.0.0.1 only -> T0/T1/T2
         │  POST /op  +  Bearer OPS_HELPER_TOKEN     ── network `mc-stack-ops`
         │              (internal: true, no host port, no internet)
         ▼
-ops-helper            (the ONLY service with /var/run/docker.sock,
+ops-helper            (NO docker socket: DOCKER_HOST=tcp://docker-socket-proxy:2375,
         │              repo mounted read-only, fixed allowlist)
         │  docker ps/logs/inspect/exec/restart/run (argv lists, never a shell)
+        ▼
+docker-socket-proxy   (tecnativa/docker-socket-proxy, pinned by digest; the ONLY
+        │              service with /var/run/docker.sock; no host port)
         ▼
 mc-stack services: velocity · lobby · survival · pvp · vipworld-1..3 · bot
                    craftcore-db · playit · cloudflared · hermes-mcp
@@ -29,18 +34,33 @@ and is disarmed (`OPS_ARMED=false`) until Nils says otherwise.
 
 ## Ops tools: threat model
 
-**What the attack surface actually is.** The MCP endpoint is the only piece of
-this stack that is meant to be reachable from the internet (through the
-Cloudflare Tunnel, `mcp.nwebnotfound.dev`). Everything below assumes an attacker
-who already holds the MCP bearer token — i.e. the strongest thing they can steal
-from the MCP side.
+**What the attack surface actually is.** `mcp.nwebnotfound.dev` is **already
+live** and is the only part of this stack reachable from the internet. It is
+guarded by nothing but the bearer token — Cloudflare Access exists on the
+website, but only in front of `/admin`, not in front of the MCP hostname.
 
-1. **A stolen MCP bearer token cannot restart a game server by itself.** T2
-   actions need three independent things: `confirm=true`, an integer
-   `delay_seconds >= 60`, **and** the global `OPS_ARMED=true` on the helper. That
-   switch is not reachable through any tool — it is an env var in `.env` plus a
-   container restart. With the default (`false`) the token can read status/logs
-   and run builds, and nothing else.
+**The real risk, stated plainly:** as soon as the ops tools are usable, every
+holder of the MCP token becomes an operator of this server. The bearer token is
+a long shared secret that ends up in Claude connectors, in shell history and in
+config files. Treating it as "read-only" is therefore not a security property by
+itself — it is enforced by the two-level token scheme below, and by the local
+listener for T2.
+
+1. **A stolen MCP bearer token cannot restart a game server by itself.** Three
+   independent things are needed, and none of them is reachable through a tool:
+   the **second token** (`HERMES_MCP_OPS_TOKEN`, a different secret the read-only
+   token does not grant), the **local listener** (T2 tools exist on 8767 only,
+   which the tunnel does not route), and the global `OPS_ARMED=true` env var on
+   the helper. With the defaults (no ops token, disarmed) a stolen read-only
+   token can read status/logs and run builds — nothing else.
+
+   The level is decided by *which* bearer token the caller presents: a plain
+   `HERMES_MCP_TOKEN` is the `base` level (T0 only), `HERMES_MCP_OPS_TOKEN` is
+   the `ops` level (T0 + T1). Both are compared in constant time over SHA-256
+   digests, the ops listener has its own, stricter brute-force brake
+   (`HERMES_MCP_OPS_LOCKOUT_AFTER`, default 3) and an unset ops token means
+   nobody gets the elevated level (fail closed). A tool the caller's level may
+   not use is not even listed — see `test/ops.test.mjs`.
 2. **Why hermes-mcp must not have the socket.** `/var/run/docker.sock` is
    root-equivalent on the host: anything that can talk to it can start a
    container with `/` mounted and take the whole machine. The MCP container is
@@ -48,7 +68,8 @@ from the MCP side.
    least predictable input (LLM-driven tool calls). Keeping the socket out of it
    means a bug in the MCP server — or in the model's tool use — cannot become
    host root. The helper is a separate, tiny process with no tunnel, no published
-   port, no internet route and a fixed allowlist.
+   port, no internet route and a fixed allowlist — and it does not hold the
+   socket either: it speaks to the socket proxy over TCP.
 3. **The shared secret is the second boundary.** `OPS_HELPER_TOKEN` (>= 24
    chars) is compared in constant time over SHA-256 digests; a missing or short
    token makes the helper refuse to start (fail closed). It is never logged,
@@ -75,40 +96,49 @@ from the MCP side.
 6. **Kill switch.** `touch data/ops-helper/DISABLED` (or `OPS_DISABLED=true`)
    makes the helper refuse every action above T0, immediately and without a
    restart of anything else. The audit log keeps recording the refusals.
-7. **Order of operations before going live.** Cloudflare **Access (service
-   token or IdP) and the OAuth 2.1 work for the claude.ai connector come
-   first**, then the tunnel, and only then `OPS_ARMED=true`. Reason: the bearer
-   token is the only authentication today; as long as `mcp.nwebnotfound.dev` is
-   exposed with just that token, the ops surface must stay disarmed. Also note
-   that `OPS_HELPER_TOKEN` has to be set in `.env` before `ops-helper` will even
-   start.
+7. **Order of operations before arming T2.** `OPS_HELPER_TOKEN` and
+   `HERMES_MCP_OPS_TOKEN` have to be set in `.env`. Then decide who may hold the
+   ops token, because from that moment on they can restart `bot`/
+   `cloudflared-mcp` (T1) even through the tunnel. `OPS_ARMED=true` is the last
+   step and the only one that unlocks game-server restarts — and those still
+   require the local listener, so they cannot be triggered from the internet at
+   all. **OAuth for the claude.ai connector is still not implemented and is not
+   part of this PR**; it remains the recommended future replacement for the
+   shared bearer token.
 
 ### What a stolen token can still do (be honest about it)
 
+With the *read-only* token (`base` level):
+
 * read container status, health, uptime and (redacted, capped) logs;
 * read repo branch/HEAD/dirty count and backup listings;
-* run `gradle clean build` / `npm test` in throwaway containers — CPU/disk work,
-  and the build container may pull images and dependencies from the internet;
+* run `gradle clean build` / `npm test` in throwaway containers — CPU/disk work
+  inside `--network none` containers with CPU/RAM/PID caps, so no network and no
+  way to starve the servers.
+
+With the *ops* token (T1/T2), plus what is below:
+
 * **T1**: restart `bot` and `cloudflared-mcp` (reversible, no player impact) and
   run the repo's `backup.ps1` (which briefly stops and restarts lobby+survival —
-  see the caveat below);
-* **T2, only when armed**: restart lobby/survival/velocity, deploy or roll back
-  the CraftCore jar.
+  see the caveat below). T1 works on the tunnel-facing listener too, because that
+  is exactly what the ops token is for;
+* **T2, only when armed *and* from the local listener**: restart
+  lobby/survival/velocity, deploy or roll back the CraftCore jar.
 
 That is a deliberate, bounded list — not "arbitrary root on the host".
 
 ## Tiers and gates
 
-| Tier | Actions | Gates |
-| --- | --- | --- |
-| T0 | `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_players`, `ops_git_state`, `ops_build_plugin`, `ops_run_tests` | none (read-only) |
-| T1 | `ops_restart_service` (bot, cloudflared-mcp), `ops_backup_now` | `confirm=true` + cooldown 300 s |
-| T2 | `ops_restart_game` (lobby, survival, velocity), `ops_deploy_plugin`, `ops_rollback_plugin` | `confirm=true` + `OPS_ARMED=true` + `delay_seconds >= 60` + fresh backup + cooldown 1800 s |
+| Tier | Actions | Token level | Gates |
+| --- | --- | --- | --- |
+| T0 | `ops_status`, `ops_logs`, `ops_disk`, `ops_backups_list`, `ops_players`, `ops_git_state`, `ops_build_plugin`, `ops_run_tests` | `base` | none (read-only) |
+| T1 | `ops_restart_service` (bot, cloudflared-mcp), `ops_backup_now` | `ops` | `confirm=true` + cooldown 300 s |
+| T2 | `ops_restart_game` (lobby, survival, velocity), `ops_deploy_plugin`, `ops_rollback_plugin` | `ops` **+ local listener** | `confirm=true` + `OPS_ARMED=true` + `delay_seconds >= 60` + fresh backup + cooldown 1800 s |
 
-Gate order is fixed and has no bypass flag: kill switch → action enabled →
-confirm → armed → delay → cooldown → per-action rate limit (12 calls / 60 s by
-default). A call that passes the gates but fails during execution still starts
-its cooldown, so a broken action cannot be hammered.
+Gate order is fixed and has no bypass flag: token level + listener → kill switch →
+action enabled → confirm → armed → delay → cooldown → per-action rate limit
+(12 calls / 60 s by default). A call that passes the gates but fails during
+execution still starts its cooldown, so a broken action cannot be hammered.
 
 T2 additionally:
 
@@ -165,9 +195,77 @@ all make the helper refuse to start.
 | `paths` | repo / backups / artifacts mounts, plugin jar file name, backup script name |
 | `services` | per action kind: `observe`, `logs`, `players`, `restart_t1`, `restart_game`, `deploy_plugin` |
 | `forbidden_services` / `forbidden_operations` | documented never-list; the mutating service lists are checked against it at load time |
-| `build` | image + argv for the plugin build and each test target (`source`, `command`, `setup?`, `artifact?`, `test_results?`) |
+| `build` | `network` (`none`), `limits` (`cpus`/`memory`/`pids`), image + argv for the plugin build and each test target (`source`, `command`, `setup?`, `artifact?`, `test_results?`, `cache?`) |
 | `deploy` | rollout order, plugin dir per service, health timeout/poll |
 | `actions` | which `ops_*` action exists, its tier, its `impl` and whether it is enabled |
+
+`build.network` defaults to `none` and `build.limits` is mandatory (cpus, memory,
+pids) — the helper refuses to start without it, so there is no configuration in
+which a build container runs unlimited or on the host network.
+
+## Docker socket proxy
+
+ops-helper does **not** hold `/var/run/docker.sock`. Its `DOCKER_HOST` points at
+`docker-socket-proxy` (compose service, `tecnativa/docker-socket-proxy` **pinned
+by digest**), which is the only container with the socket, has no host port and
+lives only in the internal `mc-stack-ops` network.
+
+The proxy returns `403 Forbidden` for every API section it was not granted. This
+repo grants exactly:
+
+| Flag | Why |
+| --- | --- |
+| `CONTAINERS=1` | `docker ps`, `inspect`, `logs` (GET) and the `/containers/...` create/attach/wait paths a `docker run` needs |
+| `POST=1` | the method gate in front of every POST |
+| `ALLOW_RESTARTS=1` | `POST /containers/{id}/restart` |
+| `EXEC=1` | `POST /exec/{id}/start`, needed for `rcon-cli` (`ops_players` and the T2 announcement) |
+
+Everything else — `VOLUMES`, `IMAGES`, `NETWORKS`, `SYSTEM`, `BUILD`, `SWARM`,
+`SERVICES`, `SECRETS`, `AUTH`, `EVENTS`, `DISTRIBUTION`, `PLUGINS`, `INFO`,
+`NODES`, `TASKS`, `SESSION`, `CONFIGS`, `COMMIT`, `GRPC`, `ALLOW_START`,
+`ALLOW_STOP` — stays at its secure default of `0`. Verified against the real
+stack: `docker version/ps/inspect/logs/exec/restart/run` work through the proxy
+while `docker volume ls`, `docker images`, `docker info`, `docker system df` and
+`docker network ls/create` all return `403`.
+
+**Residual risk, stated honestly.** `tecnativa/docker-socket-proxy` filters by
+API *section*, not by path or container name. With `CONTAINERS` + `POST` + `EXEC`
+granted, the proxy still permits `POST /containers/create` (including bind
+mounts) and exec into any container — i.e. it is *defence in depth*, not a hard
+boundary. The hard boundary remains the helper's argv allowlist plus its
+authentication. A path- and container-scoped proxy (not this image) would be
+tighter and is the natural follow-up; it is not used here because it would mean
+maintaining our own filter config.
+
+## Build containers: offline and capped
+
+Every build/test container is a throwaway that runs with:
+
+* `--network none` — no interface at all. Dependencies therefore come from
+  **pre-warmed cache volumes** mounted at the tool's canonical path
+  (`build.plugin.cache` / `build.tests.<name>.cache`): `gradle` →
+  `mc-stack-ops-gradle-cache:/home/gradle/.gradle`, `npm` →
+  `mc-stack-ops-npm-cache:/root/.npm`. The gradle commands carry `--offline` and
+  the npm setup carries `--offline`, so a missing cache fails loudly instead of
+  silently reaching the network.
+* `--cpus`, `--memory`, `--pids-limit` from `build.limits`, so a build cannot
+  starve the Minecraft servers.
+* `--rm --cap-drop ALL --security-opt no-new-privileges`, and only the volumes it
+  needs (the staged source + its cache) — never a host path.
+
+Cold-cache note: the two cache volumes must be warmed **once on the host**, which
+(of course) needs network on the host side, not in the build container:
+
+```
+docker volume create mc-stack-ops-gradle-cache mc-stack-ops-npm-cache
+docker run --rm -v mc-stack-ops-gradle-cache:/home/gradle/.gradle -v "$PWD/plugins-src/craftcore:/src" -w /src gradle:9-jdk gradle --no-daemon dependencies
+docker run --rm -v mc-stack-ops-npm-cache:/root/.npm -v "$PWD/tools/hermes-mcp:/src" -w /src node:22-alpine npm ci --no-audit --no-fund
+```
+
+If a cache genuinely cannot be warmed, `build.network` can name a dedicated,
+narrowly scoped bridge network instead of `none` — `host`, `bridge` and
+`default` are rejected at load time. That is an explicit, documented exception,
+not the default.
 
 ## Audit log
 
@@ -193,38 +291,48 @@ deletes the file.
 | `OPS_ALLOWLIST_PATH` | `/repo/config/ops-allowlist.json` | allowlist location |
 | `OPS_DATA_DIR` | `/app/data/ops-helper` | audit log, cooldown state, `DISABLED` |
 | `OPS_ARTIFACTS_DIR` | `/artifacts` | artifact volume mount |
-| `OPS_ARTIFACTS_VOLUME` / `OPS_GRADLE_CACHE_VOLUME` | `mc-stack-ops-artifacts` / `mc-stack-ops-gradle-cache` | named volumes handed to the throwaway build containers (no host path is ever guessed) |
+| `OPS_ARTIFACTS_VOLUME` / `OPS_GRADLE_CACHE_VOLUME` / `OPS_NPM_CACHE_VOLUME` | `mc-stack-ops-artifacts` / `mc-stack-ops-gradle-cache` / `mc-stack-ops-npm-cache` | named volumes handed to the throwaway build containers (no host path is ever guessed) |
 | `OPS_ACTION_TIMEOUT_SECONDS` / `OPS_BUILD_TIMEOUT_SECONDS` | `120` / `1800` | per-command and per-build timeouts |
 | `OPS_DOCKER_BIN` | `docker` | docker CLI path |
+| `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-proxy:2375`; without the proxy the helper cannot reach Docker at all |
 | `OPS_BACKUP_INTERPRETERS` | `pwsh,powershell` | candidates for running `backup.ps1` |
 
 ## Setup (once, not done by this PR)
 
-1. Put a shared secret into `.env` (never in git):
+1. Put two shared secrets into `.env` (never in git):
 
    ```
    OPS_HELPER_TOKEN=<openssl rand -hex 32>
+   HERMES_MCP_OPS_TOKEN=<openssl rand -hex 32>    # the second, elevated token
    ```
 
-2. Start the helper and MCP (this **recreates** `hermes-mcp`, because it gains a
-   second network — do it in a maintenance window):
+2. Start the socket proxy, the helper and MCP (this **recreates**
+   `hermes-mcp`: it gains a second network and the 127.0.0.1 ops port — do it in a
+   maintenance window):
 
    ```
-   docker compose --profile ops --profile mcp up -d --build ops-helper hermes-mcp
-   docker compose logs -f ops-helper
+   docker compose --profile ops --profile mcp up -d --build docker-socket-proxy ops-helper hermes-mcp
+   docker compose logs -f ops-helper docker-socket-proxy
    ```
 
-3. Verify it is locked down:
+3. Warm the two offline build caches once (see "Build containers" above).
+
+4. Verify it is locked down:
 
    ```
-   docker port mc-stack-ops-helper-1            # empty: no host port
+   docker port mc-stack-ops-helper-1                     # empty: no host port
+   docker port mc-stack-docker-socket-proxy-1            # empty: no host port
    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8766/healthz   # unreachable from the host
    docker exec mc-stack-hermes-mcp-1 node -e "fetch('http://ops-helper:8766/healthz').then(r=>console.log(r.status))"  # 200
    docker exec mc-stack-hermes-mcp-1 node -e "fetch('http://ops-helper:8766/op',{method:'POST'}).then(r=>console.log(r.status))"  # 401
+   # the T2 listener is reachable on the host loopback only:
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8767/mcp   # 401 (no token)
    ```
 
-4. Arm T2 only after Cloudflare Access + OAuth are in front of the MCP endpoint:
-   set `OPS_ARMED=true` in `.env` and `docker compose --profile ops up -d ops-helper`.
+5. Arm T2 last: set `OPS_ARMED=true` in `.env` and
+   `docker compose --profile ops up -d ops-helper`. Game-server restarts then
+   also require the ops token **and** the local listener, so they cannot be
+   triggered from the internet.
 
 ## Tests
 
@@ -236,12 +344,14 @@ npm ci && npm test          # node --test over dist/, no docker and no network
 The suite never talks to Docker, to a container or to the internet: the runner is
 faked, so running it cannot touch the running stack. It covers allowlist
 validation (bad impl, bad service names, `..`, argv tokens with shell
-metacharacters, forbidden services, T0/T2 invariants), the tier gates (T2 without
-armed/confirm/delay, kill switch, cooldown, rate limit), injection attempts
-(`bot; rm -rf /`, `$(id)`, `../../etc/passwd`, smuggled `argv`/`command` keys,
-prototype-shaped action names), the audit log (append-only, redacted, truncated),
-the kill switch, and the T2 deploy/rollback flow end-to-end against a fake
-runner (including the automatic rollback when a health check fails).
+metacharacters, forbidden services, T0/T2 invariants, the mandatory build
+limits/`network`), the tier gates (T2 without armed/confirm/delay, kill switch,
+cooldown, rate limit), injection attempts (`bot; rm -rf /`, `$(id)`,
+`../../etc/passwd`, smuggled `argv`/`command` keys, prototype-shaped action
+names), the build container argv (`--network none`, `--cpus`, `--memory`,
+`--pids-limit`, the offline cache mount), the audit log (append-only, redacted,
+truncated), the kill switch, and the T2 deploy/rollback flow end-to-end against a
+fake runner (including the automatic rollback when a health check fails).
 
 ## Not in phase 1 (documented concepts, deliberately not implemented)
 
@@ -272,11 +382,22 @@ runner (including the automatic rollback when a health check fails).
 * `ops_helper_not_configured` in hermes-mcp — `OPS_HELPER_TOKEN` is empty, so the
   ops tools are not even advertised.
 * `ops_helper_auth_failed` — the two containers have different tokens.
+* `ops_token_required` / a T1 tool missing from `tools/list` — the caller presented
+  the plain `HERMES_MCP_TOKEN`; the T1/T2 tools need `HERMES_MCP_OPS_TOKEN`.
+* `ops_t2_local_only` / a T2 tool missing from `tools/list` — the call arrived on
+  the tunnel-facing listener (8765). T2 exists on the local listener (8767) only.
 * `backup_interpreter_missing` — expected without `pwsh` in the image; run
   `backup.ps1` on the host, or see "Backup handling" above.
 * `not_armed` — T2 is refused on purpose; set `OPS_ARMED=true` and restart the
-  helper (after Access/OAuth are in place).
+  helper (after you have decided who may hold the ops token).
+* `docker_failed` on every call — the helper cannot reach Docker. Check
+  `docker compose logs docker-socket-proxy` and that the proxy is on the same
+  `mc-stack-ops` network; a `403 Forbidden` message means the proxy refused the
+  API section, which is the intended behaviour for anything not in the table
+  above.
 * `cooldown_active` — T1 300 s / T2 1800 s; the answer carries
   `retry_after_seconds`.
 * `source_missing` / `artifacts_volume_unset` — the repo mount or the volume
   wiring is wrong; nothing was built and nothing was touched.
+* `build_failed` right after a cache change — the offline cache is cold. Warm it
+  once on the host (see "Build containers").

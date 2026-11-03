@@ -157,3 +157,30 @@ test("an action that is not in the allowlist cannot be dispatched", async () => 
   assert.equal(actionOf(allow, "constructor"), undefined);
   assert.equal(actionOf(allow, "ops_status")?.tier, "T0");
 });
+
+test("build containers are offline by default and always carry resource caps", () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  assert.equal(allow.build.network, "none");
+  assert.ok(Number(allow.build.limits.cpus) > 0);
+  assert.ok(/^\d+[bkmg]?$/i.test(allow.build.limits.memory));
+  assert.ok(allow.build.limits.pids > 0);
+  assert.equal(allow.build.plugin.cache, "gradle");
+  assert.ok(allow.build.plugin.command.includes("--offline"));
+
+  // `host`/`bridge` network and a missing limits block must be refused.
+  const hostNetwork = rawAllowlist();
+  hostNetwork.build.network = "host";
+  assert.throws(() => parseAllowlist(hostNetwork), /build\.network/);
+
+  const noLimits = rawAllowlist();
+  delete noLimits.build.limits;
+  assert.throws(() => parseAllowlist(noLimits), /build\.limits/);
+
+  const unlimitedCpus = rawAllowlist();
+  unlimitedCpus.build.limits.cpus = 64;
+  assert.throws(() => parseAllowlist(unlimitedCpus), /cpus/);
+
+  const badCache = rawAllowlist();
+  badCache.build.plugin.cache = "host";
+  assert.throws(() => parseAllowlist(badCache), /cache/);
+});

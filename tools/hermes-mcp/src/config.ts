@@ -61,6 +61,20 @@ export interface Config {
   /** Default timeout for one ops call; long actions override it per tool. */
   opsHelperTimeoutSeconds: number;
 
+  /**
+   * Second, higher token level. A caller that presents one of these (instead of
+   * a plain HERMES_MCP_TOKEN) may use the T1 tools; T2 additionally needs the
+   * local listener. Empty -> T1/T2 are refused for everyone (fail closed).
+   * Never logged, never in a URL.
+   */
+  opsTokens: string[];
+  /** Port of the local-only listener that is allowed to reach T2. */
+  opsPort: number;
+  /** Bind address of the local-only listener (published only on 127.0.0.1). */
+  opsHost: string;
+  /** Consecutive bad tokens on the local (T2-capable) listener before lockout. */
+  opsLockoutAfter: number;
+
   backend: Backend;
   /** Only used by the host-only CLI backend. */
   cliCommand: string;
@@ -134,6 +148,18 @@ export function loadConfig(): Config {
     }
   }
 
+  // Second token level. Empty is valid (T1/T2 stay refused); a too-short value
+  // is not, so a typo can never weaken the elevation.
+  const opsTokens = str("HERMES_MCP_OPS_TOKEN")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  for (const token of opsTokens) {
+    if (token.length < 24) {
+      throw new Error("HERMES_MCP_OPS_TOKEN must be at least 24 characters (or unset)");
+    }
+  }
+
   const backendRaw = (str("HERMES_BACKEND", "gateway") || "gateway").toLowerCase();
   if (backendRaw !== "gateway" && backendRaw !== "cli") {
     throw new Error("HERMES_BACKEND must be 'gateway' or 'cli'");
@@ -187,6 +213,11 @@ export function loadConfig(): Config {
     opsHelperToken: str("OPS_HELPER_TOKEN"),
     opsHelperTimeoutSeconds: num("OPS_HELPER_TIMEOUT_SECONDS", 120, 5, 3600),
 
+    opsTokens,
+    opsPort: num("HERMES_MCP_OPS_PORT", 8767, 1, 65535),
+    opsHost: str("HERMES_MCP_OPS_HOST", "0.0.0.0"),
+    opsLockoutAfter: num("HERMES_MCP_OPS_LOCKOUT_AFTER", 3, 1, 1000),
+
     backend: backendRaw,
     cliCommand: str("HERMES_CLI", "hermes"),
   };
@@ -201,6 +232,8 @@ export function loadConfig(): Config {
     allowed_models: cfg.allowedModels.length,
     max_runs_per_day: cfg.maxRunsPerDay,
     ops_helper: cfg.opsHelperUrl && cfg.opsHelperToken ? "enabled" : "disabled",
+    ops_token_level: cfg.opsTokens.length > 0 ? "configured" : "unset",
+    ops_local_port: cfg.opsPort,
   });
 
   return cfg;

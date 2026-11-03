@@ -79,11 +79,26 @@ export interface RunContainerOptions {
   volumes: string[];
   workdir?: string;
   env?: Record<string, string>;
+  /**
+   * Docker network for the throwaway container. Defaults to `none`: a build or
+   * test container gets no interface at all, so it cannot reach the internet,
+   * the mc-stack services or the socket proxy. Offline caches (pre-warmed
+   * volumes) are how dependencies are available without a network.
+   */
+  network?: string;
+  /** `docker --cpus` value, e.g. "1.0". */
+  cpus?: string;
+  /** `docker --memory` value, e.g. "1536m". */
+  memory?: string;
+  /** `docker --pids-limit` value. */
+  pidsLimit?: number;
 }
 
 /**
- * A throwaway container: `--rm`, no capabilities, no privilege escalation and
- * no host network/pid/ipc. Only the volumes we name are visible to it.
+ * A throwaway container: `--rm`, no capabilities, no privilege escalation, no
+ * host network/pid/ipc, `--network none` by default and hard CPU/RAM/PID caps so
+ * a build can never starve the Minecraft servers. Only the volumes we name are
+ * visible to it.
  */
 export function runContainerArgv(opts: RunContainerOptions): string[] {
   const argv = [
@@ -93,7 +108,12 @@ export function runContainerArgv(opts: RunContainerOptions): string[] {
     "ALL",
     "--security-opt",
     "no-new-privileges",
+    "--network",
+    opts.network ?? "none",
   ];
+  if (opts.cpus) argv.push("--cpus", opts.cpus);
+  if (opts.memory) argv.push("--memory", opts.memory);
+  if (opts.pidsLimit) argv.push("--pids-limit", String(opts.pidsLimit));
   for (const [key, value] of Object.entries(opts.env ?? {})) {
     argv.push("--env", `${key}=${value}`);
   }

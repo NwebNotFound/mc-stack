@@ -104,6 +104,7 @@ export function makeDeps(overrides = {}) {
     artifactsDir: `${dir}/artifacts`,
     artifactsVolume: "mc-stack-ops-artifacts",
     gradleCacheVolume: "mc-stack-ops-gradle-cache",
+    npmCacheVolume: "mc-stack-ops-npm-cache",
     dockerBin: "docker",
     actionTimeoutSeconds: 30,
     buildTimeoutSeconds: 60,
