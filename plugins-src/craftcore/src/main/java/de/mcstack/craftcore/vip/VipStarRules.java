@@ -48,8 +48,6 @@ public final class VipStarRules {
     /** Market, {@code /sell} and the bank never buy the menu star. */
     public static boolean sellable(boolean tagged) { return !tagged; }
 
-    /** Join: only hand out the star when the player has none and slot 8 is free. */
-    public static boolean needsStar(boolean alreadyHasStar, boolean hotbarSlotOccupied) {
-        return !alreadyHasStar && !hotbarSlotOccupied;
-    }
+    /** Join: the menu is a command now, so any leftover star is removed instead of handed out. */
+    public static boolean stripOnJoin(boolean tagged) { return tagged; }
 }

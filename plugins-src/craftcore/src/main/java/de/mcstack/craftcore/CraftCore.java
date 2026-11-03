@@ -53,6 +53,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
   private de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp;
   de.mcstack.craftcore.pvp.LobbyPvp lobbyPvp() { return lobbyPvp; }
   de.mcstack.craftcore.vip.LobbyVip lobbyVip() { return lobbyVip; }
+  /** /lobby, /l, /hub, /leave and /spawn; exists on every backend, independent of the modules. */
+  private LobbyRoute lobbyRoute;
+  LobbyRoute lobbyRoute() { return lobbyRoute; }
   private void startCitizensNpcs() {
     if (citizensNpcs == null && "lobby".equalsIgnoreCase(System.getenv().getOrDefault("CRAFTCORE_SERVER", "")) && Bukkit.getPluginManager().isPluginEnabled("Citizens")) { citizensNpcs = new CitizensNpcs(this, userMenu); citizensNpcs.start(); }
   }
@@ -79,6 +82,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   @Override public void onEnable() {
     password=System.getenv("CRAFTCORE_DB_PASSWORD"); server=System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");
     economyEnabled=ServerProfile.economyEnabled(server);
+    lobbyRoute=new LobbyRoute(this,server); lobbyRoute.start();
     try {
       Class.forName("org.mariadb.jdbc.Driver");
       Presence newPresence=new Presence(this,server);
@@ -296,7 +300,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
     reply.accept("Dieser Befehl ist auf diesem Server nicht verfuegbar.");
     return false;
   }
+  /**
+   * The VIP menu no longer hangs on a hotbar item, so {@code /vip} is the only entry point: the
+   * normal user menu on lobby and survival, the in-world menu on a VIP slot.
+   */
+  private void openVip(Player p) {
+    if(userMenu!=null) userMenu.open(p,"vip");
+    else if(vipWorldMenu!=null) vipWorldMenu.openMenu(p);
+    else p.sendMessage("Das VIP-Menue ist auf diesem Server nicht verfuegbar.");
+  }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
+    if(lobbyRoute!=null && SpawnRoute.isLobbyCommand(command.getName())) return lobbyRoute.run(sender,command.getName());
     if(!ServerProfile.commandAllowed(economyEnabled,command.getName())) { sender.sendMessage("Dieser Befehl ist auf dem PvP-Server deaktiviert."); return true; }
     if(command.getName().equals("rank")) return !moduleAvailable(rankDisplays,sender::sendMessage) || rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
@@ -395,9 +409,9 @@ public final class CraftCore extends JavaPlugin implements Listener {
     }
     if(!(sender instanceof Player p)) { sender.sendMessage(PLAYER_ONLY_MESSAGE); return true; }
     try {
-      if(args.length==0 && Set.of("pay","team","claim","home","trade","vip").contains(command.getName())) { if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); return true; }
+      if(command.getName().equals("vip")) { openVip(p); return true; }
+      if(args.length==0 && Set.of("pay","team","claim","home","trade").contains(command.getName())) { if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); return true; }
       switch(command.getName()) {
-        case "vip": if(moduleAvailable(userMenu,p::sendMessage)) userMenu.open(p,command.getName()); break;
         case "abholen": Deliveries.collect(this,p); break;
         case "feedback": p.sendMessage(Feedback.line(Feedback.url(getConfig()))); break;
         case "balance": if(args.length!=0) p.sendMessage("Fuer deinen Kontostand nutze /geld ohne weitere Eingaben."); else p.sendMessage("Kontostand: "+Money.format(balance(p.getUniqueId()))); break;
@@ -414,7 +428,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         case "npc": if(moduleAvailable(npcs,p::sendMessage)) npcs.command(p,args); break;
         case "verkaufen": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.sellCommand(p,args); break;
         case "bank": case "market": if(moduleAvailable(Market.instance,p::sendMessage)) Market.instance.command(p,command.getName(),args); break;
-        case "claim": case "unclaim": case "spawn": case "home": case "sethome": if(moduleAvailable(Features.instance,p::sendMessage)) Features.instance.command(p,command.getName(),args); break;
+        case "claim": case "unclaim": case "home": case "sethome": if(moduleAvailable(Features.instance,p::sendMessage)) Features.instance.command(p,command.getName(),args); break;
       }
     } catch(NumberFormatException | ArithmeticException e) { p.sendMessage("Ungültiger Betrag (maximal zwei Nachkommastellen)."); }
     catch(Exception e) { getLogger().warning("CraftCore Fehler: "+e); p.sendMessage("Aktion fehlgeschlagen. Bitte später erneut versuchen."); }

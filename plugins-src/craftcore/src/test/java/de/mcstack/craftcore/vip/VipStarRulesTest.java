@@ -48,11 +48,9 @@ class VipStarRulesTest {
         assertTrue(VipStarRules.sellable(false));
     }
 
-    @Test void joinNeverOverwritesSlotEight() {
-        assertFalse(VipStarRules.needsStar(false, true), "belegter Slot 8 bleibt unangetastet");
-        assertFalse(VipStarRules.needsStar(true, false), "der Stern wird nicht doppelt vergeben");
-        assertTrue(VipStarRules.needsStar(false, false));
-        assertEquals(8, VipStarRules.HOTBAR_SLOT);
+    @Test void joinRemovesLeftoverMenuStars() {
+        assertTrue(VipStarRules.stripOnJoin(true), "alte Stern-Items werden beim Join entfernt");
+        assertFalse(VipStarRules.stripOnJoin(false), "normale Nethersterne bleiben im Inventar");
         assertEquals("vip_menu_star", VipStarRules.KEY);
     }
 }

@@ -40,7 +40,7 @@ final class Features implements Listener {
       plugin.exec(c,"UPDATE graves SET status='OPEN', claiming_at=NULL WHERE server=? AND status='CLAIMING' AND delivered=FALSE AND claiming_at<?",server,System.currentTimeMillis()-60000L);
     } return null;});
     plugin.tx(c->{try(PreparedStatement s=c.prepareStatement("SELECT world,x,y,z FROM graves WHERE server=? AND status IN ('OPEN','CLAIMING')")){s.setString(1,server);try(ResultSet r=s.executeQuery()){while(r.next())graveLocations.add(graveKey(r.getString(1),r.getInt(2),r.getInt(3),r.getInt(4)));}}return null;});
-    Bukkit.getMessenger().registerOutgoingPluginChannel(plugin,"BungeeCord");
+    ProxyChannel.register(plugin);
     Bukkit.getPluginManager().registerEvents(this,plugin);
     // Existing graves are retained until their contents can be transferred safely.
   }
@@ -64,7 +64,7 @@ final class Features implements Listener {
     }
     if(cmd.equals("unclaim")) {String msg=plugin.tx(c->{try(PreparedStatement s=c.prepareStatement("SELECT owner,team_id FROM claims WHERE server=? AND world=? AND x=? AND z=?")){s.setString(1,server);s.setString(2,world(l));s.setInt(3,l.getBlockX()>>4);s.setInt(4,l.getBlockZ()>>4);try(ResultSet r=s.executeQuery()){if(!r.next())return "Chunk ist nicht beansprucht.";if(!allowed(c,id,r.getString(1),r.getString(2)))return "Keine Berechtigung.";}}plugin.exec(c,"DELETE FROM claims WHERE server=? AND world=? AND x=? AND z=?",server,world(l),l.getBlockX()>>4,l.getBlockZ()>>4);return "Claim freigegeben.";});p.sendMessage(msg);return;}
     if((cmd.equals("home") || cmd.equals("sethome")) && !SpawnRoute.isSurvival(server)){p.sendMessage("Homes sind nur auf Survival verf?gbar.");return;}
-    if(cmd.equals("spawn")){startTeleport(p,()->spawn(p));return;}
+    // /spawn is handled by LobbyRoute on lobby, survival, VIP worlds and PvP.
     if(cmd.equals("sethome")) {String name=a.length==0?"home":a[0].toLowerCase(Locale.ROOT);if(!name.matches("[a-z0-9_]{1,16}")){p.sendMessage("Ungültiger Name.");return;}String msg=plugin.tx(c->{int slots=HomeSlots.lock(c,server,id.toString());String existing=plugin.one(c,"SELECT name FROM homes WHERE server=? AND uuid=? AND name=?",server,id.toString(),name);int count=Integer.parseInt(plugin.one(c,"SELECT COUNT(*) FROM homes WHERE server=? AND uuid=?",server,id.toString()));if(existing==null && count>=slots)return "Home-Limit erreicht. Weitere Slots im /home-Menue kaufen.";plugin.exec(c,"REPLACE INTO homes VALUES (?,?,?,?,?,?,?,?,?)",server,id.toString(),name,world(l),l.getX(),l.getY(),l.getZ(),l.getYaw(),l.getPitch());return "Home gespeichert: "+name;});p.sendMessage(msg);return;}
     Location dest;
     {String name=a.length==0?"home":a[0].toLowerCase(Locale.ROOT);dest=plugin.tx(c->{try(PreparedStatement s=c.prepareStatement("SELECT world,x,y,z,yaw,pitch FROM homes WHERE server=? AND uuid=? AND name=?")){s.setString(1,server);s.setString(2,id.toString());s.setString(3,name);try(ResultSet r=s.executeQuery()){if(!r.next())return null;World w=Bukkit.getWorld(r.getString(1));return w==null?null:new Location(w,r.getDouble(2),r.getDouble(3),r.getDouble(4),r.getFloat(5),r.getFloat(6));}}});}
@@ -72,16 +72,8 @@ final class Features implements Listener {
   }
   void border(Player p,Location l){int x=(l.getBlockX()>>4)<<4,z=(l.getBlockZ()>>4)<<4;for(int i=0;i<=16;i++){p.spawnParticle(Particle.HAPPY_VILLAGER,x+i,l.getY()+1,z,1,0,0,0,0);p.spawnParticle(Particle.HAPPY_VILLAGER,x+i,l.getY()+1,z+16,1,0,0,0,0);p.spawnParticle(Particle.HAPPY_VILLAGER,x,l.getY()+1,z+i,1,0,0,0,0);p.spawnParticle(Particle.HAPPY_VILLAGER,x+16,l.getY()+1,z+i,1,0,0,0,0);}}
   void cancel(Player p){Integer task=teleports.remove(p.getUniqueId());if(task!=null){Bukkit.getScheduler().cancelTask(task);p.sendMessage("Teleport abgebrochen.");}}
-  void startTeleport(Player p,Runnable action){cancel(p);int[] left={Math.max(1,plugin.getConfig().getInt("teleport-seconds",10))};p.sendMessage("Teleport in "+left[0]+" Sekunden. Stillstehen!");int task=Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin,()->{if(!p.isOnline()){cancel(p);return;}if(--left[0]<=0){Integer done=teleports.remove(p.getUniqueId());if(done!=null)Bukkit.getScheduler().cancelTask(done);action.run();return;}p.sendMessage("Teleport in "+left[0]+" Sekunden.");},20,20);teleports.put(p.getUniqueId(),task);}
-  void spawn(Player p) {
-    if(SpawnRoute.isLobby(server)){p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation());return;}
-    long expires=System.currentTimeMillis()+30000;
-    try {
-      plugin.tx(c->{plugin.exec(c,"REPLACE INTO spawn_transfers(uuid,expires) VALUES (?,?)",p.getUniqueId().toString(),expires);return null;});
-      p.sendPluginMessage(plugin,"BungeeCord",SpawnRoute.connectMessage());
-      Bukkit.getScheduler().runTaskLater(plugin,()->{try{plugin.tx(c->{plugin.exec(c,"DELETE FROM spawn_transfers WHERE uuid=? AND expires=?",p.getUniqueId().toString(),expires);return null;});}catch(Exception e){plugin.getLogger().warning("Spawn-Markierung konnte nicht entfernt werden: "+e.getMessage());}},600L);
-    } catch(Exception e){plugin.getLogger().warning("Lobby-Wechsel fehlgeschlagen: "+e.getMessage());p.sendMessage("Lobby-Wechsel fehlgeschlagen. Bitte erneut versuchen.");}
-  }
+  void startTeleport(Player p,Runnable action){cancel(p);if(plugin.lobbyRoute()!=null)plugin.lobbyRoute().cancel(p);int[] left={Math.max(1,plugin.getConfig().getInt("teleport-seconds",10))};p.sendMessage("Teleport in "+left[0]+" Sekunden. Stillstehen!");int task=Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin,()->{if(!p.isOnline()){cancel(p);return;}if(--left[0]<=0){Integer done=teleports.remove(p.getUniqueId());if(done!=null)Bukkit.getScheduler().cancelTask(done);action.run();return;}p.sendMessage("Teleport in "+left[0]+" Sekunden.");},20,20);teleports.put(p.getUniqueId(),task);}
+  void cancelSilent(Player p){Integer task=teleports.remove(p.getUniqueId());if(task!=null)Bukkit.getScheduler().cancelTask(task);}
   @EventHandler public void arrival(PlayerJoinEvent e){
     if(!SpawnRoute.isLobby(server))return;
     Player p=e.getPlayer();

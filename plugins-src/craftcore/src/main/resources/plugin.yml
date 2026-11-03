@@ -61,6 +61,10 @@ commands:
     description: Chunk beanspruchen oder auflisten
   unclaim:
     description: Chunk freigeben
+  lobby:
+    description: Zurueck in die Lobby (auch /l, /hub, /leave)
+    usage: /lobby
+    aliases: [l, hub, leave]
   spawn:
     description: Zum Lobby-Spawn teleportieren
   home:

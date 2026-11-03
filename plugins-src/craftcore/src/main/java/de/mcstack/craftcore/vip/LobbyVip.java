@@ -1,8 +1,6 @@
 package de.mcstack.craftcore.vip;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import de.mcstack.craftcore.ProxyChannel;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -31,7 +29,7 @@ public final class LobbyVip implements CommandExecutor {
 
     public void start() {
         Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this);
-        Bukkit.getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
+        ProxyChannel.register(plugin);
         module.start();
     }
 
@@ -148,13 +146,7 @@ public final class LobbyVip implements CommandExecutor {
         public void connect(Player player, String slot) { send(player, slot); }
         public void lobby(Player player) { send(player, "lobby"); }
         private void send(Player player, String server) {
-            try {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF(server); }
-                player.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
-            } catch (IOException e) {
-                player.sendMessage("Verbindung zu " + server + " fehlgeschlagen.");
-            }
+            ProxyChannel.send(plugin, player, server);
         }
     }
 

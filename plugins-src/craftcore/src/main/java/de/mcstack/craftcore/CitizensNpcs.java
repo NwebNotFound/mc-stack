@@ -116,7 +116,7 @@ final class CitizensNpcs implements Listener {
     for(var entry:npcs.entrySet()) if(entry.getValue().equals(npc)) {
       var def=definitions.get(entry.getKey());
       switch(def.action()) {
-        case SERVER -> { try { player.sendPluginMessage(core,"BungeeCord",Portals.connectMessage(def.actionArg())); } catch(IOException ex) { core.getLogger().warning("NPC-Verbindung fehlgeschlagen: "+ex.getMessage()); } }
+        case SERVER -> ProxyChannel.send(core, player, def.actionArg());
         case MENU -> {
           var lobbyPvp=core.lobbyPvp();
           switch(NpcDefinitions.menuAction(def.actionArg(),lobbyPvp!=null)) {
