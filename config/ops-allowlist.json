@@ -1,0 +1,121 @@
+{
+  "$comment": [
+    "Allowlist for tools/ops-helper. This file is the authority for WHICH ops actions exist,",
+    "which services they may touch and how strict their gates are. The helper reads it once at",
+    "startup from a read-only mount of the repo; no MCP tool can change it. Editing it needs a",
+    "repo commit + an ops-helper restart - the same trust level as the helper's own source.",
+    "Anything not listed here is refused (fail closed). Code additionally enforces",
+    "forbidden_services/forbidden_operations: a mutating list may never name them, even if a",
+    "future edit of this file tried to add them."
+  ],
+  "version": 1,
+  "compose_project": "mc-stack",
+  "limits": {
+    "max_output_bytes": 262144,
+    "max_log_lines": 300,
+    "rate_window_seconds": 60,
+    "rate_max_calls": 12,
+    "backup_max_age_seconds": 900
+  },
+  "tiers": {
+    "T0": { "confirm_required": false, "armed_required": false, "cooldown_seconds": 0 },
+    "T1": { "confirm_required": true, "armed_required": false, "cooldown_seconds": 300 },
+    "T2": {
+      "confirm_required": true,
+      "armed_required": true,
+      "min_delay_seconds": 60,
+      "cooldown_seconds": 1800,
+      "backup_required": true
+    }
+  },
+  "paths": {
+    "repo": "/repo",
+    "backups": "/backups",
+    "artifacts": "/artifacts",
+    "plugin_jar": "craftcore.jar",
+    "backup_script": "backup.ps1"
+  },
+  "services": {
+    "observe": [
+      "velocity", "lobby", "survival", "pvp",
+      "vipworld-1", "vipworld-2", "vipworld-3",
+      "bot", "craftcore-db", "playit", "cloudflared", "cloudflared-mcp",
+      "hermes-mcp", "ops-helper"
+    ],
+    "logs": [
+      "velocity", "lobby", "survival", "pvp",
+      "vipworld-1", "vipworld-2", "vipworld-3",
+      "bot", "craftcore-db", "playit", "cloudflared", "cloudflared-mcp",
+      "hermes-mcp", "ops-helper"
+    ],
+    "players": ["lobby", "survival"],
+    "restart_t1": ["bot", "cloudflared-mcp"],
+    "restart_game": ["lobby", "survival", "velocity"],
+    "deploy_plugin": ["lobby", "survival"]
+  },
+  "forbidden_services": ["craftcore-db", "hermes-mcp", "ops-helper", "hermes-test"],
+  "forbidden_operations": [
+    "docker compose down",
+    "docker compose down -v",
+    "docker rm / docker container rm",
+    "docker volume rm / docker volume prune",
+    "docker system prune",
+    "docker image prune",
+    "kill -9",
+    "any write to .env, secrets/ or data/",
+    "any change to hermes-test, the Hermes gateway or the ops-helper itself"
+  ],
+  "build": {
+    "plugin": {
+      "source": "plugins-src/craftcore",
+      "image": "gradle:9-jdk",
+      "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain"],
+      "artifact": "build/libs/craftcore.jar",
+      "test_results": "build/test-results/test"
+    },
+    "tests": {
+      "hermes-mcp": {
+        "source": "tools/hermes-mcp",
+        "image": "node:22-alpine",
+        "setup": ["npm", "ci", "--no-audit", "--no-fund"],
+        "command": ["npm", "test"]
+      },
+      "ops-helper": {
+        "source": "tools/ops-helper",
+        "image": "node:22-alpine",
+        "setup": ["npm", "ci", "--no-audit", "--no-fund"],
+        "command": ["npm", "test"]
+      },
+      "craftcore": {
+        "source": "plugins-src/craftcore",
+        "image": "gradle:9-jdk",
+        "command": ["gradle", "clean", "build", "--no-daemon", "--console=plain"],
+        "test_results": "build/test-results/test"
+      }
+    }
+  },
+  "deploy": {
+    "order": ["lobby", "survival"],
+    "plugin_dirs": {
+      "lobby": "/plugins/lobby",
+      "survival": "/plugins/survival"
+    },
+    "health_timeout_seconds": 240,
+    "health_poll_seconds": 5
+  },
+  "actions": {
+    "ops_status": { "tier": "T0", "impl": "status", "enabled": true },
+    "ops_logs": { "tier": "T0", "impl": "logs", "enabled": true },
+    "ops_disk": { "tier": "T0", "impl": "disk", "enabled": true },
+    "ops_backups_list": { "tier": "T0", "impl": "backups_list", "enabled": true },
+    "ops_players": { "tier": "T0", "impl": "players", "enabled": true },
+    "ops_git_state": { "tier": "T0", "impl": "git_state", "enabled": true },
+    "ops_build_plugin": { "tier": "T0", "impl": "build_plugin", "enabled": true },
+    "ops_run_tests": { "tier": "T0", "impl": "run_tests", "enabled": true },
+    "ops_restart_service": { "tier": "T1", "impl": "restart_service", "enabled": true },
+    "ops_backup_now": { "tier": "T1", "impl": "backup_now", "enabled": true },
+    "ops_restart_game": { "tier": "T2", "impl": "restart_game", "enabled": true },
+    "ops_deploy_plugin": { "tier": "T2", "impl": "deploy_plugin", "enabled": true },
+    "ops_rollback_plugin": { "tier": "T2", "impl": "rollback_plugin", "enabled": true }
+  }
+}

@@ -10,41 +10,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { GatewayClient, GatewayError, isTerminal } from "./hermes.js";
-import { redactStrings } from "./redact.js";
+import { OpsClient } from "./ops.js";
+import { registerOpsTools } from "./ops-tools.js";
+import { fail, json } from "./responses.js";
 import type { RunManager } from "./runner.js";
 import type { RunRecord, RunStore } from "./store.js";
-
-/** Every tool response is redacted (value-only) before it leaves the process. */
-function json(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text", text: JSON.stringify(redactStrings(payload), null, 2) }] };
-}
-
-function fail(error: unknown): { isError: true; content: Array<{ type: "text"; text: string }> } {
-  if (error instanceof GatewayError) {
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            redactStrings({ error: error.message, code: error.code, status: error.status }),
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  }
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(redactStrings({ error: (error as Error).message ?? "unknown error" }), null, 2),
-      },
-    ],
-  };
-}
 
 function summarize(rec: RunRecord, opts: { includeOutput?: boolean } = {}) {
   const includeOutput = opts.includeOutput ?? true;
@@ -352,4 +322,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       }
     },
   );
+
+  // Ops tools are only advertised when the helper is actually configured: a
+  // capability that would fail closed on every call is worse than no tool.
+  const ops = new OpsClient(cfg);
+  if (ops.enabled()) registerOpsTools(server, { cfg, ops });
 }

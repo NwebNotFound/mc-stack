@@ -51,6 +51,16 @@ export interface Config {
   /** reasoning_effort values accepted by start_run. */
   allowedReasoningEfforts: string[];
 
+  /**
+   * Base URL of the ops-helper service (internal compose network), e.g.
+   * http://ops-helper:8766. Empty (or no token) disables the ops tools.
+   */
+  opsHelperUrl: string;
+  /** Shared secret with ops-helper. Never logged, never in a URL. */
+  opsHelperToken: string;
+  /** Default timeout for one ops call; long actions override it per tool. */
+  opsHelperTimeoutSeconds: number;
+
   backend: Backend;
   /** Only used by the host-only CLI backend. */
   cliCommand: string;
@@ -173,6 +183,10 @@ export function loadConfig(): Config {
     allowedProviders: list("HERMES_MCP_ALLOWED_PROVIDERS", DEFAULT_ALLOWED_PROVIDERS),
     allowedReasoningEfforts: list("HERMES_MCP_ALLOWED_REASONING_EFFORTS", DEFAULT_ALLOWED_EFFORTS),
 
+    opsHelperUrl: str("OPS_HELPER_URL"),
+    opsHelperToken: str("OPS_HELPER_TOKEN"),
+    opsHelperTimeoutSeconds: num("OPS_HELPER_TIMEOUT_SECONDS", 120, 5, 3600),
+
     backend: backendRaw,
     cliCommand: str("HERMES_CLI", "hermes"),
   };
@@ -186,6 +200,7 @@ export function loadConfig(): Config {
     trusted_proxies: cfg.trustedProxies.length,
     allowed_models: cfg.allowedModels.length,
     max_runs_per_day: cfg.maxRunsPerDay,
+    ops_helper: cfg.opsHelperUrl && cfg.opsHelperToken ? "enabled" : "disabled",
   });
 
   return cfg;

@@ -370,13 +370,77 @@ services:
       HERMES_MCP_ALLOWED_MODELS: "${HERMES_MCP_ALLOWED_MODELS:-deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5}"
       HERMES_MCP_ALLOWED_PROVIDERS: "${HERMES_MCP_ALLOWED_PROVIDERS:-openrouter,anthropic}"
       HERMES_MCP_ALLOWED_REASONING_EFFORTS: "${HERMES_MCP_ALLOWED_REASONING_EFFORTS:-minimal,low,medium,high}"
+      # Ops tools (see tools/ops-helper/README.md): this service holds NO Docker
+      # socket. It asks the ops-helper service over the internal network `ops`
+      # with a shared secret. Empty token = the ops tools are not advertised.
+      OPS_HELPER_URL: "${OPS_HELPER_URL:-http://ops-helper:8766}"
+      OPS_HELPER_TOKEN: "${OPS_HELPER_TOKEN:-}"
+      OPS_HELPER_TIMEOUT_SECONDS: "${OPS_HELPER_TIMEOUT_SECONDS:-120}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks: [mcp]
+    networks: [mcp, ops]
     expose:
       - "8765/tcp"
     volumes:
       - ./data/hermes-mcp:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Privileged ops executor for hermes-mcp (see tools/ops-helper/README.md).
+  #
+  # This is the ONLY service in the stack that gets the Docker socket. It runs
+  # exactly the actions listed in config/ops-allowlist.json with fixed argv
+  # lists (no shell, no free arguments), behind confirm/tier/armed/delay/backup
+  # gates, and writes an append-only audit log. hermes-mcp reaches it only over
+  # the internal network `ops` with the shared OPS_HELPER_TOKEN.
+  #
+  # Profile "ops": nothing starts by itself, and T2 (game servers, deploys) stays
+  # refused until OPS_ARMED=true. Start it explicitly:
+  #   docker compose --profile ops --profile mcp up -d ops-helper hermes-mcp
+  ops-helper:
+    build: ./tools/ops-helper
+    profiles: ["ops"]
+    restart: unless-stopped
+    environment:
+      OPS_HELPER_PORT: "8766"
+      OPS_HELPER_HOST: "0.0.0.0"
+      # Fail closed: without a token (>= 24 chars) the helper refuses to start.
+      OPS_HELPER_TOKEN: "${OPS_HELPER_TOKEN:-}"
+      # Global T2 arm switch and the kill switch (default: disarmed, enabled).
+      OPS_ARMED: "${OPS_ARMED:-false}"
+      OPS_DISABLED: "${OPS_DISABLED:-false}"
+      OPS_REPO_DIR: "/repo"
+      OPS_ALLOWLIST_PATH: "/repo/config/ops-allowlist.json"
+      OPS_DATA_DIR: "/app/data/ops-helper"
+      OPS_ARTIFACTS_DIR: "/artifacts"
+      # Named volumes (not host paths): build containers mount the same volume at
+      # the same path, so no host path ever has to be guessed.
+      OPS_ARTIFACTS_VOLUME: "mc-stack-ops-artifacts"
+      OPS_GRADLE_CACHE_VOLUME: "mc-stack-ops-gradle-cache"
+      OPS_ACTION_TIMEOUT_SECONDS: "${OPS_ACTION_TIMEOUT_SECONDS:-120}"
+      OPS_BUILD_TIMEOUT_SECONDS: "${OPS_BUILD_TIMEOUT_SECONDS:-1800}"
+    volumes:
+      # The socket is the whole point of this service: read-only would not allow
+      # a restart. It is never exposed to hermes-mcp or to any other service.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The repo is read-only for this service...
+      - ./:/repo:ro
+      # ...except the backup directory and the two plugin templates a deploy
+      # writes into (nothing else in the repo is writable).
+      - ./backups:/backups
+      - ./config/lobby-plugins:/plugins/lobby
+      - ./config/survival-plugins:/plugins/survival
+      # Audit log, cooldown state and the DISABLED kill-switch file.
+      - ./data/ops-helper:/app/data/ops-helper
+      - ops-artifacts:/artifacts
+    networks: [ops]
+    expose:
+      - "8766/tcp"
     read_only: true
     tmpfs:
       - /tmp
@@ -417,11 +481,20 @@ networks:
   # `external: true` wiring is needed.
   mcp:
     name: mcp
+  # Private network between hermes-mcp and ops-helper only. `internal: true`
+  # means it has no route off the host: the helper cannot reach the internet, and
+  # nothing outside these two services can reach the helper.
+  ops:
+    name: mc-stack-ops
+    internal: true
 
 volumes:
   craftcore-db:
   bot-plugin:
   bot-pending:
+  # Build artifacts and the gradle cache of the ops-helper build containers.
+  ops-artifacts:
+  ops-gradle-cache:
 
 secrets:
   forwarding_secret:

@@ -65,6 +65,29 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
 | `get_run_logs(run_id, tail?)` | tail of lifecycle/tool events |
 | `cancel_run(run_id, confirm=true)` | interrupt the agent (destructive, gated) |
 
+Ops tools (only advertised when `OPS_HELPER_URL` **and** `OPS_HELPER_TOKEN` are
+set; the whole security model lives in
+[`../ops-helper/README.md`](../ops-helper/README.md)):
+
+| Tool | Tier | Purpose |
+| --- | --- | --- |
+| `ops_status(service?)` | T0 | container state/health/uptime of the mc-stack project |
+| `ops_logs(service, tail<=300)` | T0 | redacted, capped container log tail |
+| `ops_disk()` | T0 | filesystem free bytes + `du` sizes of `backups/` and `data/` |
+| `ops_backups_list()` | T0 | `daily-*` backups with mtime/`COMPLETE.txt` |
+| `ops_players(service)` | T0 | online players of lobby/survival via `rcon-cli list` |
+| `ops_git_state()` | T0 | branch, short HEAD, dirty count, ahead/behind |
+| `ops_build_plugin()` | T0 | gradle build in a throwaway container + test counts + jar sha256 (never deploys) |
+| `ops_run_tests(target)` | T0 | hermes-mcp / ops-helper / craftcore test suite in a throwaway container |
+| `ops_restart_service(service, confirm)` | T1 | restart `bot` or `cloudflared-mcp` |
+| `ops_backup_now(confirm)` | T1 | run the repo's `backup.ps1` (see the caveat in the ops-helper README) |
+| `ops_restart_game(service, confirm, delay_seconds)` | T2 | restart lobby/survival/velocity (armed + fresh backup) |
+| `ops_deploy_plugin(artifact_sha256, confirm, delay_seconds)` | T2 | rolling CraftCore deploy with rollback jars + health checks |
+| `ops_rollback_plugin(confirm, delay_seconds)` | T2 | restore the jars the last deploy kept |
+
+`ops_ci_status(pr)` is deliberately **not** implemented: the token available here
+has no `checks:read`, so the tool could only guess.
+
 ## Setup (once)
 
 1. **Gateway keys.** Named profiles are refused by the gateway unless they have
@@ -117,6 +140,40 @@ All optional; the defaults are fail-closed.
 | `HERMES_MCP_LOCKOUT_SECONDS` | `300` | exponential lockout cap |
 | `HERMES_MCP_APPROVAL_WAIT_SECONDS` | `900` | a run waiting for approval is stopped after this (hermes-mcp never approves) |
 | `HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS` | `7200` | an `unknown` run is marked `timed_out` after this, freeing its slot |
+| `OPS_HELPER_URL` | `http://ops-helper:8766` | ops-helper base URL (internal network only) |
+| `OPS_HELPER_TOKEN` | *(empty)* | shared secret with ops-helper; empty → the ops tools are not advertised |
+| `OPS_HELPER_TIMEOUT_SECONDS` | `120` | default per-call timeout (builds/deploys raise it to 1800 s) |
+
+## Ops tools: threat model
+
+hermes-mcp holds **no Docker socket** and no extra privileges (`read_only`,
+`cap_drop: ALL`, `no-new-privileges` stay as they are). Ops work happens in the
+separate `ops-helper` service over the internal network `mc-stack-ops`
+(`internal: true`, no host port, no internet route), authenticated with the
+`OPS_HELPER_TOKEN` shared secret (constant-time compared, fail closed when
+missing). The helper runs only the actions in `config/ops-allowlist.json` with
+argv lists — never a shell — and enforces the tier gates, the backup requirement,
+the cooldowns, the kill switch and the audit log.
+
+Consequences worth stating explicitly:
+
+* A **stolen MCP bearer token** can read status/logs and run builds, and (T1)
+  restart `bot`/`cloudflared-mcp`. It **cannot** restart a game server, deploy a
+  plugin or touch the database unless `OPS_ARMED=true` **and** `confirm=true`
+  **and** `delay_seconds >= 60` **and** a fresh backup exists.
+* Nothing in the ops path can reach `craftcore-db`, `hermes-mcp`, `ops-helper`,
+  `hermes-test`, `docker compose down`, `volume rm/prune` or `kill -9`; that is
+  enforced in code, not only in the JSON.
+* **Order matters before go-live:** Cloudflare Access (service token/IdP) and the
+  OAuth 2.1 work for the claude.ai connector come **first**, then the tunnel,
+  then `OPS_ARMED=true`. While the only authentication in front of
+  `mcp.nwebnotfound.dev` is the bearer token, the ops surface stays disarmed.
+* Kill switch: `touch data/ops-helper/DISABLED` (or `OPS_DISABLED=true`) refuses
+  everything above T0 without restarting anything else.
+
+Full detail (allowlist format, tier gates, audit log, activation steps, what is
+deliberately not implemented) is in
+[`tools/ops-helper/README.md`](../ops-helper/README.md).
 
 ## Before the tunnel goes live (not in this PR)
 
