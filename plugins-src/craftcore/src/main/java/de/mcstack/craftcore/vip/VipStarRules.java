@@ -45,8 +45,14 @@ public final class VipStarRules {
     /** Item frames, hoppers and every other transfer out of the inventory: blocked. */
     public static boolean mayTransfer(boolean tagged) { return !tagged; }
 
-    /** Market, {@code /sell} and the bank never buy the menu star. */
+    /** Bank, Auktionshaus, Shop and Handel never buy the menu star. */
     public static boolean sellable(boolean tagged) { return !tagged; }
+
+    /**
+     * Refusal shown to the player when a menu star is offered to a trade. Matches the wording the
+     * market uses for the same {@link #sellable} rule so the message is identical everywhere.
+     */
+    public static final String UNSELLABLE_MESSAGE = "Nicht handelbar";
 
     /** Join: the menu is a command now, so any leftover star is removed instead of handed out. */
     public static boolean stripOnJoin(boolean tagged) { return tagged; }

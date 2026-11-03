@@ -1,5 +1,7 @@
 package de.mcstack.craftcore;
 
+import de.mcstack.craftcore.vip.VipStarGuard;
+import de.mcstack.craftcore.vip.VipStarRules;
 import java.util.*;
 import org.bukkit.*;
 import org.bukkit.entity.Player;
@@ -55,6 +57,7 @@ final class Trade implements Listener {
     if(raw>=start && raw<start+18){ItemStack item=s.inv.getItem(raw);if(item==null || item.getType().isAir())return;s.inv.setItem(raw,null);give(p,item);s.state.changed();refresh(s);return;}
     if(e.getClickedInventory()!=p.getInventory() || raw<54 || e.getSlot()<0 || e.getSlot()>=36)return;
     ItemStack item=e.getCurrentItem();if(item==null || item.getType().isAir())return;
+    if(VipStarGuard.tagged(item)){p.sendMessage(VipStarRules.UNSELLABLE_MESSAGE);return;}
     for(int i=start;i<start+18;i++)if(s.inv.getItem(i)==null || s.inv.getItem(i).getType().isAir()){s.inv.setItem(i,item.clone());e.setCurrentItem(null);s.state.changed();refresh(s);return;}
     p.sendMessage("Deine Angebotsseite ist voll.");
   }
