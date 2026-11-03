@@ -155,3 +155,8 @@ traversal/encoding/CRLF/smuggling vectors, prefix names, container ids, the
 throwaway network next to a throwaway canary container, and probes it: the
 canary restarts (`204`), everything else is `403`. It also proves that no
 container that mounts the socket is left running (each one self-exits).
+
+## Response handling (review of PR 125)
+
+- dockerd answers larger bodies with `Transfer-Encoding: chunked`. The filter decodes the chunks strictly (hex sizes only, no extensions; malformed framing is a 502) and re-frames with a plain `Content-Length`. Without this every response over ~2 KB (e.g. `GET /containers/json` with many containers) reached the client with the chunk size lines inside the JSON.
+- `GET /containers/<name>/json` is returned with `Config.Env` emptied. The inspect document contains the container's environment (database passwords, tokens); no caller of this filter needs it.

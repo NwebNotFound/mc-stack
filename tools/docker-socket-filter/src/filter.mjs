@@ -256,26 +256,83 @@ export function sendError(socket, status, code) {
  * recompute Content-Length (so framing can never be ambiguous) and keep the
  * connection alive. Returns null when the upstream bytes are not HTTP.
  */
-export function rewriteResponse(raw, method) {
+export function rewriteResponse(raw, method, opts = {}) {
   const idx = raw.indexOf(CRLFCRLF);
   if (idx === -1) return null;
   const lines = raw.subarray(0, idx).toString("latin1").split(CRLF);
   const statusLine = lines[0];
   if (!/^HTTP\/1\.[01] \d{3}\b/.test(statusLine)) return null;
-  const body = raw.subarray(idx + 4);
+  let body = raw.subarray(idx + 4);
   const drop = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "upgrade", "proxy-connection", "trailer"]);
   const kept = [];
+  let chunked = false;
   for (let i = 1; i < lines.length; i += 1) {
     const m = /^([A-Za-z0-9-]+): ?(.*)$/.exec(lines[i]);
     if (!m) continue;
+    if (m[1].toLowerCase() === "transfer-encoding" && /chunked/i.test(m[2])) chunked = true;
     if (drop.has(m[1].toLowerCase())) continue;
     kept.push(lines[i]);
+  }
+  // dockerd answers larger bodies with `Transfer-Encoding: chunked`. We re-frame
+  // with a plain Content-Length, so the chunk framing must be removed first or
+  // the client sees the hex size lines as part of the JSON.
+  if (chunked) {
+    body = dechunk(body);
+    if (body === null) return null;
+  }
+  if (opts.transformBody && /^HTTP\/1\.[01] 200\b/.test(statusLine) && method !== "HEAD") {
+    body = opts.transformBody(body);
+    if (body === null) return null;
   }
   const bodyLen = method === "HEAD" ? 0 : body.length;
   const head = [statusLine, ...kept, `Content-Length: ${bodyLen}`, "Connection: keep-alive", "X-Ops-Filter: docker-socket-filter", "", ""].join(CRLF);
   const parts = [Buffer.from(head, "latin1")];
   if (bodyLen > 0) parts.push(body);
   return Buffer.concat(parts);
+}
+
+const CRLF_BUF = Buffer.from(CRLF, "latin1");
+
+/**
+ * Decode an HTTP/1.1 chunked body. Strict: hex size only (no chunk extensions),
+ * every chunk CRLF-terminated, terminated by a 0 chunk. Trailers are ignored.
+ * Returns null on any malformed framing.
+ */
+export function dechunk(buf) {
+  const parts = [];
+  let pos = 0;
+  for (;;) {
+    const eol = buf.indexOf(CRLF_BUF, pos);
+    if (eol === -1) return null;
+    const sizeStr = buf.subarray(pos, eol).toString("latin1");
+    if (!/^[0-9a-fA-F]{1,8}$/.test(sizeStr)) return null;
+    const size = parseInt(sizeStr, 16);
+    pos = eol + 2;
+    if (size === 0) return Buffer.concat(parts);
+    if (pos + size + 2 > buf.length) return null;
+    parts.push(buf.subarray(pos, pos + size));
+    pos += size;
+    if (buf[pos] !== 13 || buf[pos + 1] !== 10) return null;
+    pos += 2;
+  }
+}
+
+/**
+ * `GET /containers/<name>/json` returns the full container config, including
+ * `Config.Env` (database passwords, tokens). The ops helper never needs it, so
+ * the filter removes it: a bug in or a compromise of a caller can then not read
+ * secrets through the inspect route. Returns null if the body is not JSON.
+ */
+export function stripInspectEnv(body) {
+  try {
+    const obj = JSON.parse(body.toString("utf8"));
+    if (obj && typeof obj === "object" && obj.Config && typeof obj.Config === "object") {
+      obj.Config.Env = [];
+    }
+    return Buffer.from(JSON.stringify(obj), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 function connectUnix(path) {
@@ -408,7 +465,11 @@ export function createFilterServer(cfg) {
             fail(502, "upstream_error");
             return;
           }
-          const out = rewriteResponse(Buffer.concat(chunks), req.method);
+          const out = rewriteResponse(
+            Buffer.concat(chunks),
+            req.method,
+            route.route === "container_json" ? { transformBody: stripInspectEnv } : undefined,
+          );
           if (!out) {
             record({ event: "error", code: "bad_upstream_response" });
             fail(502, "bad_upstream_response");

@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { classify, createFilterServer, Denied, DEFAULT_RESTART_ALLOW, parseHead, rewriteResponse } from "../src/filter.mjs";
+import { classify, createFilterServer, dechunk, Denied, DEFAULT_RESTART_ALLOW, parseHead, rewriteResponse, stripInspectEnv } from "../src/filter.mjs";
 
 const CFG = { restartAllow: DEFAULT_RESTART_ALLOW };
 const ID64 = "a".repeat(64);
@@ -400,7 +400,7 @@ test("live: an oversized head is refused", async () => {
 
 test("rewriteResponse recomputes framing and drops hop-by-hop headers", () => {
   const upstream = Buffer.from(
-    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nX-Keep: yes\r\n\r\n{\"a\":1}",
+    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nX-Keep: yes\r\n\r\n7\r\n{\"a\":1}\r\n0\r\n\r\n",
     "latin1",
   );
   const out = rewriteResponse(upstream, "GET").toString("latin1");
@@ -416,4 +416,60 @@ test("rewriteResponse recomputes framing and drops hop-by-hop headers", () => {
   assert.ok(head.endsWith("\r\n\r\n"));
 
   assert.equal(rewriteResponse(Buffer.from("not http at all", "latin1"), "GET"), null);
+});
+
+// ---- chunked upstream responses + inspect Env stripping (review of PR 125) ----
+
+const chunkify = (text, size) => {
+  const buf = Buffer.from(text, "utf8");
+  const parts = [];
+  for (let i = 0; i < buf.length; i += size) {
+    const piece = buf.subarray(i, i + size);
+    parts.push(Buffer.from(`${piece.length.toString(16)}\r\n`), piece, Buffer.from("\r\n"));
+  }
+  parts.push(Buffer.from("0\r\n\r\n"));
+  return Buffer.concat(parts);
+};
+
+test("dechunk decodes chunked bodies and rejects malformed framing", () => {
+  const text = JSON.stringify({ a: "x".repeat(5000) });
+  assert.equal(dechunk(chunkify(text, 1500)).toString("utf8"), text);
+  assert.equal(dechunk(Buffer.from("0\r\n\r\n")).length, 0);
+  assert.equal(dechunk(Buffer.from("zz\r\nhello\r\n0\r\n\r\n")), null, "non-hex size");
+  assert.equal(dechunk(Buffer.from("5;ext=1\r\nhello\r\n0\r\n\r\n")), null, "chunk extensions refused");
+  assert.equal(dechunk(Buffer.from("5\r\nhelloXX0\r\n\r\n")), null, "missing CRLF after chunk");
+  assert.equal(dechunk(Buffer.from("a\r\nshort\r\n0\r\n\r\n")), null, "chunk shorter than announced");
+  assert.equal(dechunk(Buffer.from("5\r\nhello\r\n")), null, "no terminating zero chunk");
+});
+
+test("rewriteResponse removes chunk framing so the client gets valid JSON", () => {
+  const json = JSON.stringify([{ Id: "abc", Names: ["/x"], pad: "y".repeat(6000) }]);
+  const upstream = Buffer.concat([
+    Buffer.from("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"),
+    chunkify(json, 2048),
+  ]);
+  const out = rewriteResponse(upstream, "GET");
+  const idx = out.indexOf(Buffer.from("\r\n\r\n"));
+  const head = out.subarray(0, idx).toString("latin1");
+  const body = out.subarray(idx + 4);
+  assert.ok(head.includes(`Content-Length: ${Buffer.byteLength(json)}`));
+  assert.doesNotMatch(head, /transfer-encoding/i);
+  assert.deepEqual(JSON.parse(body.toString("utf8")), JSON.parse(json));
+  const broken = Buffer.concat([Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"), Buffer.from("zz\r\nbad\r\n0\r\n\r\n")]);
+  assert.equal(rewriteResponse(broken, "GET"), null, "malformed chunking is refused, not forwarded");
+});
+
+test("inspect responses lose Config.Env, other fields stay", () => {
+  const inspect = { Id: "1", Name: "/mc-stack-bot-1", State: { Running: true }, Config: { Image: "x", Env: ["DB_PASSWORD=secret", "TOKEN=abc"], Labels: { a: "b" } } };
+  const out = JSON.parse(stripInspectEnv(Buffer.from(JSON.stringify(inspect))).toString("utf8"));
+  assert.deepEqual(out.Config.Env, []);
+  assert.equal(out.Config.Image, "x");
+  assert.deepEqual(out.State, { Running: true });
+  assert.equal(stripInspectEnv(Buffer.from("not json")), null);
+
+  const raw = Buffer.concat([Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"), chunkify(JSON.stringify(inspect), 40)]);
+  const framed = rewriteResponse(raw, "GET", { transformBody: stripInspectEnv });
+  const text = framed.subarray(framed.indexOf(Buffer.from("\r\n\r\n")) + 4).toString("utf8");
+  assert.ok(!text.includes("secret") && !text.includes("TOKEN=abc"), "no secret value leaves the filter");
+  assert.equal(rewriteResponse(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nnot json", "latin1"), "GET", { transformBody: stripInspectEnv }), null);
 });
