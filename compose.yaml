@@ -338,9 +338,11 @@ services:
         condition: service_healthy
 
   # Remote MCP server for the Hermes agents (Claude Code / claude.ai).
-  # Reachable only inside the compose network: no published host port, no
-  # router forwarding. Public access is meant to go through Cloudflare Tunnel
-  # (see tools/hermes-mcp/README.md), which is prepared but not created.
+  # Reachable only inside the compose network `mcp`: no published host port, no
+  # router forwarding. The Hermes gateway is reached over
+  # host.docker.internal, so this service needs no other compose network.
+  # Public access is meant to go through Cloudflare Tunnel (see
+  # tools/hermes-mcp/README.md), which is prepared but not created.
   hermes-mcp:
     build: ./tools/hermes-mcp
     profiles: ["mcp"]
@@ -357,7 +359,7 @@ services:
       HERMES_MCP_DATA_DIR: "/app/data"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks: [minecraft]
+    networks: [mcp]
     expose:
       - "8765/tcp"
     volumes:
@@ -373,6 +375,8 @@ services:
   # Optional dedicated tunnel for mcp.nwebnotfound.dev. Prepared only: start it
   # with `--profile mcp-tunnel` AFTER the tunnel exists in Cloudflare, its public
   # hostname points at http://hermes-mcp:8765 and MCP_TUNNEL_TOKEN is in .env.
+  # A tunnel that serves hermes-mcp must live in the `mcp` network (that is the
+  # network hermes-mcp is attached to); see tools/hermes-mcp/README.md.
   # See tools/hermes-mcp/cloudflared.config.example.yml for the local-config variant.
   cloudflared-mcp:
     image: cloudflare/cloudflared:2026.10.0
@@ -395,6 +399,10 @@ services:
 networks:
   minecraft:
     driver: bridge
+  # Dedicated network for hermes-mcp with a fixed name, so an external compose
+  # file (e.g. the cloudflared tunnel) can join it via `external: true`.
+  mcp:
+    name: mcp
 
 volumes:
   craftcore-db:

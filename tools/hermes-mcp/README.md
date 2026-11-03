@@ -11,7 +11,7 @@ Claude Code / claude.ai
 Cloudflare Tunnel (prepared, NOT created yet)
         │
         ▼
-hermes-mcp  (compose network `minecraft`, port 8765, no host port)
+hermes-mcp  (compose network `mcp`, port 8765, no host port)
         │  http://host.docker.internal:8642  + per-profile API_SERVER_KEY
         ▼
 Hermes gateway  (127.0.0.1:8642, multiplexer)
@@ -22,8 +22,10 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
 
 ## Security model
 
-- No published host port. The container is only reachable from the compose
-  network (and later from the tunnel). No router/Fritzbox forwarding.
+- No published host port. The container is only reachable from the `mcp`
+  compose network (and later from the tunnel). No router/Fritzbox forwarding.
+  hermes-mcp sits in that one network only; it reaches the Hermes gateway via
+  `host.docker.internal`, so it needs no Minecraft network.
 - Every request needs `Authorization: Bearer <HERMES_MCP_TOKEN>`; the token is
   compared in constant time, is never logged and never returned by a tool.
 - The Hermes gateway keys stay in the gateway call: each profile has its own
@@ -119,9 +121,14 @@ it live:
 
 1. Zero Trust → Networks → Tunnels → **Create a tunnel** (cloudflared, free).
 2. Public hostname: `mcp.nwebnotfound.dev` → `http://hermes-mcp:8765`
-   (same `minecraft` network, so no host port is needed).
+   (the tunnel lives in the `mcp` network — the compose network name is fixed
+   to `mcp`, so a separate compose file can join it as `external: true` —
+   so no host port is needed).
 3. Copy the tunnel token into `.env` as `MCP_TUNNEL_TOKEN=…` (never in git).
 4. Start it: `docker compose --profile mcp --profile mcp-tunnel up -d`.
+   The tunnel container must be attached to the `mcp` network to reach
+   `hermes-mcp`; an external compose file can join it with
+   `networks: { mcp: { external: true } }`.
 5. Optional hardening in Cloudflare: WAF rule on `/mcp` limiting to your
    countries/ASN, and Access (service token) in front of the hostname.
 6. Verify: `curl -sS -o /dev/null -w '%{http_code}\n' https://mcp.nwebnotfound.dev/healthz`
