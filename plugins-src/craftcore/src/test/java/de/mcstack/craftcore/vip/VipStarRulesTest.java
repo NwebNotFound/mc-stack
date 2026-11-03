@@ -48,9 +48,18 @@ class VipStarRulesTest {
         assertTrue(VipStarRules.sellable(false));
     }
 
-    @Test void unsellableMessageMatchesTheMarketWording() {
-        assertEquals("Nicht handelbar", VipStarRules.UNSELLABLE_MESSAGE,
-            "Auktionshaus, Shop und Handel lehnen den Stern mit derselben Meldung wie der Markt ab");
+    @Test void refusalShowsTheMarketWordingForTheStarOnly() {
+        assertEquals("Nicht handelbar", VipStarRules.refusal(true),
+            "der Stern wird mit der Markt-Meldung abgelehnt");
+        assertNull(VipStarRules.refusal(false), "normale Items werden nicht abgelehnt");
+    }
+
+    @Test void refusalIsConsistentWithSellable() {
+        for (boolean tagged : new boolean[] {true, false}) {
+            assertEquals(VipStarRules.sellable(tagged) ? null : "Nicht handelbar",
+                VipStarRules.refusal(tagged),
+                "Ablehnung und sellable() duerfen sich nie widersprechen (tagged=" + tagged + ")");
+        }
     }
 
     @Test void joinRemovesLeftoverMenuStars() {

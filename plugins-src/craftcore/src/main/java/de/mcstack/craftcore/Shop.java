@@ -115,7 +115,7 @@ final class Shop implements Listener {
   }
   void sell(Player p,String amount,String requested)throws Exception {
     long price=Money.cents(amount); if(price<=0){p.sendMessage("Der Preis muss positiv sein.");return;}
-    ItemStack hand=p.getInventory().getItemInMainHand(); if(VipStarGuard.tagged(hand)){p.sendMessage(VipStarRules.UNSELLABLE_MESSAGE);return;} if(hand.getType().isAir() || hand.getAmount()<=0){p.sendMessage("Halte das anzubietende Item in der Hand.");return;}
+    ItemStack hand=p.getInventory().getItemInMainHand(); String refusal=VipStarRules.refusal(VipStarGuard.tagged(hand)); if(refusal!=null){p.sendMessage(refusal);return;} if(hand.getType().isAir() || hand.getAmount()<=0){p.sendMessage("Halte das anzubietende Item in der Hand.");return;}
     int count=requested==null?hand.getAmount():Integer.parseInt(requested);if(count<1||count>hand.getAmount()){p.sendMessage("Die Menge muss zwischen 1 und der Anzahl in deiner Hand liegen.");return;}
     ItemStack copy=hand.clone();copy.setAmount(count); String item=Base64.getEncoder().encodeToString(copy.serializeAsBytes()); String id=UUID.randomUUID().toString();
     ItemStack original=hand.clone(); if(count==hand.getAmount())p.getInventory().setItemInMainHand(null);else{ItemStack remaining=hand.clone();remaining.setAmount(hand.getAmount()-count);p.getInventory().setItemInMainHand(remaining);}
@@ -145,7 +145,7 @@ final class Shop implements Listener {
         long delta=editDelta(slot);if(delta!=0){long price=Math.addExact(edit.pendingPrice,delta);if(price<1){p.sendMessage("Preis muss positiv sein.");return;}edit.pendingPrice=price;renderEdit(e.getView().getTopInventory(),edit);return;}
         if(slot==19){boolean ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET price=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setLong(1,edit.pendingPrice);q.setString(2,row.id());q.setString(3,seller);q.setLong(4,row.price());q.setString(5,row.item());return q.executeUpdate()==1;}});p.sendMessage(ok?"Preis gespeichert.":"Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}
         if(slot==16){ItemStack existing=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.item()));ItemStack hand=p.getInventory().getItemInMainHand();
-          if(VipStarGuard.tagged(hand)){p.sendMessage(VipStarRules.UNSELLABLE_MESSAGE);return;}
+          String refusal=VipStarRules.refusal(VipStarGuard.tagged(hand));if(refusal!=null){p.sendMessage(refusal);return;}
           if(hand.getType().isAir()||!existing.isSimilar(hand)){p.sendMessage("Halte passende Items in der Haupthand.");return;}
           int count=Math.min(hand.getAmount(),existing.getMaxStackSize()-existing.getAmount());if(count<=0){p.sendMessage("Der Angebotsstapel ist voll.");return;}
           ItemStack original=hand.clone(),updated=existing.clone();updated.setAmount(existing.getAmount()+count);String encoded=Base64.getEncoder().encodeToString(updated.serializeAsBytes());

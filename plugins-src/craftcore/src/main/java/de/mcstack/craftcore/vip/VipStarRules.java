@@ -54,6 +54,13 @@ public final class VipStarRules {
      */
     public static final String UNSELLABLE_MESSAGE = "Nicht handelbar";
 
+    /**
+     * Player-facing refusal for an item that may not be traded: the shared wording when
+     * {@code tagged}, otherwise {@code null}. Single code path so auction, shop and trade
+     * refuse the menu star with exactly one rule and message.
+     */
+    public static String refusal(boolean tagged) { return tagged ? UNSELLABLE_MESSAGE : null; }
+
     /** Join: the menu is a command now, so any leftover star is removed instead of handed out. */
     public static boolean stripOnJoin(boolean tagged) { return tagged; }
 }
