@@ -46,7 +46,7 @@ export function checkGates(
   ctx: GateContext,
 ): GateDecision {
   if (!action.enabled) {
-    return deny("action_disabled", `${action.name} is disabled in the allowlist`);
+    return deny("action_disabled", action.disabledReason ?? `${action.name} is disabled in the allowlist`);
   }
 
   // Kill switch: everything above read-only stops.

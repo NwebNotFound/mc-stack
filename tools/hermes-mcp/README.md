@@ -75,27 +75,28 @@ Ops tools (only advertised when `OPS_HELPER_URL` **and** `OPS_HELPER_TOKEN` are
 set; the whole security model lives in
 [`../ops-helper/README.md`](../ops-helper/README.md)):
 
-| Tool | Tier | Token level | Purpose |
-| --- | --- | --- | --- |
-| `ops_status(service?)` | T0 | base | container state/health/uptime of the mc-stack project |
-| `ops_logs(service, tail<=300)` | T0 | base | redacted, capped container log tail |
-| `ops_disk()` | T0 | base | filesystem free bytes + `du` sizes of `backups/` and `data/` |
-| `ops_backups_list()` | T0 | base | `daily-*` backups with mtime/`COMPLETE.txt` |
-| `ops_players(service)` | T0 | base | online players of lobby/survival via `rcon-cli list` |
-| `ops_git_state()` | T0 | base | branch, short HEAD, dirty count, ahead/behind |
-| `ops_build_plugin()` | T0 | base | gradle build in a throwaway container + test counts + jar sha256 (never deploys) |
-| `ops_run_tests(target)` | T0 | base | hermes-mcp / ops-helper / craftcore test suite in a throwaway container |
-| `ops_restart_service(service, confirm)` | T1 | ops | restart `bot` or `cloudflared-mcp` |
-| `ops_backup_now(confirm)` | T1 | ops | run the repo's `backup.ps1` (see the caveat in the ops-helper README) |
-| `ops_restart_game(service, confirm, delay_seconds)` | T2 | ops + local listener | restart lobby/survival/velocity (armed + fresh backup) |
-| `ops_deploy_plugin(artifact_sha256, confirm, delay_seconds)` | T2 | ops + local listener | rolling CraftCore deploy with rollback jars + health checks |
-| `ops_rollback_plugin(confirm, delay_seconds)` | T2 | ops + local listener | restore the jars the last deploy kept |
+| Tool | Tier | Token level | Enabled now | Purpose |
+| --- | --- | --- | --- | --- |
+| `ops_status(service?)` | T0 | base | yes | container state/health/uptime of the mc-stack project |
+| `ops_logs(service, tail<=300)` | T0 | base | yes | redacted, capped container log tail |
+| `ops_disk()` | T0 | base | yes | filesystem free bytes + `du` sizes of `backups/` and `data/` |
+| `ops_backups_list()` | T0 | base | yes | `daily-*` backups with mtime/`COMPLETE.txt` |
+| `ops_git_state()` | T0 | base | yes | branch, short HEAD, dirty count, ahead/behind |
+| `ops_players(service)` | T0 | base | **paused** | online players via `rcon-cli list`; needs docker exec |
+| `ops_build_plugin()` | T0 | base | **paused** | gradle build in a throwaway container; needs container create |
+| `ops_run_tests(target)` | T0 | base | **paused** | run a test suite in a throwaway container; needs container create |
+| `ops_restart_service(service, confirm)` | T1 | ops | **paused** | restart `bot`/`cloudflared-mcp`; needs a POST the proxy denies |
+| `ops_backup_now(confirm)` | T1 | ops | **paused** | needs PowerShell, which the helper image lacks |
+| `ops_restart_game(service, confirm, delay_seconds)` | T2 | ops + local listener | **paused** | restart lobby/survival/velocity (armed + fresh backup) |
+| `ops_deploy_plugin(artifact_sha256, confirm, delay_seconds)` | T2 | ops + local listener | **paused** | rolling CraftCore deploy (needs a build + exec) |
+| `ops_rollback_plugin(confirm, delay_seconds)` | T2 | ops + local listener | **paused** | restore the jars the last deploy kept |
 
-A tool the caller's level may not use is **not advertised** — `tools/list` simply
-does not contain it, and calling it anyway returns "unknown tool".
-
-`ops_ci_status(pr)` is deliberately **not** implemented: the token available here
-has no `checks:read`, so the tool could only guess.
+**Paused tools:** with `docker-socket-proxy` at `POST=0`/`EXEC=0` (see the
+ops-helper README), every action that needs a non-GET Docker call is
+`"enabled": false` in `config/ops-allowlist.json`. The tools are still advertised
+(so a call returns a clear `action_disabled` with the reason), but only the five
+read-only tools work. `ops_ci_status(pr)` is deliberately **not** implemented: the
+token available here has no `checks:read`, so the tool could only guess.
 
 ## Setup (once)
 
@@ -174,14 +175,13 @@ the cooldowns, the kill switch and the audit log.
 
 Consequences worth stating explicitly:
 
-* A **stolen read-only MCP token** (`base` level) can read status/logs and run
-  builds — and nothing else. It cannot see the T1/T2 tools at all.
-* The **ops token** additionally unlocks T1: restart `bot`/`cloudflared-mcp`. It
-  still **cannot** restart a game server or deploy a plugin unless the T2 tool
-  exists (i.e. the call arrived on the **local** listener) **and**
-  `OPS_ARMED=true` **and** `confirm=true` **and** `delay_seconds >= 60` **and** a
-  fresh backup exists. Restarting a game server from the internet is therefore
-  not possible at all, even with a stolen ops token.
+* A **stolen read-only MCP token** (`base` level) can read status/logs and
+  backups — and nothing else. It cannot see the T1/T2 tools at all.
+* The **ops token** still unlocks the T1/T2 tool *listings*, but they are
+  **paused** in the allowlist: with `docker-socket-proxy` at `POST=0`/`EXEC=0`,
+  every action that would need a container create, an exec or a restart is
+  disabled, so there is nothing a stolen token can mutate either. See the
+  ops-helper README for the (verified) reason and how to re-enable restart.
 * Nothing in the ops path can reach `craftcore-db`, `hermes-mcp`, `ops-helper`,
   `hermes-test`, `docker compose down`, `volume rm/prune` or `kill -9`; that is
   enforced in code, not only in the JSON.

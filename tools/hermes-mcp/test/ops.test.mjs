@@ -221,6 +221,51 @@ test("T1/T2 tools are not advertised without the ops token, and T2 not without t
   }
 });
 
+const PAUSED_TOOLS = [
+  "ops_players",
+  "ops_build_plugin",
+  "ops_run_tests",
+  "ops_restart_service",
+  "ops_backup_now",
+  "ops_restart_game",
+  "ops_deploy_plugin",
+  "ops_rollback_plugin",
+];
+
+test("the paused ops tools announce it in their description", () => {
+  const server = opsServer();
+  for (const name of PAUSED_TOOLS) {
+    assert.match(server.handlers[name].def.description, /PAUSED/, `${name} description must say it is paused`);
+  }
+  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"]) {
+    assert.ok(!/PAUSED/.test(server.handlers[name].def.description), `${name} must stay available`);
+  }
+});
+
+test("a paused action returns action_disabled with its reason to the caller", async () => {
+  const server = opsServer({
+    ops: {
+      call: async () => ({
+        ok: false,
+        action: "ops_build_plugin",
+        tier: "T0",
+        impl: "build_plugin",
+        code: "action_disabled",
+        message: "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0).",
+        result: null,
+        audit_id: "a6",
+      }),
+    },
+  });
+  const out = await server.handlers.ops_build_plugin.handler({});
+  assert.equal(out.isError, true);
+  const payload = parse(out);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.code, "action_disabled");
+  assert.match(payload.message, /paused/);
+  assert.equal(payload.audit_id, "a6");
+});
+
 test("a T1/T2 tool is not registered at all for a base-token caller", async () => {
   const calls = [];
   const server = opsServer({

@@ -114,14 +114,54 @@
     "ops_logs": { "tier": "T0", "impl": "logs", "enabled": true },
     "ops_disk": { "tier": "T0", "impl": "disk", "enabled": true },
     "ops_backups_list": { "tier": "T0", "impl": "backups_list", "enabled": true },
-    "ops_players": { "tier": "T0", "impl": "players", "enabled": true },
     "ops_git_state": { "tier": "T0", "impl": "git_state", "enabled": true },
-    "ops_build_plugin": { "tier": "T0", "impl": "build_plugin", "enabled": true },
-    "ops_run_tests": { "tier": "T0", "impl": "run_tests", "enabled": true },
-    "ops_restart_service": { "tier": "T1", "impl": "restart_service", "enabled": true },
-    "ops_backup_now": { "tier": "T1", "impl": "backup_now", "enabled": true },
-    "ops_restart_game": { "tier": "T2", "impl": "restart_game", "enabled": true },
-    "ops_deploy_plugin": { "tier": "T2", "impl": "deploy_plugin", "enabled": true },
-    "ops_rollback_plugin": { "tier": "T2", "impl": "rollback_plugin", "enabled": true }
+    "ops_players": {
+      "tier": "T0",
+      "impl": "players",
+      "enabled": false,
+      "disabled_reason": "paused: needs docker exec (POST /exec), which docker-socket-proxy denies (EXEC=0). Enable only with a path-scoped proxy that carries its own filter config."
+    },
+    "ops_build_plugin": {
+      "tier": "T0",
+      "impl": "build_plugin",
+      "enabled": false,
+      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0). Enable only with a path-scoped proxy that carries its own filter config."
+    },
+    "ops_run_tests": {
+      "tier": "T0",
+      "impl": "run_tests",
+      "enabled": false,
+      "disabled_reason": "paused: starting a throwaway container needs POST /containers/create, which docker-socket-proxy denies (POST=0). Enable only with a path-scoped proxy that carries its own filter config."
+    },
+    "ops_restart_service": {
+      "tier": "T1",
+      "impl": "restart_service",
+      "enabled": false,
+      "disabled_reason": "paused: docker restart is a POST and docker-socket-proxy denies every non-GET request while POST=0 (ALLOW_RESTARTS has no effect without POST). Re-enable together with POST=1, or use a path-scoped proxy."
+    },
+    "ops_backup_now": {
+      "tier": "T1",
+      "impl": "backup_now",
+      "enabled": false,
+      "disabled_reason": "paused: the helper image ships no PowerShell, so the repo's backup.ps1 cannot run here. Run backup.ps1 on the host."
+    },
+    "ops_restart_game": {
+      "tier": "T2",
+      "impl": "restart_game",
+      "enabled": false,
+      "disabled_reason": "paused (T2): needs POST /containers/{id}/restart and docker exec for the announcement, both denied by docker-socket-proxy (POST=0, EXEC=0). Enable only with a path-scoped proxy."
+    },
+    "ops_deploy_plugin": {
+      "tier": "T2",
+      "impl": "deploy_plugin",
+      "enabled": false,
+      "disabled_reason": "paused (T2): needs a built artifact (container create) and docker exec for the announcement, both denied by docker-socket-proxy. Enable only with a path-scoped proxy."
+    },
+    "ops_rollback_plugin": {
+      "tier": "T2",
+      "impl": "rollback_plugin",
+      "enabled": false,
+      "disabled_reason": "paused (T2): needs POST /containers/{id}/restart and docker exec for the announcement, both denied by docker-socket-proxy. Enable only with a path-scoped proxy."
+    }
   }
 }

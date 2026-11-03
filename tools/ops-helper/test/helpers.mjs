@@ -86,10 +86,25 @@ export function dockerRunner({ ps = "", logs = "", logsOk = true, exec = null, i
   ]);
 }
 
+/**
+ * The shipped allowlist with every action forced enabled.
+ *
+ * Several actions are paused in `config/ops-allowlist.json` (see the README).
+ * Their implementations stay covered by flipping them back on in a test-local
+ * copy, so a paused action never removes test coverage from its impl. The
+ * shipped (paused) state is asserted separately in `dispatch.test.mjs` and
+ * `allowlist.test.mjs`.
+ */
+export function enabledAllowlist() {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  for (const action of Object.values(allow.actions)) action.enabled = true;
+  return allow;
+}
+
 export function makeDeps(overrides = {}) {
   const dir = overrides.dataDir ?? tmpDir();
   const runner = overrides.runner ?? dockerRunner();
-  const allow = overrides.allow ?? loadAllowlist(ALLOWLIST_PATH);
+  const allow = overrides.allow ?? enabledAllowlist();
   const now = overrides.now ?? (() => 1_000_000_000_000);
   const sleeps = [];
   const cfg = {

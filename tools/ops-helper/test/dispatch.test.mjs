@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
-import { ALLOWLIST_PATH, CONTAINER_ID, advancingClock, dockerRunner, makeDeps, tmpDir } from "./helpers.mjs";
+import { ALLOWLIST_PATH, CONTAINER_ID, advancingClock, dockerRunner, enabledAllowlist, makeDeps, tmpDir } from "./helpers.mjs";
 import { loadAllowlist } from "../dist/allowlist.js";
 
 const REPO_ROOT = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -158,7 +158,7 @@ test("a non-object params payload is refused", async () => {
 });
 
 test("ops_run_tests runs the fixed argv and reads the node test summary", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   repoAllow.paths.repo = REPO_ROOT;
   const deps = makeDeps({
     allow: repoAllow,
@@ -180,7 +180,7 @@ test("ops_run_tests runs the fixed argv and reads the node test summary", async 
 });
 
 test("build and test containers run with --network none and hard CPU/RAM/PID caps", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   repoAllow.paths.repo = REPO_ROOT;
   const deps = makeDeps({ allow: repoAllow, runner: dockerRunner({}) });
   deps.runner.responses.unshift({ match: (argv) => argv[1] === "run", reply: { stdout: "# tests 1\n# pass 1\n# fail 0\n" } });
@@ -196,7 +196,7 @@ test("build and test containers run with --network none and hard CPU/RAM/PID cap
 });
 
 test("ops_build_plugin stages the source, hashes the artifact and does not deploy", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const deps = makeDeps({ allow: repoAllow, dataDir: dir });
@@ -228,7 +228,7 @@ test("ops_build_plugin stages the source, hashes the artifact and does not deplo
 });
 
 test("ops_deploy_plugin refuses without a build, without the arm switch and without a backup", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const mk = (over = {}) => makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true, ...over } });
@@ -265,7 +265,7 @@ test("ops_deploy_plugin refuses without a build, without the arm switch and with
 });
 
 test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks health", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
@@ -299,7 +299,7 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
 });
 
 test("ops_deploy_plugin rolls back automatically when a service does not come up healthy", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
@@ -340,7 +340,7 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
 });
 
 test("ops_rollback_plugin restores the recorded jars", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
@@ -376,7 +376,7 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
 });
 
 test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo", async () => {
-  const repoAllow = loadAllowlist(ALLOWLIST_PATH);
+  const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261102-010101`, { recursive: true });
   writeFileSync(`${backups}/daily-20261102-010101/COMPLETE.txt`, "ok");
@@ -394,4 +394,53 @@ test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo",
   assert.equal(disk.ok, true);
   assert.ok("filesystems" in disk.result);
   assert.equal(disk.result.directory_sizes.length, 2);
+});
+
+/* ------------------------------------------------------------------ */
+/* disabled actions                                                    */
+/* ------------------------------------------------------------------ */
+
+const ENABLED_ACTIONS = ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"];
+const DISABLED_ACTIONS = [
+  "ops_players",
+  "ops_build_plugin",
+  "ops_run_tests",
+  "ops_restart_service",
+  "ops_backup_now",
+  "ops_restart_game",
+  "ops_deploy_plugin",
+  "ops_rollback_plugin",
+];
+const DISABLED_PARAMS = {
+  ops_players: { service: "lobby" },
+  ops_build_plugin: {},
+  ops_run_tests: { target: "hermes-mcp" },
+  ops_restart_service: { service: "bot", confirm: true },
+  ops_backup_now: { confirm: true },
+  ops_restart_game: { service: "lobby", confirm: true, delay_seconds: 60 },
+  ops_deploy_plugin: { confirm: true, delay_seconds: 60, artifact_sha256: "a".repeat(64) },
+  ops_rollback_plugin: { confirm: true, delay_seconds: 60 },
+};
+
+test("the shipped allowlist keeps only the read-only tools enabled", () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  for (const name of ENABLED_ACTIONS) {
+    assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
+  }
+  for (const name of DISABLED_ACTIONS) {
+    assert.equal(allow.actions[name].enabled, false, `${name} must be disabled`);
+    assert.ok((allow.actions[name].disabledReason ?? "").length > 0, `${name} must carry a disabled_reason`);
+  }
+});
+
+test("a paused action returns action_disabled with its reason and never reaches docker", async () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  for (const name of DISABLED_ACTIONS) {
+    const deps = makeDeps({ allow, cfg: { armed: true } });
+    const out = await handleOp(name, DISABLED_PARAMS[name], deps);
+    assert.equal(out.ok, false, `${name} must be refused`);
+    assert.equal(out.code, "action_disabled", `${name} must report action_disabled`);
+    assert.match(out.message, /paused/, `${name} message must explain itself`);
+    assert.equal(deps.runner.calls.length, 0, `${name} must not reach docker`);
+  }
 });

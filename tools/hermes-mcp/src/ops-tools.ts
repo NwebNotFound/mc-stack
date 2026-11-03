@@ -183,7 +183,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     {
       title: "Ops players",
       description:
-        "Read-only: online players of lobby or survival via the container's own rcon-cli `list` (no new privileges). TPS/MSPT are not queried (Paper command availability unverified).",
+        "PAUSED (disabled in the allowlist): needs docker exec, which the socket proxy denies (EXEC=0). Read-only otherwise: online players of lobby or survival via the container's own rcon-cli `list`. TPS/MSPT are not queried (Paper command availability unverified).",
       inputSchema: {
         service: z.enum(["lobby", "survival"]).describe("Which game server to ask"),
       },
@@ -211,7 +211,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     {
       title: "Ops build plugin",
       description:
-        "Read-only (builds in a throwaway container, never touches a running server): gradle clean build of plugins-src/craftcore, returns the test counts from the JUnit XML and the sha256 of the built jar. Deploys nothing - ops_deploy_plugin needs that hash.",
+        "PAUSED (disabled in the allowlist): needs to start a container, which the socket proxy denies (POST=0). Read-only otherwise: gradle clean build of plugins-src/craftcore in a throwaway container, returns the test counts from the JUnit XML and the sha256 of the built jar. Deploys nothing.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -223,7 +223,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
     {
       title: "Ops run tests",
       description:
-        "Read-only: run one project's test suite in a throwaway container (hermes-mcp, ops-helper or craftcore) and return the test counts plus a capped output tail.",
+        "PAUSED (disabled in the allowlist): needs to start a container, which the socket proxy denies (POST=0). Read-only otherwise: run one project's test suite in a throwaway container (hermes-mcp, ops-helper or craftcore) and return the test counts plus a capped output tail.",
       inputSchema: {
         target: z.enum(["hermes-mcp", "ops-helper", "craftcore"]).describe("Which test suite to run"),
       },
@@ -240,7 +240,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops restart service (T1)",
         description:
-          "Restart one reversible helper service (allowlist: bot, cloudflared-mcp). Requires confirm=true. Never touches the game servers, the database or hermes-mcp/ops-helper themselves.",
+          "PAUSED (disabled in the allowlist): docker restart is a POST the socket proxy denies while POST=0. Restart one reversible helper service (allowlist: bot, cloudflared-mcp) when re-enabled. Requires confirm=true. Never touches the game servers, the database or hermes-mcp/ops-helper themselves.",
         inputSchema: {
           service: z.string().describe("Compose service name from the T1 allowlist, e.g. 'bot'"),
           confirm: z.boolean().describe("Must be true. Guards against accidental restarts."),
@@ -255,7 +255,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops backup now (T1)",
         description:
-          "Run the repo's own backup.ps1 (never a second backup implementation). Requires confirm=true. Note: backup.ps1 stops and restarts lobby+survival briefly, and it needs PowerShell in the helper image - without it the tool reports backup_interpreter_missing and tells you the host command.",
+          "PAUSED (disabled in the allowlist): the helper image has no PowerShell, so backup.ps1 cannot run there. Run the repo's own backup.ps1 on the host instead. Requires confirm=true when re-enabled.",
         inputSchema: {
           confirm: z.boolean().describe("Must be true."),
         },
@@ -273,7 +273,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops restart game server (T2)",
         description:
-          "Restart lobby, survival or velocity. T2: requires confirm=true, an integer delay_seconds >= 60 (players are warned first, best effort) and a fresh backup; the helper must be armed (OPS_ARMED=true). A health check follows the restart.",
+          "PAUSED (disabled in the allowlist): a T2 restart needs a POST the socket proxy denies. When re-enabled: restart lobby, survival or velocity with confirm=true, an integer delay_seconds >= 60 (players are warned first, best effort) and a fresh backup; the helper must be armed (OPS_ARMED=true). A health check follows the restart.",
         inputSchema: {
           service: z.enum(["lobby", "survival", "velocity"]).describe("Which game server to restart"),
           confirm: z.boolean().describe("Must be true."),
@@ -290,7 +290,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops deploy plugin (T2)",
         description:
-          "Deploy the last ops_build_plugin artifact (artifact_sha256 must match it) into config/lobby-plugins and config/survival-plugins, rolling one service at a time with delay_seconds between them, health check after each restart, automatic rollback to the kept jars on failure. T2: confirm=true, delay_seconds >= 60, armed helper and a fresh backup.",
+          "PAUSED (disabled in the allowlist): needs a built artifact (container create) and an exec for the announcement, both denied by the socket proxy. When re-enabled: deploy the last ops_build_plugin artifact into config/lobby-plugins and config/survival-plugins, rolling with delay_seconds between services, health check each, automatic rollback on failure. T2: confirm=true, delay_seconds >= 60, armed helper and a fresh backup.",
         inputSchema: {
           artifact_sha256: z.string().describe("sha256 returned by ops_build_plugin"),
           confirm: z.boolean().describe("Must be true."),
@@ -307,7 +307,7 @@ export function registerOpsTools(server: McpServer, deps: OpsToolDeps): void {
       {
         title: "Ops rollback plugin (T2)",
         description:
-          "Restore the jars that ops_deploy_plugin kept before its last rollout (rolling, with delay_seconds between services and a health check each). T2: confirm=true, delay_seconds >= 60 and an armed helper.",
+          "PAUSED (disabled in the allowlist): needs a POST restart and an exec for the announcement, both denied by the socket proxy. When re-enabled: restore the jars ops_deploy_plugin kept, rolling with delay_seconds between services and a health check each. T2: confirm=true, delay_seconds >= 60 and an armed helper.",
         inputSchema: {
           confirm: z.boolean().describe("Must be true."),
           delay_seconds: z.number().int().min(60).max(3600).describe("Warning lead time and pause between services (>= 60)"),

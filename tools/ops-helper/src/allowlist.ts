@@ -44,6 +44,12 @@ export interface ActionSpec {
   tier: Tier;
   impl: Impl;
   enabled: boolean;
+  /**
+   * Why the action is disabled. Required (and only used) when `enabled` is
+   * false: it is shown verbatim to the caller, so a paused tool explains itself
+   * instead of failing with a generic "disabled".
+   */
+  disabledReason?: string;
 }
 
 export interface BuildSpec {
@@ -350,7 +356,14 @@ export function parseAllowlist(raw: unknown): Allowlist {
       fail(`actions.${name}.impl "${impl}" is not implemented`);
     }
     const enabled = a.enabled === undefined ? true : bool(a.enabled, `actions.${name}.enabled`);
-    actions[name] = { name, tier, impl, enabled };
+    let disabledReason: string | undefined;
+    if (a.disabled_reason !== undefined) {
+      disabledReason = str(a.disabled_reason, `actions.${name}.disabled_reason`);
+    }
+    if (!enabled && !disabledReason) {
+      fail(`actions.${name}.disabled_reason is required when the action is disabled (enabled: false)`);
+    }
+    actions[name] = { name, tier, impl, enabled, ...(disabledReason ? { disabledReason } : {}) };
   }
   if (Object.keys(actions).length === 0) fail("actions must not be empty");
 

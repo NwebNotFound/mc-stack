@@ -47,6 +47,37 @@ test("every impl in the allowlist is implemented in code", () => {
   }
 });
 
+test("the shipped allowlist pauses every non-GET action with a reason", () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  const paused = [
+    "ops_players",
+    "ops_build_plugin",
+    "ops_run_tests",
+    "ops_restart_service",
+    "ops_backup_now",
+    "ops_restart_game",
+    "ops_deploy_plugin",
+    "ops_rollback_plugin",
+  ];
+  for (const name of paused) {
+    assert.equal(allow.actions[name].enabled, false, `${name} must be disabled`);
+    assert.ok(allow.actions[name].disabledReason, `${name} must carry a disabled_reason`);
+  }
+  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state"]) {
+    assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
+  }
+});
+
+test("a disabled action without a disabled_reason is refused at load time", () => {
+  const raw = rawAllowlist();
+  raw.actions.ops_build_plugin = { tier: "T0", impl: "build_plugin", enabled: false };
+  assert.throws(() => parseAllowlist(raw), /disabled_reason is required/);
+
+  const raw2 = rawAllowlist();
+  raw2.actions.ops_build_plugin.disabled_reason = "";
+  assert.throws(() => parseAllowlist(raw2), /disabled_reason/);
+});
+
 test("an unknown impl is refused at load time", () => {
   const raw = rawAllowlist();
   raw.actions.ops_status.impl = "exec";

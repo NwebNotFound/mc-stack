@@ -38,6 +38,20 @@ test("a disabled action is refused regardless of tier", () => {
   assert.equal(decision.code, "action_disabled");
 });
 
+test("a disabled action explains itself with its disabled_reason", () => {
+  const withReason = checkGates(
+    action("T1", { enabled: false, disabledReason: "paused: needs POST /containers/create" }),
+    T1,
+    { confirm: true },
+    ctx(),
+  );
+  assert.equal(withReason.code, "action_disabled");
+  assert.equal(withReason.message, "paused: needs POST /containers/create");
+
+  const without = checkGates(action("T1", { enabled: false }), T1, { confirm: true }, ctx());
+  assert.equal(without.message, "ops_test is disabled in the allowlist");
+});
+
 test("T1 needs confirm=true", () => {
   assert.equal(checkGates(action("T1"), T1, {}, ctx()).code, "confirmation_required");
   assert.equal(checkGates(action("T1"), T1, { confirm: false }, ctx()).code, "confirmation_required");
