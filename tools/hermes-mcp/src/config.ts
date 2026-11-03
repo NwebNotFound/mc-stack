@@ -136,7 +136,7 @@ export function loadConfig(): Config {
     backend: cfg.backend,
     gateway_url: cfg.gatewayUrl,
     profiles: Object.keys(cfg.profileKeys),
-    token_count: cfg.tokens.length,
+    auth: cfg.tokens.length,
     port: cfg.port,
   });
 
