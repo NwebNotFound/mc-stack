@@ -357,6 +357,19 @@ services:
       HERMES_MCP_PUBLIC_URL: "${HERMES_MCP_PUBLIC_URL:-https://mcp.nwebnotfound.dev}"
       HERMES_MCP_ALLOWED_HOSTS: "${HERMES_MCP_ALLOWED_HOSTS:-mcp.nwebnotfound.dev,localhost,127.0.0.1,hermes-mcp}"
       HERMES_MCP_DATA_DIR: "/app/data"
+      # Hardening (see tools/hermes-mcp/README.md):
+      # - trust X-Forwarded-For only from these peers (empty = never);
+      # - cap runs per UTC day and the accepted model/provider/effort overrides;
+      # - stop a run that waits for approval, and time out lost (`unknown`) runs.
+      HERMES_MCP_TRUSTED_PROXIES: "${HERMES_MCP_TRUSTED_PROXIES:-}"
+      HERMES_MCP_MAX_RUNS_PER_DAY: "${HERMES_MCP_MAX_RUNS_PER_DAY:-50}"
+      HERMES_MCP_LOCKOUT_AFTER: "${HERMES_MCP_LOCKOUT_AFTER:-5}"
+      HERMES_MCP_LOCKOUT_SECONDS: "${HERMES_MCP_LOCKOUT_SECONDS:-300}"
+      HERMES_MCP_APPROVAL_WAIT_SECONDS: "${HERMES_MCP_APPROVAL_WAIT_SECONDS:-900}"
+      HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS: "${HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS:-7200}"
+      HERMES_MCP_ALLOWED_MODELS: "${HERMES_MCP_ALLOWED_MODELS:-deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5}"
+      HERMES_MCP_ALLOWED_PROVIDERS: "${HERMES_MCP_ALLOWED_PROVIDERS:-openrouter,anthropic}"
+      HERMES_MCP_ALLOWED_REASONING_EFFORTS: "${HERMES_MCP_ALLOWED_REASONING_EFFORTS:-minimal,low,medium,high}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [mcp]

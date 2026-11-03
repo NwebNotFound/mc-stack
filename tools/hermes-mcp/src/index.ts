@@ -15,6 +15,7 @@ import { loadConfig, type Config } from "./config.js";
 import { GatewayClient } from "./hermes.js";
 import { logger } from "./logger.js";
 import { RunManager } from "./runner.js";
+import { BruteForceGuard, resolveClientIp } from "./security.js";
 import { RunStore } from "./store.js";
 import { registerTools } from "./tools.js";
 
@@ -80,10 +81,13 @@ async function main(): Promise<void> {
   const client = new GatewayClient(cfg);
   const runs = new RunManager(cfg, client, store);
   await runs.resume();
+  runs.startSweeper();
 
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", true);
+  // Only a configured trusted proxy may set X-Forwarded-For; otherwise Express
+  // (and resolveClientIp) fall back to the socket address.
+  app.set("trust proxy", cfg.trustedProxies.length > 0 ? cfg.trustedProxies : false);
   app.use(express.json({ limit: "512kb" }));
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -114,11 +118,33 @@ async function main(): Promise<void> {
   });
 
   const allowToken = rateLimiter(120);
+  const bruteForce = new BruteForceGuard({
+    threshold: cfg.lockoutAfter,
+    baseSeconds: 5,
+    maxSeconds: cfg.lockoutMaxSeconds,
+    windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
+  });
 
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
+    const clientIp = resolveClientIp(req, cfg.trustedProxies);
+
+    const lockout = bruteForce.check(clientIp);
+    if (lockout) {
+      logger.warn("rejected a locked-out client", { path: req.path, remote: clientIp });
+      res
+        .status(429)
+        .setHeader("Retry-After", String(lockout.retryAfterSeconds))
+        .json({
+          error: "too_many_bad_tokens",
+          message: `Too many invalid tokens from this client. Retry in ${lockout.retryAfterSeconds}s.`,
+        });
+      return;
+    }
+
     const header = req.headers.authorization ?? "";
     const match = /^Bearer\s+(.+)$/i.exec(header);
     if (!match) {
+      bruteForce.failure(clientIp);
       res
         .status(401)
         .setHeader("WWW-Authenticate", `Bearer realm="hermes-mcp"`)
@@ -127,10 +153,12 @@ async function main(): Promise<void> {
     }
     const token = match[1].trim();
     if (!tokenMatches(token, cfg.tokens)) {
-      logger.warn("rejected invalid MCP bearer token", { path: req.path, remote: req.ip });
+      bruteForce.failure(clientIp);
+      logger.warn("rejected invalid MCP bearer token", { path: req.path, remote: clientIp });
       res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
       return;
     }
+    bruteForce.success(clientIp);
     if (!allowToken(sha256(token).toString("hex"))) {
       res.status(429).json({ error: "rate_limited", message: "Too many requests" });
       return;

@@ -1,0 +1,73 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { BruteForceGuard, ipMatches, isTrustedProxy, normalizeIp, resolveClientIp } from "../dist/security.js";
+
+test("normalizeIp strips the IPv4-mapped prefix", () => {
+  assert.equal(normalizeIp("::ffff:10.0.0.5"), "10.0.0.5");
+  assert.equal(normalizeIp("10.0.0.5"), "10.0.0.5");
+});
+
+test("ipMatches handles exact addresses and CIDRs", () => {
+  assert.equal(ipMatches("172.18.0.4", "172.16.0.0/12"), true);
+  assert.equal(ipMatches("10.0.0.4", "172.16.0.0/12"), false);
+  assert.equal(ipMatches("192.168.1.5", "192.168.1.5"), true);
+  assert.equal(ipMatches("192.168.1.6", "192.168.1.5"), false);
+  assert.equal(ipMatches("2001:db8::1", "2001:db8::/32"), true);
+  assert.equal(ipMatches("2001:dead::1", "2001:db8::/32"), false);
+  assert.equal(isTrustedProxy("172.18.0.9", ["172.16.0.0/12"]), true);
+});
+
+function fakeReq(remote, xff) {
+  return { socket: { remoteAddress: remote }, headers: xff === undefined ? {} : { "x-forwarded-for": xff } };
+}
+
+test("without a trusted proxy the socket address wins and XFF is ignored", () => {
+  assert.equal(resolveClientIp(fakeReq("1.2.3.4", "9.9.9.9"), []), "1.2.3.4");
+});
+
+test("an untrusted peer cannot spoof its address via X-Forwarded-For", () => {
+  assert.equal(resolveClientIp(fakeReq("1.2.3.4", "9.9.9.9"), ["10.0.0.0/8"]), "1.2.3.4");
+});
+
+test("behind a trusted proxy the right-most untrusted hop is the client", () => {
+  // socket = trusted proxy, XFF = client, proxy2 -> client is left-most untrusted from the right
+  assert.equal(resolveClientIp(fakeReq("172.18.0.8", "203.0.113.7, 172.18.0.9"), ["172.16.0.0/12"]), "203.0.113.7");
+  // a client that prepends a fake address: the real one is still the right-most untrusted hop
+  assert.equal(resolveClientIp(fakeReq("172.18.0.8", "9.9.9.9, 203.0.113.7"), ["172.16.0.0/12"]), "203.0.113.7");
+});
+
+test("BruteForceGuard locks out after the threshold and clears on success", () => {
+  const guard = new BruteForceGuard({ threshold: 3, baseSeconds: 5, maxSeconds: 300, windowSeconds: 900 });
+  const t0 = 1_000_000_000_000;
+  assert.equal(guard.check("ip", t0), null);
+  guard.failure("ip", t0);
+  guard.failure("ip", t0 + 10);
+  assert.equal(guard.check("ip", t0 + 20), null, "still under the threshold");
+  guard.failure("ip", t0 + 30);
+  const verdict = guard.check("ip", t0 + 31);
+  assert.ok(verdict, "locked after the threshold");
+  assert.equal(verdict.retryAfterSeconds, 5);
+  guard.success("ip");
+  assert.equal(guard.check("ip", t0 + 40), null, "success resets the counter");
+});
+
+test("BruteForceGuard backoff is exponential and capped", () => {
+  const guard = new BruteForceGuard({ threshold: 1, baseSeconds: 10, maxSeconds: 40, windowSeconds: 900 });
+  const t0 = 1_000_000_000_000;
+  guard.failure("ip", t0); // 1st: 10s
+  assert.equal(guard.check("ip", t0)?.retryAfterSeconds, 10);
+  guard.failure("ip", t0 + 1); // 2nd: 20s
+  assert.equal(guard.check("ip", t0 + 2)?.retryAfterSeconds, 20);
+  guard.failure("ip", t0 + 3); // 3rd: 40s
+  assert.equal(guard.check("ip", t0 + 4)?.retryAfterSeconds, 40);
+  guard.failure("ip", t0 + 5); // 4th: would be 80s but capped at 40s
+  assert.equal(guard.check("ip", t0 + 6)?.retryAfterSeconds, 40);
+});
+
+test("BruteForceGuard forgets failures outside the window", () => {
+  const guard = new BruteForceGuard({ threshold: 2, baseSeconds: 5, maxSeconds: 300, windowSeconds: 60 });
+  const t0 = 1_000_000_000_000;
+  guard.failure("ip", t0);
+  guard.failure("ip", t0 + 120_000); // 2 min later: window expired, counter restarts at 1
+  assert.equal(guard.check("ip", t0 + 120_001), null);
+});

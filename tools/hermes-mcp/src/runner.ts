@@ -7,10 +7,21 @@
  *    follow the SSE event stream. The gateway owns the agent process.
  *  - "cli" (host-only fallback): spawn `hermes -p <profile> chat -q "<prompt>"`
  *    and track the process here. Not available inside the container.
+ *
+ * Guardrails before a run starts:
+ *  - model/provider/reasoning_effort must be on the configured allowlist
+ *    (fail closed: omitting model= uses the profile default);
+ *  - a global per-UTC-day budget (HERMES_MCP_MAX_RUNS_PER_DAY);
+ *  - the per-profile slot is reserved atomically before the run starts, so two
+ *    concurrent start_run calls cannot overshoot the limit.
+ * A run that waits for approval is stopped after HERMES_MCP_APPROVAL_WAIT_SECONDS
+ * (hermes-mcp never approves on the agent's behalf). A run we lost sight of
+ * (`unknown`) keeps counting against the slot until it is resolved or the
+ * HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS sweep marks it `timed_out`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Config } from "./config.js";
-import { GatewayClient, GatewayError, isTerminal, type GatewayRunStatus } from "./hermes.js";
+import { GatewayClient, GatewayError, isTerminal, isUnresolved, type GatewayRunStatus } from "./hermes.js";
 import { logger } from "./logger.js";
 import type { RunRecord, RunStore } from "./store.js";
 
@@ -30,8 +41,16 @@ interface ActiveRun {
 
 const MAX_EVENT_HISTORY_SECONDS = 7200;
 
+/** Midnight UTC of the current day, as an ISO string (lexicographic == chronological). */
+export function startOfUtcDay(now = new Date()): string {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+}
+
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
+  /** Per-profile slots held by an in-flight start_run (not yet in the store). */
+  private readonly reserved = new Map<string, number>();
+  private sweeper?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly cfg: Config,
@@ -39,7 +58,7 @@ export class RunManager {
     private readonly store: RunStore,
   ) {}
 
-  /** Re-attach to runs that were still open when the container restarted. */
+  /** Re-attach to runs that were still open (incl. `unknown`) when we restarted. */
   async resume(): Promise<void> {
     const open = this.store.nonTerminal();
     if (open.length === 0) return;
@@ -62,16 +81,104 @@ export class RunManager {
     logger.info("resumed runs", { count: open.length });
   }
 
-  activeCount(profile?: string): number {
-    if (!profile) return this.active.size;
-    let n = 0;
-    for (const runId of this.active.keys()) {
-      if (this.store.get(runId)?.profile === profile) n += 1;
+  /** Periodically resolve stale `unknown` runs so they stop holding a slot. */
+  startSweeper(): void {
+    if (this.sweeper) return;
+    const intervalMs = Math.min(60_000, Math.max(5_000, this.cfg.pollIntervalMs * 4));
+    this.sweeper = setInterval(() => {
+      try {
+        const n = this.sweepUnknown();
+        if (n > 0) logger.warn("marked stale unknown runs as timed_out", { count: n });
+      } catch (exc) {
+        logger.warn("unknown-run sweep failed", { error: (exc as Error).message });
+      }
+    }, intervalMs);
+    this.sweeper.unref?.();
+  }
+
+  /** Mark `unknown` runs older than the timeout as `timed_out`. Returns how many. */
+  sweepUnknown(now = Date.now()): number {
+    let changed = 0;
+    for (const rec of this.store.unresolved()) {
+      if (rec.status !== "unknown") continue;
+      const ts = Date.parse(rec.updated_at || rec.created_at);
+      if (Number.isFinite(ts) && now - ts > this.cfg.unknownTimeoutSeconds * 1000) {
+        this.store.update(rec.run_id, {
+          status: "timed_out",
+          last_event: "run.timed_out",
+          error: `unknown run was not resolved within ${this.cfg.unknownTimeoutSeconds}s; marked timed_out to release the profile slot`,
+        });
+        changed += 1;
+      }
     }
-    return n;
+    return changed;
+  }
+
+  private reservedCount(profile?: string): number {
+    if (!profile) {
+      let n = 0;
+      for (const count of this.reserved.values()) n += count;
+      return n;
+    }
+    return this.reserved.get(profile) ?? 0;
+  }
+
+  private reserve(profile: string): void {
+    this.reserved.set(profile, (this.reserved.get(profile) ?? 0) + 1);
+  }
+
+  private release(profile: string): void {
+    const n = (this.reserved.get(profile) ?? 0) - 1;
+    if (n > 0) this.reserved.set(profile, n);
+    else this.reserved.delete(profile);
+  }
+
+  /**
+   * Active runs for a profile = every run in the store that is not finished
+   * (including `unknown`) plus the slots reserved by in-flight starts.
+   */
+  activeCount(profile?: string): number {
+    return this.store.unresolved(profile).length + this.reservedCount(profile);
+  }
+
+  /** Reject model/provider/reasoning_effort overrides that are not allowlisted. */
+  private validateOptions(opts: StartRunOptions): void {
+    if (opts.model && !this.cfg.allowedModels.includes(opts.model)) {
+      throw new GatewayError(
+        400,
+        "model_not_allowed",
+        `model ${JSON.stringify(opts.model)} is not allowed. Allowed models: ${this.cfg.allowedModels.join(", ") || "(none)"}. Omit model= to use the profile's default model.`,
+      );
+    }
+    if (opts.provider && !this.cfg.allowedProviders.includes(opts.provider)) {
+      throw new GatewayError(
+        400,
+        "provider_not_allowed",
+        `provider ${JSON.stringify(opts.provider)} is not allowed. Allowed providers: ${this.cfg.allowedProviders.join(", ") || "(none)"}. Omit provider= to use the profile's default provider.`,
+      );
+    }
+    if (opts.reasoning_effort && !this.cfg.allowedReasoningEfforts.includes(opts.reasoning_effort)) {
+      throw new GatewayError(
+        400,
+        "reasoning_effort_not_allowed",
+        `reasoning_effort ${JSON.stringify(opts.reasoning_effort)} is not allowed. Allowed: ${this.cfg.allowedReasoningEfforts.join(", ") || "(none)"}.`,
+      );
+    }
   }
 
   async start(profile: string, opts: StartRunOptions): Promise<RunRecord> {
+    this.validateOptions(opts);
+
+    const since = startOfUtcDay();
+    const today = this.store.countCreatedSince(since);
+    if (today >= this.cfg.maxRunsPerDay) {
+      throw new GatewayError(
+        429,
+        "daily_run_limit",
+        `Daily run limit reached (${this.cfg.maxRunsPerDay} run(s) per UTC day; ${today} started). Try again after 00:00 UTC.`,
+      );
+    }
+
     if (this.activeCount(profile) >= this.cfg.maxActiveRunsPerProfile) {
       throw new GatewayError(
         429,
@@ -80,32 +187,43 @@ export class RunManager {
       );
     }
 
-    if (this.cfg.backend === "cli") {
-      return this.startCli(profile, opts);
+    // Reserve the slot atomically (no await between check and reserve), so a
+    // concurrent start_run for the same profile cannot double-book it.
+    this.reserve(profile);
+    try {
+      if (this.cfg.backend === "cli") {
+        const rec = this.startCli(profile, opts);
+        this.release(profile);
+        return rec;
+      }
+      const { run_id } = await this.client.startRun(profile, opts);
+      const now = new Date().toISOString();
+      const record: RunRecord = {
+        run_id,
+        profile,
+        backend: "gateway",
+        status: "queued",
+        created_at: now,
+        updated_at: now,
+        prompt_preview: opts.prompt.slice(0, 200),
+        prompt_chars: opts.prompt.length,
+        model: opts.model,
+        provider: opts.provider,
+        reasoning_effort: opts.reasoning_effort,
+        session_id: opts.session_id,
+        last_event: "run.started",
+        tool_calls: 0,
+        event_count: 0,
+      };
+      this.store.create(record);
+      this.watch(run_id);
+      // The store now counts this run, so the reservation is no longer needed.
+      this.release(profile);
+      return record;
+    } catch (exc) {
+      this.release(profile);
+      throw exc;
     }
-
-    const { run_id } = await this.client.startRun(profile, opts);
-    const now = new Date().toISOString();
-    const record: RunRecord = {
-      run_id,
-      profile,
-      backend: "gateway",
-      status: "queued",
-      created_at: now,
-      updated_at: now,
-      prompt_preview: opts.prompt.slice(0, 200),
-      prompt_chars: opts.prompt.length,
-      model: opts.model,
-      provider: opts.provider,
-      reasoning_effort: opts.reasoning_effort,
-      session_id: opts.session_id,
-      last_event: "run.started",
-      tool_calls: 0,
-      event_count: 0,
-    };
-    this.store.create(record);
-    this.watch(run_id);
-    return record;
   }
 
   private startCli(profile: string, opts: StartRunOptions): RunRecord {
@@ -190,7 +308,7 @@ export class RunManager {
       await eventTask.catch(() => undefined);
       this.active.delete(runId);
       const rec = this.store.get(runId);
-      if (rec && !isTerminal(rec.status)) {
+      if (rec && isUnresolved(rec.status)) {
         this.store.update(runId, { status: "unknown", error: "run tracking stopped before a terminal status" });
       }
     }
@@ -212,6 +330,8 @@ export class RunManager {
   private async pollStatus(runId: string, profile: string, signal: AbortSignal): Promise<void> {
     const deadline = Date.now() + this.cfg.maxRunSeconds * 1000;
     let consecutiveErrors = 0;
+    let approvalSince = 0;
+    let approvalStopRequested = false;
 
     while (!signal.aborted) {
       const rec = this.store.get(runId);
@@ -228,6 +348,30 @@ export class RunManager {
         consecutiveErrors = 0;
         this.applyStatus(runId, status);
         if (isTerminal(status.status)) return;
+
+        // A run waiting for approval must not hold the slot indefinitely:
+        // stop it (never approve) after the configured wait.
+        if (status.status === "waiting_for_approval") {
+          if (approvalSince === 0) approvalSince = Date.now();
+          if (!approvalStopRequested && Date.now() - approvalSince > this.cfg.approvalWaitSeconds * 1000) {
+            approvalStopRequested = true;
+            this.store.update(runId, {
+              last_event: "run.approval_timeout",
+              error: `run waited ${this.cfg.approvalWaitSeconds}s for approval; hermes-mcp never approves, so it is being stopped`,
+            });
+            try {
+              await this.client.stopRun(profile, runId);
+            } catch (exc) {
+              logger.warn("failed to stop a run waiting for approval", {
+                run_id: runId,
+                error: (exc as Error).message,
+              });
+            }
+          }
+        } else {
+          approvalSince = 0;
+          approvalStopRequested = false;
+        }
       } catch (exc) {
         consecutiveErrors += 1;
         const err = exc as GatewayError;
@@ -334,6 +478,11 @@ export class RunManager {
   }
 
   shutdown(): void {
+    if (this.sweeper) {
+      clearInterval(this.sweeper);
+      this.sweeper = undefined;
+    }
+    this.reserved.clear();
     for (const [, run] of this.active) {
       run.controller.abort();
       try {
