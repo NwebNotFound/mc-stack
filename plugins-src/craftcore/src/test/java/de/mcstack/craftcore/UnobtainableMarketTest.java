@@ -71,9 +71,9 @@ class UnobtainableMarketTest {
     }
   }
 
-  @Test void purgeIgnoresAMissingTableAndSurfacesOtherSqlErrors() throws Exception {
+  @Test void purgeSurfacesH2MissingTablesBecauseTheyAreNotMysql1146() throws Exception {
     try (Connection empty = DriverManager.getConnection("jdbc:h2:mem:unobtainable_missing;MODE=MySQL")) {
-      assertEquals(0, SurvivalItems.purge(empty, name -> true));
+      assertThrows(java.sql.SQLException.class, () -> SurvivalItems.purge(empty, name -> true));
     }
     try (Connection broken = DriverManager.getConnection("jdbc:h2:mem:unobtainable_badcol;MODE=MySQL"); Statement s = broken.createStatement()) {
       s.execute("CREATE TABLE market_catalog(id INT)");

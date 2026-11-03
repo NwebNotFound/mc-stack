@@ -551,8 +551,10 @@ final class Market implements Listener {
     else if(e.getInventory().getHolder() instanceof SellConfirmation confirmation)Bukkit.getScheduler().runTask(core,()->{Player p=Bukkit.getPlayer(confirmation.menu.owner);if(p==null || p.getOpenInventory().getTopInventory().getHolder()!=confirmation.menu)sellMenus.remove(confirmation.menu.owner,confirmation.menu);});
   }
   @EventHandler public void sellQuit(PlayerQuitEvent e){
-    sellMenus.remove(e.getPlayer().getUniqueId());
-    SellChest chest=sellChests.remove(e.getPlayer().getUniqueId());
+    java.util.UUID id=e.getPlayer().getUniqueId();
+    sellMenus.remove(id);
+    sellAllIssued.remove(id);
+    SellChest chest=sellChests.remove(id);
     if(chest!=null) returnChest(e.getPlayer(),chest);
   }
   void shutdown(){
