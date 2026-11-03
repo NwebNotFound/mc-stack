@@ -27,7 +27,8 @@ import org.bukkit.persistence.PersistentDataType;
 
 /**
  * Keeps the nether star of a VIP world in the player's inventory: no drop, no move into a
- * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules}.
+ * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules} and
+ * the refusal wording in {@link VipStarRules#UNSELLABLE_MESSAGE}.
  */
 public final class VipStarGuard implements Listener {
     /** {@code craftcore:vip_menu_star}, the same key {@link VipWorldMenu} stamps on the star. */

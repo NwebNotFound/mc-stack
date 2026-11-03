@@ -44,8 +44,22 @@ class VipStarRulesTest {
     }
 
     @Test void marketSellAndBankRefuseTheStar() {
-        assertFalse(VipStarRules.sellable(true), "Market, /sell und Bank duerfen den Stern nicht ankaufen");
+        assertFalse(VipStarRules.sellable(true), "Bank, Auktionshaus, Shop und Handel duerfen den Stern nicht ankaufen");
         assertTrue(VipStarRules.sellable(false));
+    }
+
+    @Test void refusalShowsTheMarketWordingForTheStarOnly() {
+        assertEquals("Nicht handelbar", VipStarRules.refusal(true),
+            "der Stern wird mit der Markt-Meldung abgelehnt");
+        assertNull(VipStarRules.refusal(false), "normale Items werden nicht abgelehnt");
+    }
+
+    @Test void refusalIsConsistentWithSellable() {
+        for (boolean tagged : new boolean[] {true, false}) {
+            assertEquals(VipStarRules.sellable(tagged) ? null : "Nicht handelbar",
+                VipStarRules.refusal(tagged),
+                "Ablehnung und sellable() duerfen sich nie widersprechen (tagged=" + tagged + ")");
+        }
     }
 
     @Test void joinRemovesLeftoverMenuStars() {
