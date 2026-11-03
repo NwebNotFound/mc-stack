@@ -1,4 +1,6 @@
 package de.mcstack.craftcore;
+import de.mcstack.craftcore.vip.VipStarGuard;
+import de.mcstack.craftcore.vip.VipStarRules;
 import java.sql.*;
 import java.util.*;
 import org.bukkit.*;
@@ -39,7 +41,7 @@ final class Auction implements Listener {
   void createAuction(Player p,String input,String duration)throws Exception {
     long price,hours;try{price=Money.cents(input);if(!duration.matches("[0-9]+h"))throw new IllegalArgumentException();hours=Long.parseLong(duration.substring(0,duration.length()-1));}catch(RuntimeException ex){p.sendMessage("ERR INVALID");return;}
     long length;try{length=Math.multiplyExact(hours,AuctionRules.HOUR);}catch(ArithmeticException ex){p.sendMessage("ERR INVALID");return;}
-    ItemStack hand=p.getInventory().getItemInMainHand();if(price<=0||!AuctionRules.validDuration(length)||hand.getType().isAir()||!Market.instance.hasPrice(hand.getType())){p.sendMessage("ERR INVALID");return;}
+    ItemStack hand=p.getInventory().getItemInMainHand();String refusal=VipStarRules.refusal(VipStarGuard.tagged(hand));if(refusal!=null){p.sendMessage(refusal);return;}if(price<=0||!AuctionRules.validDuration(length)||hand.getType().isAir()||!Market.instance.hasPrice(hand.getType())){p.sendMessage("ERR INVALID");return;}
     ItemStack item=hand.clone();long now=System.currentTimeMillis();long minimum=core.tx(c->Math.multiplyExact(Market.instance.price(c,item.getType(),false,false).cents(),item.getAmount()));if(price<minimum){p.sendMessage("ERR BELOW_BANK_PRICE "+minimum);return;}
     String data=Base64.getEncoder().encodeToString(item.serializeAsBytes());
     // PENDING is quarantined if either persistence step is interrupted. Never automatically
@@ -49,7 +51,7 @@ final class Auction implements Listener {
     core.tx(c->{core.exec(c,"UPDATE auctions SET status='OPEN' WHERE id=? AND status='PENDING'",id);return null;});p.sendMessage("Auktion "+id+" eingestellt. Mindestpreis: "+Money.format(price));
   }
   void sell(Player p,String input)throws Exception {
-    long price=Money.cents(input);if(price<=0){p.sendMessage("Preis muss positiv sein.");return;}ItemStack hand=p.getInventory().getItemInMainHand();if(hand.getType().isAir()){p.sendMessage("Halte den Stapel in der Hand.");return;}
+    long price=Money.cents(input);if(price<=0){p.sendMessage("Preis muss positiv sein.");return;}ItemStack hand=p.getInventory().getItemInMainHand();String refusal=VipStarRules.refusal(VipStarGuard.tagged(hand));if(refusal!=null){p.sendMessage(refusal);return;}if(hand.getType().isAir()){p.sendMessage("Halte den Stapel in der Hand.");return;}
     ItemStack original=hand.clone();String item=Base64.getEncoder().encodeToString(original.serializeAsBytes()),id=UUID.randomUUID().toString();long now=System.currentTimeMillis(),end=Math.addExact(now,Math.multiplyExact(core.getConfig().getLong("auction.duration-hours",48),3600000L));p.getInventory().setItemInMainHand(null);
     try{core.tx(c->{core.exec(c,"INSERT INTO ah_journal(id,seller,seller_name,item,material,amount,price,created_at,expires_at,status) VALUES(?,?,?,?,?,?,?,?,?,'PENDING')",id,p.getUniqueId().toString(),p.getName(),item,original.getType().name(),original.getAmount(),price,now,end);return null;});}catch(Exception ex){p.getInventory().setItemInMainHand(original);throw ex;}
     core.tx(c->{core.exec(c,"UPDATE ah_journal SET status='OPEN' WHERE id=? AND status='PENDING'",id);return null;});p.sendMessage("Angebot eingestellt: "+Money.format(price));

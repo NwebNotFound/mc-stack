@@ -66,7 +66,7 @@ final class Portals implements Listener, org.bukkit.command.TabExecutor {
 
   void start() {
     load();
-    Bukkit.getMessenger().registerOutgoingPluginChannel(core, "BungeeCord");
+    ProxyChannel.register(core);
     Bukkit.getPluginManager().registerEvents(this, core);
     var cmd = core.getCommand("ccportal");
     if (cmd != null) { cmd.setExecutor(this); cmd.setTabCompleter(this); }
@@ -106,7 +106,7 @@ final class Portals implements Listener, org.bukkit.command.TabExecutor {
     if (!admit(last, p.getUniqueId(), System.currentTimeMillis(), r.cooldownMillis())) return false;
     try {
       if (r.message() != null && !r.message().isBlank()) p.sendMessage(String.format(Locale.ROOT, r.message(), r.target()));
-      p.sendPluginMessage(core, "BungeeCord", connectMessage(r.target()));
+      ProxyChannel.send(core, p, r.target());
       core.getLogger().info("Portal " + r.name() + ": " + p.getName() + " -> " + r.target());
       return true;
     } catch (Exception ex) {

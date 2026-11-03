@@ -39,7 +39,7 @@ public final class PvpMatches implements Listener {
     }
     public PvpMatches(JavaPlugin plugin,PvpStore store,File arenas,File kitsFile,ArenaEditor editor,World build) { this.plugin=plugin;this.store=store;this.arenas=arenas;this.kitsFile=kitsFile;this.editor=editor;this.build=build; }
     public void start() {
-        Bukkit.getMessenger().registerOutgoingPluginChannel(plugin,"BungeeCord");
+        de.mcstack.craftcore.ProxyChannel.register(plugin);
         Bukkit.getPluginManager().registerEvents(this,plugin);
         Bukkit.getScheduler().runTaskTimer(plugin,this::tick,20L,20L);
         Bukkit.getScheduler().runTaskTimer(plugin,this::idleTick,0L,100L);
@@ -184,7 +184,7 @@ public final class PvpMatches implements Listener {
     }
     private void deleteWorld(Path path) { try(var paths=Files.walk(path)) { for(Path p:paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(p); } catch(IOException e) { plugin.getLogger().warning("PvP-Welt konnte nicht geloescht werden: "+e.getMessage()); } }
     private void message(Session s,String text) { for(UUID id:List.of(s.assignment.a(),s.assignment.b())) { Player p=Bukkit.getPlayer(id); if(p!=null) p.sendMessage(text); } }
-    private void lobby(Player p) { try { ByteArrayOutputStream bytes=new ByteArrayOutputStream(); DataOutputStream out=new DataOutputStream(bytes); out.writeUTF("Connect");out.writeUTF("lobby");p.sendPluginMessage(plugin,"BungeeCord",bytes.toByteArray()); } catch(IOException e) { plugin.getLogger().warning("Lobby-Verbindung: "+e.getMessage()); } }
+    private void lobby(Player p) { de.mcstack.craftcore.ProxyChannel.send(plugin, p, "lobby"); }
     private static void reset(Player p) { p.getInventory().clear();p.getInventory().setArmorContents(null);p.getInventory().setItemInOffHand(null); for(var effect:p.getActivePotionEffects()) p.removePotionEffect(effect.getType());p.setHealth(p.getMaxHealth());p.setFoodLevel(20);p.setSaturation(20);p.setFireTicks(0); }
     private void idleTick() {
         if(counting.compareAndSet(false,true)) async(()->{ try { pendingCheck=new PendingCheck(store.pendingCount()>0,System.nanoTime()); } catch(SQLException | RuntimeException e) { pendingCheck=new PendingCheck(null,0); throw e; } finally { counting.set(false); } });

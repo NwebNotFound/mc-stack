@@ -27,7 +27,8 @@ import org.bukkit.persistence.PersistentDataType;
 
 /**
  * Keeps the nether star of a VIP world in the player's inventory: no drop, no move into a
- * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules}.
+ * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules} and
+ * the refusal wording in {@link VipStarRules#UNSELLABLE_MESSAGE}.
  */
 public final class VipStarGuard implements Listener {
     /** {@code craftcore:vip_menu_star}, the same key {@link VipWorldMenu} stamps on the star. */
@@ -100,17 +101,15 @@ public final class VipStarGuard implements Listener {
         }
     }
 
-    /** The star is handed out once per join and never overwrites slot 8. */
-    public static void give(Player player, NamespacedKey key) {
-        for (ItemStack item : player.getInventory().getContents()) if (tagged(item)) return;
-        ItemStack existing = player.getInventory().getItem(VipStarRules.HOTBAR_SLOT);
-        if (!VipStarRules.needsStar(false, existing != null && !existing.getType().isAir())) return;
-        ItemStack star = new ItemStack(Material.NETHER_STAR);
-        ItemMeta meta = star.getItemMeta();
-        meta.displayName(Component.text("VIP-Menue", NamedTextColor.LIGHT_PURPLE));
-        meta.lore(List.of(Component.text("Rechtsklick: Welt verwalten", NamedTextColor.GRAY)));
-        meta.getPersistentDataContainer().set(key, PersistentDataType.BYTE, (byte) 1);
-        star.setItemMeta(meta);
-        player.getInventory().setItem(VipStarRules.HOTBAR_SLOT, star);
+    /**
+     * Clears leftover menu stars from a player's inventory. The menu is a command now, so the
+     * hotbar slot stays free and the item no longer blocks a slot forever.
+     */
+    public static void remove(Player player) {
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (VipStarRules.stripOnJoin(tagged(item))) player.getInventory().setItem(slot, null);
+        }
     }
 }

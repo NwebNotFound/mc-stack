@@ -1,9 +1,7 @@
 package de.mcstack.craftcore.vip;
 
+import de.mcstack.craftcore.ProxyChannel;
 import de.mcstack.craftcore.pvp.PvpAccess;
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -38,7 +36,7 @@ public final class VipWorldGate implements Listener {
     }
     public void start() {
         Bukkit.getPluginManager().registerEvents(this,plugin);
-        Bukkit.getMessenger().registerOutgoingPluginChannel(plugin,"BungeeCord");
+        ProxyChannel.register(plugin);
         Bukkit.getScheduler().runTaskTimer(plugin, () -> decisions.entrySet().removeIf(e -> System.nanoTime()-e.getValue().createdAt()>TimeUnit.MINUTES.toNanos(1)), 1200L, 1200L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::checkMembers, MEMBER_CHECK_TICKS, MEMBER_CHECK_TICKS);
     }
@@ -115,14 +113,12 @@ public final class VipWorldGate implements Listener {
     }
     private void remove(Player player) {
         player.sendMessage(Component.text("Du wurdest aus dieser VIP-Welt entfernt."));
-        try {
-            ByteArrayOutputStream bytes=new ByteArrayOutputStream();
-            try (DataOutputStream out=new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF("lobby"); }
-            player.sendPluginMessage(plugin,"BungeeCord",bytes.toByteArray());
-        } catch (IOException | RuntimeException e) {
+        if (kickAfterRemoval(ProxyChannel.send(plugin, player, "lobby"))) {
             player.kick(Component.text("Du wurdest aus dieser VIP-Welt entfernt."));
         }
     }
+    /** A member who cannot be sent to the lobby must not stay inside the world. */
+    public static boolean kickAfterRemoval(boolean sent) { return !sent; }
     @EventHandler(priority=EventPriority.HIGHEST)
     public void login(PlayerLoginEvent event) {
         Decision decision=decisions.remove(event.getPlayer().getUniqueId());
