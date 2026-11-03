@@ -56,3 +56,7 @@ web/
 
 # Aus dem Betrieb genommene Dateien (nicht loeschen, nicht einchecken)
 quarantine/
+
+# hermes-mcp: local dev state (run index of the dev launcher)
+tools/hermes-mcp/.data/
+data/hermes-mcp/
