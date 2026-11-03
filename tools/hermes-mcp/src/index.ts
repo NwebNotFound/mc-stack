@@ -1,5 +1,5 @@
-/**
- * hermes-mcp — remote MCP server for the Hermes agents.
+﻿/**
+ * hermes-mcp â€” remote MCP server for the Hermes agents.
  *
  * Transport: Streamable HTTP at /mcp (stateless; a fresh MCP server instance per
  * request). Auth: bearer token from HERMES_MCP_TOKEN. The container publishes no
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     if (!match) {
       res
         .status(401)
-        .setHeader("WWW-Authenticate", `Bearer realm="hermes-mcp", resource_metadata="${cfg.publicUrl}/.well-known/oauth-protected-resource"`)
+        .setHeader("WWW-Authenticate", `Bearer realm="hermes-mcp"`)
         .json({ error: "unauthorized", message: "Bearer token required" });
       return;
     }
