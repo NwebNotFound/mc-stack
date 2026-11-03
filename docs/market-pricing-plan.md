@@ -258,7 +258,7 @@ Der Spread und die Gegenbewegung tragen das. Gerechnete Fälle mit dem neuen `D`
 | 10000 Sand | 10459 | 30812 | −20353 |
 | 10000 Bruchstein | 10110 | 20284 | −10174 |
 
-**Rezeptschleife an den Ecken.** Der ausführbare Fall: Produkt an `hi` verkaufen, jede Zutat an `lo` kaufen, jeder Slot hat eine kaufbare Zutat, das Produkt ist nicht `unsellable`, keine Selbstkopie. Das Band `0.25` gegen `1.2` ist `4.8` fach; mal dem Spread `0.5` bleibt ein Faktor `2.4` über einer knappen Rezeptmarge. Ohne Deckel ist die Kontrolle nicht leer. Konkrete Zeile: `RAW_GOLD` x9 aus `RAW_GOLD_BLOCK`, Erlös 7281 Cent gegen Kauf des Blocks an `lo` 3037 Cent. Mit Deckel `floor(Summe Kauf(lo) / Menge)` hat dieselbe Schleife 1652 Rezepte und 0 Verletzungen. Der Test ruft `Verkauf` auf, nicht eine abgeschriebenen Ungleichung.
+**Rezeptschleife an den Ecken.** Der ausführbare Fall: Produkt an `hi` verkaufen, jede Zutat an `lo` kaufen, jeder Slot hat eine kaufbare Zutat, das Produkt ist nicht `unsellable`, keine Selbstkopie. Das Band `0.25` gegen `1.2` ist `4.8` fach; mal dem Spread `0.5` bleibt ein Faktor `2.4` über einer knappen Rezeptmarge. Ohne Deckel ist die Kontrolle nicht leer. Konkrete Zeile: `RAW_GOLD` x9 aus `RAW_GOLD_BLOCK`, Erlös 7281 Cent gegen Kauf des Blocks an `lo` 3037 Cent. Mit Deckel `floor(Summe Kauf(lo) / Menge)` hat dieselbe Schleife 1655 Rezepte und 0 Verletzungen. Der Test ruft `Verkauf` auf, nicht eine abgeschriebenen Ungleichung.
 
 Der Deckel im Betrieb liest die **aktuellen** Kaufpreise, nicht einen eingefrorenen Floor. Bei `net = 0` liegt er damit auf dem Basis-Kauf. Der heutige `safeSell`-Saatwert `Kauf` an `0.8b` (Bambustür 27 Cent bei Rohverkauf 135) ist nicht der neue Vertrag: der würde am Start den Basisverkauf von Hunderten Items senken, obwohl Basis gegen Basis schon ohne diesen Saatwert hält. Sobald eine Zutat Richtung `lo` läuft, sinkt der Deckel mit.
 
@@ -415,7 +415,7 @@ Alle unter `plugins-src/craftcore/src/test/java/de/mcstack/craftcore/`. Zahlen s
 
 - [ ] `RecipeCurveArbitrageTest.everyExecutableRecipe`
   - Für jede Zeile in `recipes-26.1.tsv` außer Selbstkopien: wenn das Produkt nicht in `unsellable` steht und jeder Slot mindestens eine kaufbare Zutat hat, dann `count * Verkauf(hi)` ≤ Summe der günstigsten `Kauf(lo)`. `Verkauf` enthält den Deckel aus diesen Floor-Käufen.
-  - Erwartet 0 Verletzungen bei 1652 Rezepten. Dieselbe Schleife ohne Deckel verletzt die Ungleichung; Kontrollzeile `RAW_GOLD` x9, 7281 > 3037.
+  - Erwartet 0 Verletzungen bei 1655 Rezepten. Dieselbe Schleife ohne Deckel verletzt die Ungleichung; Kontrollzeile `RAW_GOLD` x9, 7281 > 3037.
   - `DIAMOND_CHESTPLATE`, `NETHERITE_INGOT` und `NETHERITE_UPGRADE_SMITHING_TEMPLATE` sind unkaufbar. Die hypothetische Ecke ohne diese Sperre ist 630004 > 262501 und darf nicht als „grün“ durchgewunken werden, solange die Sperre fehlt. Eigener Test in der Umsetzungs-PR: `NetheriteChestIngredientsStayUnbuyable` (siehe Abschnitt 10).
 
 - [ ] `MarketSnapshotOscillationTest.writersDoNotShareColumns`

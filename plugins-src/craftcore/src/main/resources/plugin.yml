@@ -64,6 +64,10 @@ commands:
     description: Chunk beanspruchen oder auflisten
   unclaim:
     description: Chunk freigeben
+  lobby:
+    description: Zurueck in die Lobby (auch /l, /hub, /leave)
+    usage: /lobby
+    aliases: [l, hub, leave]
   spawn:
     description: Zum Lobby-Spawn teleportieren
   home:
@@ -81,6 +85,7 @@ commands:
   verkaufen:
     description: Gegenstaende an die Bank verkaufen
     aliases: [sell]
+    usage: /sell [gui|hand [Anzahl]|<item> [Anzahl]|all [bestaetigen]]
   market:
     description: Marktpreise und Trend
 
@@ -130,6 +135,9 @@ permissions:
     default: op
   craftcore.npc.set:
     description: NPCs setzen
+    default: op
+  craftcore.vip.admin:
+    description: VIP-Welten verwalten und betreten
     default: op
   craftcore.end.bypass:
     description: End-Sperre fuer Ops umgehen

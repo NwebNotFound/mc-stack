@@ -86,11 +86,8 @@ final class SurvivalItems {
     return removed;
   }
 
-  /** MySQL/MariaDB 1146 and ANSI 42S02. Other SQL errors must surface. */
+  /** MySQL/MariaDB error 1146 and ANSI SQLState 42S02. Any other SQL error must surface. */
   static boolean missingTable(SQLException ex) {
-    if (ex == null) return false;
-    if ("42S02".equals(ex.getSQLState()) || ex.getErrorCode() == 1146) return true;
-    String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
-    return message.contains("table") && (message.contains("not found") || message.contains("doesn't exist") || message.contains("does not exist"));
+    return ex != null && ("42S02".equals(ex.getSQLState()) || ex.getErrorCode() == 1146);
   }
 }

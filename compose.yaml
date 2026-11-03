@@ -337,6 +337,195 @@ services:
       velocity:
         condition: service_healthy
 
+  # Remote MCP server for the Hermes agents (Claude Code / claude.ai).
+  # Reachable only inside the compose network `mcp`: no published host port, no
+  # router forwarding. The Hermes gateway is reached over
+  # host.docker.internal, so this service needs no other compose network.
+  # Public access is meant to go through Cloudflare Tunnel (see
+  # tools/hermes-mcp/README.md), which is prepared but not created.
+  hermes-mcp:
+    build: ./tools/hermes-mcp
+    profiles: ["mcp"]
+    restart: unless-stopped
+    environment:
+      HERMES_MCP_PORT: "8765"
+      HERMES_MCP_HOST: "0.0.0.0"
+      HERMES_BACKEND: "gateway"
+      HERMES_GATEWAY_URL: "${HERMES_GATEWAY_URL:-http://host.docker.internal:8642}"
+      HERMES_PROFILE_KEYS: "${HERMES_PROFILE_KEYS:-}"
+      HERMES_MCP_TOKEN: "${HERMES_MCP_TOKEN:-}"
+      HERMES_MCP_PUBLIC_URL: "${HERMES_MCP_PUBLIC_URL:-https://mcp.nwebnotfound.dev}"
+      HERMES_MCP_ALLOWED_HOSTS: "${HERMES_MCP_ALLOWED_HOSTS:-mcp.nwebnotfound.dev,localhost,127.0.0.1,hermes-mcp}"
+      HERMES_MCP_DATA_DIR: "/app/data"
+      # Hardening (see tools/hermes-mcp/README.md):
+      # - trust X-Forwarded-For only from these peers (empty = never);
+      # - cap runs per UTC day and the accepted model/provider/effort overrides;
+      # - stop a run that waits for approval, and time out lost (`unknown`) runs.
+      HERMES_MCP_TRUSTED_PROXIES: "${HERMES_MCP_TRUSTED_PROXIES:-}"
+      HERMES_MCP_MAX_RUNS_PER_DAY: "${HERMES_MCP_MAX_RUNS_PER_DAY:-50}"
+      HERMES_MCP_LOCKOUT_AFTER: "${HERMES_MCP_LOCKOUT_AFTER:-5}"
+      HERMES_MCP_LOCKOUT_SECONDS: "${HERMES_MCP_LOCKOUT_SECONDS:-300}"
+      HERMES_MCP_APPROVAL_WAIT_SECONDS: "${HERMES_MCP_APPROVAL_WAIT_SECONDS:-900}"
+      HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS: "${HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS:-7200}"
+      HERMES_MCP_ALLOWED_MODELS: "${HERMES_MCP_ALLOWED_MODELS:-deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5}"
+      HERMES_MCP_ALLOWED_PROVIDERS: "${HERMES_MCP_ALLOWED_PROVIDERS:-openrouter,anthropic}"
+      HERMES_MCP_ALLOWED_REASONING_EFFORTS: "${HERMES_MCP_ALLOWED_REASONING_EFFORTS:-minimal,low,medium,high}"
+      # Ops tools (see tools/ops-helper/README.md): this service holds NO Docker
+      # socket. It asks the ops-helper service over the internal network `ops`
+      # with a shared secret. Empty token = the ops tools are not advertised.
+      OPS_HELPER_URL: "${OPS_HELPER_URL:-http://ops-helper:8766}"
+      OPS_HELPER_TOKEN: "${OPS_HELPER_TOKEN:-}"
+      OPS_HELPER_TIMEOUT_SECONDS: "${OPS_HELPER_TIMEOUT_SECONDS:-120}"
+      # Second token level: T1/T2 ops tools require this token (fail closed when
+      # unset). T2 additionally requires the local listener below.
+      HERMES_MCP_OPS_TOKEN: "${HERMES_MCP_OPS_TOKEN:-}"
+      # Local-only listener. It serves the T2 tools and is published on
+      # 127.0.0.1 ONLY (see `ports`). The tunnel must never point at it.
+      HERMES_MCP_OPS_PORT: "${HERMES_MCP_OPS_PORT:-8767}"
+      HERMES_MCP_OPS_LOCKOUT_AFTER: "${HERMES_MCP_OPS_LOCKOUT_AFTER:-3}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [mcp, ops]
+    ports:
+      # Local T2 entry point: loopback only, never routed by cloudflared-mcp.
+      - "127.0.0.1:${HERMES_MCP_OPS_PORT:-8767}:${HERMES_MCP_OPS_PORT:-8767}"
+    expose:
+      - "8765/tcp"
+      - "${HERMES_MCP_OPS_PORT:-8767}/tcp"
+    volumes:
+      - ./data/hermes-mcp:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Privileged ops executor for hermes-mcp (see tools/ops-helper/README.md).
+  #
+  # It runs exactly the actions listed in config/ops-allowlist.json with fixed
+  # argv lists (no shell, no free arguments), behind confirm/tier/armed/delay/
+  # backup gates, and writes an append-only audit log. hermes-mcp reaches it only
+  # over the internal network `ops` with the shared OPS_HELPER_TOKEN. It holds NO
+  # raw Docker socket: the only socket holder is docker-socket-filter below.
+  #
+  # Profile "ops": nothing starts by itself, and T2 (game servers, deploys) stays
+  # refused until OPS_ARMED=true. Start it explicitly:
+  #   docker compose --profile ops --profile mcp up -d docker-socket-filter ops-helper hermes-mcp
+  ops-helper:
+    build: ./tools/ops-helper
+    profiles: ["ops"]
+    restart: unless-stopped
+    environment:
+      OPS_HELPER_PORT: "8766"
+      OPS_HELPER_HOST: "0.0.0.0"
+      # Fail closed: without a token (>= 24 chars) the helper refuses to start.
+      OPS_HELPER_TOKEN: "${OPS_HELPER_TOKEN:-}"
+      # Global T2 arm switch and the kill switch (default: disarmed, enabled).
+      OPS_ARMED: "${OPS_ARMED:-false}"
+      OPS_DISABLED: "${OPS_DISABLED:-false}"
+      OPS_REPO_DIR: "/repo"
+      OPS_ALLOWLIST_PATH: "/repo/config/ops-allowlist.json"
+      OPS_DATA_DIR: "/app/data/ops-helper"
+      OPS_ARTIFACTS_DIR: "/artifacts"
+      # Docker API access goes through docker-socket-filter (below), never
+      # through a raw socket mount. The filter allowlists exact method+path
+      # pairs, so only ps/inspect/logs and a restart of the two T1 names pass.
+      DOCKER_HOST: "tcp://docker-socket-filter:2375"
+      # Pinned on purpose: with an explicit API version the CLI skips
+      # `GET /version`, which the filter refuses (it is not a route). Only
+      # `HEAD /_ping` remains as the documented health/negotiation exception.
+      DOCKER_API_VERSION: "1.51"
+      # Named volumes (not host paths): build containers mount the same volume at
+      # the same path, so no host path ever has to be guessed.
+      OPS_ARTIFACTS_VOLUME: "mc-stack-ops-artifacts"
+      OPS_GRADLE_CACHE_VOLUME: "mc-stack-ops-gradle-cache"
+      OPS_NPM_CACHE_VOLUME: "mc-stack-ops-npm-cache"
+      OPS_ACTION_TIMEOUT_SECONDS: "${OPS_ACTION_TIMEOUT_SECONDS:-120}"
+      OPS_BUILD_TIMEOUT_SECONDS: "${OPS_BUILD_TIMEOUT_SECONDS:-1800}"
+    depends_on:
+      - docker-socket-filter
+    volumes:
+      # NO docker socket here: the helper talks to docker-socket-filter over TCP.
+      # The repo is read-only for this service...
+      - ./:/repo:ro
+      # ...except the backup directory and the two plugin templates a deploy
+      # writes into (nothing else in the repo is writable).
+      - ./backups:/backups
+      - ./config/lobby-plugins:/plugins/lobby
+      - ./config/survival-plugins:/plugins/survival
+      # Audit log, cooldown state and the DISABLED kill-switch file.
+      - ./data/ops-helper:/app/data/ops-helper
+      - ops-artifacts:/artifacts
+    networks: [ops]
+    expose:
+      - "8766/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # The ONLY holder of the Docker socket (see tools/docker-socket-filter/README.md).
+  #
+  # A tiny, dependency-free Node filter written for this repo, replacing
+  # tecnativa/docker-socket-proxy. That image filters by API *section*
+  # (`CONTAINERS`, `POST`, `EXEC`, ...), and that granularity cannot express
+  # "GET is fine, but only this one POST path, and only for these two container
+  # names". Turning `POST=1` on there re-opens `/containers/create`, `/stop`,
+  # `/kill` and `/exec` for the whole container API.
+  #
+  # Allowed (everything else is 403, including unknown methods and header
+  # tricks): HEAD|GET /_ping, GET /containers/json (query: all, filters),
+  # GET /containers/<ref>/json, GET /containers/<ref>/logs (tail <= 300) and
+  # POST /containers/<name>/restart for an EXACT name from
+  # OPS_FILTER_RESTART_ALLOW (no ids, no prefixes, no globs). Game-server names
+  # (lobby/survival/velocity/...) are deliberately absent, so a game-server
+  # restart stays impossible even if the helper asked for one.
+  docker-socket-filter:
+    build: ./tools/docker-socket-filter
+    profiles: ["ops"]
+    restart: unless-stopped
+    environment:
+      OPS_FILTER_PORT: "2375"
+      OPS_FILTER_HOST: "0.0.0.0"
+      OPS_FILTER_UPSTREAM: "/var/run/docker.sock"
+      # Exact container names a restart may target. Override in .env if the
+      # compose project name ever changes.
+      OPS_FILTER_RESTART_ALLOW: "${OPS_FILTER_RESTART_ALLOW:-mc-stack-bot-1,mc-stack-cloudflared-mcp-1}"
+      # Hard cap on a forwarded response body (logs are the big one).
+      OPS_FILTER_MAX_RESPONSE_BYTES: "${OPS_FILTER_MAX_RESPONSE_BYTES:-8388608}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [ops]
+    expose:
+      - "2375/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Optional dedicated tunnel for mcp.nwebnotfound.dev. Prepared only: start it
+  # with `--profile mcp-tunnel` AFTER the tunnel exists in Cloudflare, its public
+  # hostname points at http://hermes-mcp:8765 and HERMES_MCP_TUNNEL_TOKEN is in
+  # .env. It runs in the `mcp` network (same network as hermes-mcp), so it needs
+  # no published host port and no extra compose file; see tools/hermes-mcp/README.md.
+  # See tools/hermes-mcp/cloudflared.config.example.yml for the local-config variant.
+  cloudflared-mcp:
+    image: cloudflare/cloudflared:2026.10.0
+    profiles: ["mcp-tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-}"
+    networks: [mcp]
+
   cloudflared:
     image: cloudflare/cloudflared:2026.10.0
     profiles: ["tunnel"]
@@ -349,11 +538,28 @@ services:
 networks:
   minecraft:
     driver: bridge
+  # Dedicated network for hermes-mcp with a fixed name; the `cloudflared-mcp`
+  # tunnel service runs in this same network, so no external compose file and no
+  # `external: true` wiring is needed.
+  mcp:
+    name: mcp
+  # Private network between hermes-mcp, ops-helper and docker-socket-filter only.
+  # `internal: true` means it has no route off the host: the helper cannot reach
+  # the internet, the socket proxy cannot call out, and nothing outside these
+  # three services (in particular NOT cloudflared-mcp, which lives only in `mcp`)
+  # can reach any of them.
+  ops:
+    name: mc-stack-ops
+    internal: true
 
 volumes:
   craftcore-db:
   bot-plugin:
   bot-pending:
+  # Build artifacts and the offline caches of the ops-helper build containers.
+  ops-artifacts:
+  ops-gradle-cache:
+  ops-npm-cache:
 
 secrets:
   forwarding_secret:

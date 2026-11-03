@@ -82,7 +82,7 @@ public final class LobbyPvp implements Listener, TabExecutor {
         PluginCommand command = Objects.requireNonNull(plugin.getCommand("pvp"));
         command.setExecutor(this); command.setTabCompleter(this);
         Bukkit.getPluginManager().registerEvents(this, plugin);
-        Bukkit.getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
+        de.mcstack.craftcore.ProxyChannel.register(plugin);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 40L, 40L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::checkActiveMatch, 100L, 100L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::remindQueue, 600L, 600L);
@@ -341,10 +341,8 @@ public final class LobbyPvp implements Listener, TabExecutor {
             Bukkit.getScheduler().runTask(plugin, () -> { try { connectPlayer(player); } catch (Exception e) { player.sendMessage("PvP-Server konnte nicht erreicht werden"); } });
         });
     }
-    private void connectPlayer(Player player) throws java.io.IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeUTF("Connect"); out.writeUTF("pvp"); }
-        player.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
+    private void connectPlayer(Player player) {
+        de.mcstack.craftcore.ProxyChannel.send(plugin, player, "pvp");
     }
     private void connect(String id, PvpQueue.Pair pair) {
         Player a = Bukkit.getPlayer(pair.a()), b = Bukkit.getPlayer(pair.b());

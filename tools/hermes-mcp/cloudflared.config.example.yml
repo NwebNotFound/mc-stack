@@ -1,0 +1,34 @@
+# Cloudflare Tunnel — local-config example for mcp.nwebnotfound.dev
+#
+# PREPARED ONLY: nothing here is active. Do not create the tunnel, DNS record or
+# token until Nils/Luna explicitly ask for it (see tools/hermes-mcp/README.md).
+#
+# Two supported shapes:
+#
+# A) Token-managed tunnel (same pattern as the existing `cloudflared` service)
+#    - Create the tunnel in Zero Trust, add public hostname:
+#        mcp.nwebnotfound.dev  ->  http://hermes-mcp:8765
+#    - Put the tunnel token into .env as MCP_TUNNEL_TOKEN=...
+#    - docker compose --profile mcp --profile mcp-tunnel up -d
+#    - This file is NOT needed in that variant.
+#
+# B) Locally-managed config (this file), for a dedicated tunnel with its own
+#    credentials file. Copy it to tools/hermes-mcp/cloudflared/config.yml,
+#    drop the tunnel credentials JSON next to it (never commit either) and run
+#    `cloudflared tunnel --config /etc/cloudflared/config.yml run`.
+#
+tunnel: REPLACE-WITH-TUNNEL-UUID
+credentials-file: /etc/cloudflared/REPLACE-WITH-TUNNEL-UUID.json
+
+# Origin is the compose service name: hermes-mcp listens on 8765 inside the
+# `minecraft` bridge network only, so no host port and no router forwarding.
+ingress:
+  - hostname: mcp.nwebnotfound.dev
+    service: http://hermes-mcp:8765
+    originRequest:
+      connectTimeout: 10s
+      # Long-running tool calls (start_run returns fast, but get_run polling and
+      # slow MCP handshakes) may exceed the default 30s.
+      noTLSVerify: false
+      httpHostHeader: mcp.nwebnotfound.dev
+  - service: http_status:404

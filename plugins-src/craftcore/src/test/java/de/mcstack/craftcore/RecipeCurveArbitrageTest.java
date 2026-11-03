@@ -41,7 +41,7 @@ class RecipeCurveArbitrageTest {
       }
       assertTrue(capped <= cost, recipe.out() + " x" + recipe.count() + " " + capped + " > " + cost);
     }
-    assertEquals(1652, checked);
+    assertEquals(1655, checked);
     assertTrue(bare > 0, "Deckel ist wirkungslos");
     assertNotNull(bareExample);
   }
