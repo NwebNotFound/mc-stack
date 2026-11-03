@@ -15,7 +15,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
 const envPath = path.join(repoRoot, ".env");
 
-const wanted = new Set(["HERMES_MCP_TOKEN", "HERMES_PROFILE_KEYS", "HERMES_GATEWAY_URL", "HERMES_MCP_PUBLIC_URL"]);
+const wanted = new Set([
+  "HERMES_MCP_TOKEN",
+  "HERMES_MCP_OPS_TOKEN",
+  "HERMES_PROFILE_KEYS",
+  "HERMES_GATEWAY_URL",
+  "HERMES_MCP_PUBLIC_URL",
+]);
 const loaded = [];
 for (const rawLine of readFileSync(envPath, "utf8").split(/\r?\n/)) {
   const line = rawLine.trim();
@@ -38,6 +44,8 @@ for (const rawLine of readFileSync(envPath, "utf8").split(/\r?\n/)) {
 process.env.HERMES_GATEWAY_URL = process.env.HERMES_MCP_LOCAL_GATEWAY ?? "http://127.0.0.1:8642";
 process.env.HERMES_MCP_DATA_DIR = path.join(here, "..", ".data");
 process.env.HERMES_MCP_ALLOWED_HOSTS = "localhost,127.0.0.1,hermes-mcp";
+// The T2 listener is local-only by design; on the dev host that means loopback.
+process.env.HERMES_MCP_OPS_HOST = process.env.HERMES_MCP_OPS_HOST ?? "127.0.0.1";
 
 console.log(`[dev-local] loaded ${loaded.join(", ")}; gateway=${process.env.HERMES_GATEWAY_URL}`);
 await import("../dist/index.js");

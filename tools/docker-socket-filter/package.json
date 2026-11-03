@@ -1,0 +1,15 @@
+{
+  "name": "docker-socket-filter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Path-exact, dependency-free HTTP filter in front of /var/run/docker.sock.",
+  "type": "module",
+  "main": "src/server.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

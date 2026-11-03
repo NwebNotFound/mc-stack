@@ -1,39 +1,35 @@
 ﻿/**
- * hermes-mcp â€” remote MCP server for the Hermes agents.
+ * hermes-mcp - remote MCP server for the Hermes agents.
  *
  * Transport: Streamable HTTP at /mcp (stateless; a fresh MCP server instance per
- * request). Auth: bearer token from HERMES_MCP_TOKEN. The container publishes no
- * host port; it is only reachable from the compose network (or through the
- * Cloudflare Tunnel, which is prepared but NOT created).
+ * request). Auth: bearer token from HERMES_MCP_TOKEN (read-only level) or
+ * HERMES_MCP_OPS_TOKEN (ops level; T1/T2 tools).
+ *
+ * Two listeners, both inside the compose network:
+ *  - the MAIN listener (HERMES_MCP_PORT, 8765) is the one the Cloudflare Tunnel
+ *    points at. It never advertises T2 tools, so a caller that reaches this
+ *    server through the public tunnel can never restart a game server;
+ *  - the LOCAL listener (HERMES_MCP_OPS_PORT, 8767) is published only on
+ *    127.0.0.1 on the host. It is the only place where T2 tools exist.
+ *
+ * The container itself publishes no public port; it is reachable from the
+ * compose networks and, for the main listener, through the tunnel.
  */
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import http from "node:http";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { resolveLevel, sha256, type OpsLevel } from "./auth.js";
 import { loadConfig, type Config } from "./config.js";
 import { GatewayClient } from "./hermes.js";
 import { logger } from "./logger.js";
 import { RunManager } from "./runner.js";
 import { BruteForceGuard, resolveClientIp } from "./security.js";
-import { RunStore } from "./store.js";
+import { RunStore, type RunStore as RunStoreType } from "./store.js";
 import { registerTools } from "./tools.js";
 
 const VERSION = process.env.npm_package_version ?? "1.0.0";
-
-function sha256(value: string): Buffer {
-  return createHash("sha256").update(value, "utf8").digest();
-}
-
-/** Constant-time bearer check that does not leak the token length. */
-function tokenMatches(candidate: string, tokens: string[]): boolean {
-  const candidateDigest = sha256(candidate);
-  let ok = false;
-  for (const token of tokens) {
-    if (timingSafeEqual(candidateDigest, sha256(token))) ok = true;
-  }
-  return ok;
-}
 
 interface Bucket {
   count: number;
@@ -54,34 +50,37 @@ function rateLimiter(limitPerMinute: number) {
   };
 }
 
-function buildServer(deps: { cfg: Config; client: GatewayClient; runs: RunManager; store: RunStore }): McpServer {
+interface ServerDeps {
+  cfg: Config;
+  client: GatewayClient;
+  runs: RunManager;
+  store: RunStoreType;
+  /** Per-listener: does this listener serve T2 tools? */
+  allowT2: boolean;
+  /** Per-listener brute-force brake (the ops listener has its own, stricter one). */
+  bruteForce: BruteForceGuard;
+}
+
+function buildServer(
+  deps: { cfg: Config; client: GatewayClient; runs: RunManager; store: RunStoreType },
+  ctx: { authLevel: OpsLevel; allowT2: boolean },
+): McpServer {
   const server = new McpServer(
     { name: "hermes-mcp", version: VERSION },
     {
       instructions:
         "Manage Nils' Hermes agents. Call list_profiles first, then start_run with an explicit prompt. " +
         "Runs are asynchronous: poll get_run for status/progress and get_run_logs for details. " +
-        "cancel_run requires confirm=true.",
+        "cancel_run requires confirm=true. The ops_* tools forward to ops-helper; the T1/T2 ones " +
+        "(restart, deploy, backup_now) need the higher ops token, and T2 only exists on the local listener.",
     },
   );
-  registerTools(server, deps);
+  registerTools(server, { ...deps, authLevel: ctx.authLevel, allowT2: ctx.allowT2 });
   return server;
 }
 
-async function main(): Promise<void> {
-  let cfg: Config;
-  try {
-    cfg = loadConfig();
-  } catch (exc) {
-    logger.error("refusing to start", { error: (exc as Error).message });
-    process.exit(1);
-  }
-
-  const store = new RunStore(cfg.dataDir);
-  const client = new GatewayClient(cfg);
-  const runs = new RunManager(cfg, client, store);
-  await runs.resume();
-  runs.startSweeper();
+function createApp(deps: ServerDeps): Express {
+  const { cfg } = deps;
 
   const app = express();
   app.disable("x-powered-by");
@@ -101,6 +100,7 @@ async function main(): Promise<void> {
         path: req.path,
         status: res.statusCode,
         ms: Date.now() - started,
+        t2_listener: deps.allowT2,
       });
     });
     next();
@@ -118,19 +118,14 @@ async function main(): Promise<void> {
   });
 
   const allowToken = rateLimiter(120);
-  const bruteForce = new BruteForceGuard({
-    threshold: cfg.lockoutAfter,
-    baseSeconds: 5,
-    maxSeconds: cfg.lockoutMaxSeconds,
-    windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
-  });
 
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
     const clientIp = resolveClientIp(req, cfg.trustedProxies);
+    const bruteForce = deps.bruteForce;
 
     const lockout = bruteForce.check(clientIp);
     if (lockout) {
-      logger.warn("rejected a locked-out client", { path: req.path, remote: clientIp });
+      logger.warn("rejected a locked-out client", { path: req.path, remote: clientIp, t2_listener: deps.allowT2 });
       res
         .status(429)
         .setHeader("Retry-After", String(lockout.retryAfterSeconds))
@@ -152,9 +147,10 @@ async function main(): Promise<void> {
       return;
     }
     const token = match[1].trim();
-    if (!tokenMatches(token, cfg.tokens)) {
+    const level = resolveLevel(token, cfg);
+    if (!level) {
       bruteForce.failure(clientIp);
-      logger.warn("rejected invalid MCP bearer token", { path: req.path, remote: clientIp });
+      logger.warn("rejected invalid MCP bearer token", { path: req.path, remote: clientIp, t2_listener: deps.allowT2 });
       res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
       return;
     }
@@ -163,6 +159,7 @@ async function main(): Promise<void> {
       res.status(429).json({ error: "rate_limited", message: "Too many requests" });
       return;
     }
+    res.locals.authLevel = level;
     next();
   };
 
@@ -173,7 +170,11 @@ async function main(): Promise<void> {
 
   app.post("/mcp", requireAuth, async (req: Request, res: Response) => {
     // Stateless: one MCP server + transport per request, closed when the response ends.
-    const server = buildServer({ cfg, client, runs, store });
+    const authLevel = (res.locals.authLevel as OpsLevel | undefined) ?? "base";
+    const server = buildServer(
+      { cfg, client: deps.client, runs: deps.runs, store: deps.store },
+      { authLevel, allowT2: deps.allowT2 },
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: false,
@@ -208,15 +209,70 @@ async function main(): Promise<void> {
     if (!res.headersSent) res.status(400).json({ error: "bad_request" });
   });
 
-  const server = http.createServer(app);
-  server.listen(cfg.port, cfg.host, () => {
-    logger.info("hermes-mcp listening", { host: cfg.host, port: cfg.port, mcp_path: "/mcp" });
+  return app;
+}
+
+async function main(): Promise<void> {
+  let cfg: Config;
+  try {
+    cfg = loadConfig();
+  } catch (exc) {
+    logger.error("refusing to start", { error: (exc as Error).message });
+    process.exit(1);
+  }
+
+  const store = new RunStore(cfg.dataDir);
+  const client = new GatewayClient(cfg);
+  const runs = new RunManager(cfg, client, store);
+  await runs.resume();
+  runs.startSweeper();
+
+  // Two independent brute-force brakes: guessing the elevated token on the local
+  // listener is throttled separately (and sooner) than the public listener.
+  const mainBruteForce = new BruteForceGuard({
+    threshold: cfg.lockoutAfter,
+    baseSeconds: 5,
+    maxSeconds: cfg.lockoutMaxSeconds,
+    windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
+  });
+  const opsBruteForce = new BruteForceGuard({
+    threshold: cfg.opsLockoutAfter,
+    baseSeconds: 10,
+    maxSeconds: cfg.lockoutMaxSeconds,
+    windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
+  });
+
+  const shared = { cfg, client, runs, store };
+  const mainApp = createApp({ ...shared, allowT2: false, bruteForce: mainBruteForce });
+  const opsApp = createApp({ ...shared, allowT2: true, bruteForce: opsBruteForce });
+
+  const mainServer = http.createServer(mainApp);
+  mainServer.listen(cfg.port, cfg.host, () => {
+    logger.info("hermes-mcp listening", {
+      host: cfg.host,
+      port: cfg.port,
+      mcp_path: "/mcp",
+      t2_listener: false,
+      note: "this is the tunnel-facing listener: T2 tools are never advertised here",
+    });
+  });
+
+  const opsServer = http.createServer(opsApp);
+  opsServer.listen(cfg.opsPort, cfg.opsHost, () => {
+    logger.info("hermes-mcp ops listener listening", {
+      host: cfg.opsHost,
+      port: cfg.opsPort,
+      mcp_path: "/mcp",
+      t2_listener: true,
+      note: "local-only listener: publish it on 127.0.0.1 and never point the tunnel at it",
+    });
   });
 
   const shutdown = (signal: string) => {
     logger.info("shutting down", { signal });
     runs.shutdown();
-    server.close(() => process.exit(0));
+    mainServer.close(() => process.exit(0));
+    opsServer.close(() => undefined);
     setTimeout(() => process.exit(0), 8000).unref();
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
