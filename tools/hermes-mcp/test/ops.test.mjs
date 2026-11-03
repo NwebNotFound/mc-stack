@@ -221,23 +221,29 @@ test("T1/T2 tools are not advertised without the ops token, and T2 not without t
   }
 });
 
-const PAUSED_TOOLS = [
-  "ops_players",
-  "ops_build_plugin",
-  "ops_run_tests",
-  "ops_backup_now",
-  "ops_restart_game",
-  "ops_deploy_plugin",
-  "ops_rollback_plugin",
-];
+const PAUSED_TOOLS = ["ops_players", "ops_backup_now"];
 
 test("the paused ops tools announce it in their description", () => {
   const server = opsServer();
   for (const name of PAUSED_TOOLS) {
     assert.match(server.handlers[name].def.description, /PAUSED/, `${name} description must say it is paused`);
   }
-  // ops_restart_service is live now: the path-exact socket filter can serve it.
-  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state", "ops_restart_service"]) {
+  // Live surface: the read-only tools, the plugin-builder build/test, the T1
+  // restart and the three T2 actions (which carry their own gates and the
+  // acknowledge_no_announce requirement).
+  for (const name of [
+    "ops_status",
+    "ops_logs",
+    "ops_disk",
+    "ops_backups_list",
+    "ops_git_state",
+    "ops_build_plugin",
+    "ops_run_tests",
+    "ops_restart_service",
+    "ops_restart_game",
+    "ops_deploy_plugin",
+    "ops_rollback_plugin",
+  ]) {
     assert.ok(!/PAUSED/.test(server.handlers[name].def.description), `${name} must stay available`);
   }
 });
@@ -353,8 +359,18 @@ test("the T2 parameters are forwarded unchanged", async () => {
       },
     },
   });
-  await server.handlers.ops_deploy_plugin.handler({ artifact_sha256: "f".repeat(64), confirm: true, delay_seconds: 120 });
-  assert.deepEqual(calls[0].params, { artifact_sha256: "f".repeat(64), confirm: true, delay_seconds: 120 });
+  await server.handlers.ops_deploy_plugin.handler({
+    artifact_sha256: "f".repeat(64),
+    confirm: true,
+    delay_seconds: 120,
+    acknowledge_no_announce: true,
+  });
+  assert.deepEqual(calls[0].params, {
+    artifact_sha256: "f".repeat(64),
+    confirm: true,
+    delay_seconds: 120,
+    acknowledge_no_announce: true,
+  });
   assert.equal(calls[0].opts.timeoutSeconds >= 1800, true, "a deploy may legitimately take minutes");
 
   await server.handlers.ops_logs.handler({ service: "lobby", tail: 10 });

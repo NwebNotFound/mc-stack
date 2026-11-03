@@ -47,27 +47,49 @@ test("every impl in the allowlist is implemented in code", () => {
   }
 });
 
-test("the shipped allowlist pauses every action the filter cannot serve, with a reason", () => {
+test("the shipped allowlist pauses only what this stack genuinely cannot serve", () => {
   const allow = loadAllowlist(ALLOWLIST_PATH);
-  const paused = [
-    "ops_players",
-    "ops_build_plugin",
-    "ops_run_tests",
-    "ops_backup_now",
-    "ops_restart_game",
-    "ops_deploy_plugin",
-    "ops_rollback_plugin",
-  ];
+  // Still paused, with a reason: exec needs a route the filter refuses, and the
+  // helper image has no PowerShell for backup.ps1.
+  const paused = ["ops_players", "ops_backup_now"];
   for (const name of paused) {
     assert.equal(allow.actions[name].enabled, false, `${name} must be disabled`);
     assert.ok(allow.actions[name].disabledReason, `${name} must carry a disabled_reason`);
   }
-  // The read-only tools plus the T1 restart are the whole live surface: the
-  // docker-socket-filter can serve exactly those.
-  for (const name of ["ops_status", "ops_logs", "ops_disk", "ops_backups_list", "ops_git_state", "ops_restart_service"]) {
-    assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
+  // Enabled: the read-only tools, the T1 restart, the plugin-builder build/test
+  // (T0, no player impact) and the three T2 actions (behind armed + confirm +
+  // delay + recent backup + acknowledge_no_announce).
+  for (const name of [
+    "ops_status",
+    "ops_logs",
+    "ops_disk",
+    "ops_backups_list",
+    "ops_git_state",
+    "ops_build_plugin",
+    "ops_run_tests",
+    "ops_restart_service",
+    "ops_restart_game",
+    "ops_deploy_plugin",
+    "ops_rollback_plugin",
+  ]) {
+    assert.equal(allow.actions[name].enabled, true, `${name} must be enabled`);
   }
   assert.equal(allow.actions.ops_restart_service.tier, "T1");
+});
+
+test("the T2 backup gate is a freshness window, not a create", () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  assert.equal(allow.tiers.T2.backup_required, true);
+  assert.equal(allow.tiers.T2.backup_max_age_hours, 12);
+
+  // A missing window defaults to 12h; a nonsense one is refused at load time.
+  const noWindow = rawAllowlist();
+  delete noWindow.tiers.T2.backup_max_age_hours;
+  assert.equal(parseAllowlist(noWindow).tiers.T2.backup_max_age_hours, 12);
+
+  const badWindow = rawAllowlist();
+  badWindow.tiers.T2.backup_max_age_hours = 0;
+  assert.throws(() => parseAllowlist(badWindow), /backup_max_age_hours/);
 });
 
 test("a disabled action without a disabled_reason is refused at load time", () => {

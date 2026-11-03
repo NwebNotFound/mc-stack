@@ -77,6 +77,18 @@ export function checkGates(
         `${action.name} requires an integer delay_seconds >= ${minDelay} so the action can be announced`,
       );
     }
+    // There is no in-game announcement channel in this stack: the only way to
+    // reach a server console would be `docker exec` (or a proxy/RCON broadcast),
+    // and docker-socket-filter refuses every exec route. A T2 action therefore
+    // does NOT warn players, and the caller has to say so explicitly instead of
+    // assuming a warning happened.
+    if (params.acknowledge_no_announce !== true) {
+      return deny(
+        "announcement_not_acknowledged",
+        `${action.name} cannot announce in game (no rcon/exec channel reachable through the socket filter); ` +
+          `pass acknowledge_no_announce=true to confirm that no in-game warning will be sent`,
+      );
+    }
   }
 
   const cooldownKey = `${action.name}`;

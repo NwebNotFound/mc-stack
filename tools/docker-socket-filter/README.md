@@ -25,8 +25,8 @@ by **API section**: `CONTAINERS`, `POST`, `EXEC`, `VOLUMES`, ... That granularit
 cannot express what this stack actually needs:
 
 * `GET /containers/json`, `/containers/<id>/json`, `/containers/<id>/logs` → yes;
-* `POST /containers/<name>/restart` → yes, **but only for two exact container
-  names**;
+* `POST /containers/<name>/restart` → yes, **but only for exact container names
+  from the two restart lists** (T1 helper services, T2 game servers);
 * `POST /containers/create`, `/stop`, `/start`, `/kill`, `/exec`, `/containers/prune`
   → **never**.
 
@@ -44,17 +44,27 @@ per-path, per-container-name setting. Hence this filter.
 | `GET` | `/containers/json` | `all` ∈ {0,1}, `filters` (≤ 2048 chars) | the container list (`docker ps`) |
 | `GET` | `/containers/<ref>/json` | *(none)* | `docker inspect` |
 | `GET` | `/containers/<ref>/logs` | `stdout`, `stderr`, `timestamps` ∈ {0,1}; `tail` ≤ 300; `since`, `until` | `docker logs` |
-| `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | **only** for an exact name from `OPS_FILTER_RESTART_ALLOW` |
+| `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | **only** for an exact name from `OPS_FILTER_RESTART_ALLOW` (T1) or `OPS_FILTER_RESTART_ALLOW_T2` (T2) |
 
 `<ref>` is a container name or id (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).
-`<name>` for `restart` must match an entry of the allowlist **exactly** — no ids,
-no prefix matches (`mc-stack-bot-10` is not `mc-stack-bot-1`), no globs.
+`<name>` for `restart` must match an entry of one of the two lists **exactly** —
+no ids, no prefix matches (`mc-stack-bot-10` is not `mc-stack-bot-1`), no globs.
 
-Default allowlist: `mc-stack-bot-1,mc-stack-cloudflared-mcp-1`. The game-server
-names (`mc-stack-lobby-1`, `mc-stack-survival-1`, `mc-stack-velocity-1`, …) are
-deliberately **absent**, so a game-server restart is impossible *even if
-ops-helper asked for one* — the helper's own allowlist and this one are
-independent checks.
+The restart names are split by intent:
+
+| Env | Default | Intent |
+| --- | --- | --- |
+| `OPS_FILTER_RESTART_ALLOW` | `mc-stack-bot-1,mc-stack-cloudflared-mcp-1` | T1: reversible helper services |
+| `OPS_FILTER_RESTART_ALLOW_T2` | `mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1` | T2: the game servers |
+
+The Docker API has a single restart path, so this filter accepts the **union** and
+the audit line records which list matched (`restarts: "t1" | "t2"`). The T1/T2
+split itself is enforced by ops-helper's own `services.restart_t1` /
+`services.restart_game` lists — a T1 call can therefore never restart a game
+server even though the name is on the filter's second list, and the two lists are
+asserted disjoint. `mc-stack-craftcore-db-1`, `mc-stack-hermes-mcp-1`,
+`mc-stack-hermes-test-1`, `mc-stack-ops-helper-1` and the filter itself are on
+**neither** list.
 
 ## What is refused, and why the parser is strict
 
@@ -86,8 +96,11 @@ refused.
 **Note on `size`:** the Docker CLI adds `size=1` to `GET /containers/json` when
 `docker ps` is asked for `--format '{{json .}}'`. Instead of widening the filter,
 ops-helper uses an explicit `--format` template (`PS_FORMAT` in
-`tools/ops-helper/src/docker.ts`), which keeps the query surface at exactly
-`all` + `filters`.
+`tools/ops-helper/src/docker.ts`) that routes every field through the template
+`json` function (`{"Names":{{json .Names}},…}`), which keeps the query surface at
+exactly `all` + `filters` **and** emits valid JSON for any value. Wrapping raw
+fields in quotes breaks on real data: `{{.Labels}}` carries Windows host paths
+(`C:\Users\…`), whose single backslashes are not valid JSON escapes.
 
 **Note on `/_ping` and `GET /version`:** the CLI pings before every request, so
 `HEAD /_ping` must stay allowed. `GET /version` is **not** allowed; ops-helper
@@ -114,10 +127,11 @@ sets `DOCKER_API_VERSION`, which makes the CLI skip version negotiation entirely
 * **Whoever compromises this process has the socket.** It is the boundary, so it
   is small, dependency-free, has no outbound network and is the only socket
   holder — but it is not a sandbox. A bug in `src/filter.mjs` is host root.
-* **Whoever can write `OPS_FILTER_RESTART_ALLOW` can widen the restart set.**
-  That is a compose/env change, i.e. the same trust level as editing the repo.
+* **Whoever can write either restart list can widen the restart set.** That is a
+  compose/env change, i.e. the same trust level as editing the repo.
 * **A stolen ops-helper token cannot create or exec.** Through the filter the
-  only mutation available is restarting the two named containers.
+  only mutation available is restarting a container whose exact name is on one of
+  the two lists.
 * The audit log is stdout (`docker compose logs docker-socket-filter`): it
   survives as long as the container's log file does. Allowed requests are logged
   as `allowed`, refusals as `denied` with a reason code. No header values, bodies
@@ -130,7 +144,8 @@ sets `DOCKER_API_VERSION`, which makes the CLI skip version negotiation entirely
 | `OPS_FILTER_PORT` | `2375` | listen port inside the container |
 | `OPS_FILTER_HOST` | `0.0.0.0` | listen address (only reachable inside `mc-stack-ops`) |
 | `OPS_FILTER_UPSTREAM` | `/var/run/docker.sock` | the real socket |
-| `OPS_FILTER_RESTART_ALLOW` | `mc-stack-bot-1,mc-stack-cloudflared-mcp-1` | exact container names a restart may target |
+| `OPS_FILTER_RESTART_ALLOW` | `mc-stack-bot-1,mc-stack-cloudflared-mcp-1` | exact T1 container names a restart may target |
+| `OPS_FILTER_RESTART_ALLOW_T2` | `mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1` | exact T2 container names a restart may target |
 | `OPS_FILTER_MAX_RESPONSE_BYTES` | `8388608` | hard cap on a forwarded response body |
 
 An allowlist entry that is not a plain container-name shape aborts startup (fail
@@ -149,12 +164,14 @@ sh tools/docker-socket-filter/test/real-daemon.sh
 
 `test/filter.test.mjs` covers the allow table, every forbidden Docker route,
 traversal/encoding/CRLF/smuggling vectors, prefix names, container ids, the
-`t` bounds and a real TCP round-trip through the filter to a fake upstream.
+`t` bounds, the T1/T2 list split (a T1-only configuration cannot restart a game
+server; the database/mcp/helper names never) and a real TCP round-trip through
+the filter to a fake upstream.
 
 `test/real-daemon.sh` builds this image, runs it with the **real** socket on a
-throwaway network next to a throwaway canary container, and probes it: the
-canary restarts (`204`), everything else is `403`. It also proves that no
-container that mounts the socket is left running (each one self-exits).
+throwaway network next to two throwaway canaries (one on each list), and probes
+it: both canaries restart (`204`), everything else is `403`. It also proves that
+no container that mounts the socket is left running (each one self-exits).
 
 ## Response handling (review of PR 125)
 

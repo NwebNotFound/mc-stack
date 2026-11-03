@@ -1,0 +1,13 @@
+{
+  "name": "plugin-builder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build/test worker for the mc-stack ops tools: reads job files from a shared volume, runs one fixed command, writes the result into the artifact volume. No Docker socket, no network.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

@@ -1,12 +1,42 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
-import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, makeDeps, tmpDir } from "./helpers.mjs";
+import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, FakeJobClient, makeDeps, tmpDir } from "./helpers.mjs";
 import { loadAllowlist } from "../dist/allowlist.js";
 
 const REPO_ROOT = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
+
+/** Backdate a file/dir mtime so an age-sensitive gate can be tested for real. */
+function ensureFreshMtime(path, when) {
+  utimesSync(path, when, when);
+}
+
+/** Create a complete backup fixture and return its directory. */
+function backupFixture() {
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  return backups;
+}
+
+/** A builder result as plugin-builder would write it. */
+function builderResult(over = {}) {
+  return {
+    v: 1,
+    id: "x",
+    action: "build",
+    ok: true,
+    code: null,
+    ref: "b".repeat(40),
+    tests: null,
+    artifact: null,
+    output_tail: "",
+    truncated: false,
+    ...over,
+  };
+}
 
 function psJson(service, status, state = "running") {
   return JSON.stringify({
@@ -33,6 +63,46 @@ test("ops_status parses docker ps and marks known services", async () => {
   assert.equal(out.result.containers[1].state, "exited");
   assert.equal(out.result.counts.running, 1);
   assert.equal(out.result.counts.unhealthy.length, 0);
+});
+
+test("ops_status parses real docker ps NDJSON, including Windows paths in labels", async () => {
+  // Verbatim `docker ps --format '<json>'` lines with the `json` template
+  // function, as measured against the real daemon on Docker Desktop. The Labels
+  // value carries Windows host paths, i.e. backslash escapes in JSON. With the
+  // old template (`"{{.Labels}}"`) these lines were invalid JSON, the parser
+  // silently swallowed them into `{}` and ops_status reported rows with
+  // service/name/image/state/status all null and `known: false`.
+  const lines = [
+    '{"Names":"mc-stack-lobby-1","Image":"itzg/minecraft-server:latest","State":"running","Status":"Up 30 minutes (healthy)","Labels":"com.docker.compose.config-hash=9d7b,com.docker.compose.project.config_files=C:\\\\Users\\\\nilsw\\\\mc-stack\\\\compose.yaml,com.docker.compose.project=mc-stack,com.docker.compose.service=lobby,desktop.docker.io/binds/1/Source=C:\\\\Users\\\\nilsw\\\\mc-stack\\\\config\\\\lobby-plugins"}',
+    '{"Names":"mc-stack-vipworld-1-1","Image":"itzg/minecraft-server:latest","State":"exited","Status":"Exited (0) 4 minutes ago","Labels":"com.docker.compose.project=mc-stack,com.docker.compose.service=vipworld-1,desktop.docker.io/ports.scheme=v2"}',
+    '{"Names":"mc-stack-bot-1","Image":"mc-stack-bot","State":"running","Status":"Up 29 minutes","Labels":"com.docker.compose.project=mc-stack,com.docker.compose.service=bot"}',
+  ].join("\n");
+  const deps = makeDeps({ runner: dockerRunner({ ps: lines }) });
+  const out = await handleOp("ops_status", {}, deps);
+  assert.equal(out.ok, true, out.message);
+  assert.equal(out.result.containers.length, 3);
+  const lobby = out.result.containers[0];
+  assert.equal(lobby.service, "lobby");
+  assert.equal(lobby.name, "mc-stack-lobby-1");
+  assert.equal(lobby.image, "itzg/minecraft-server:latest");
+  assert.equal(lobby.state, "running");
+  assert.equal(lobby.status, "Up 30 minutes (healthy)");
+  assert.equal(lobby.health, "healthy");
+  assert.equal(lobby.known, true, "a container with a known compose service must be marked known");
+  assert.equal(out.result.containers[1].state, "exited");
+  assert.equal(out.result.counts.running, 2);
+});
+
+test("ops_status fails loudly on an unparseable docker ps line instead of reporting blanks", async () => {
+  const deps = makeDeps({
+    runner: dockerRunner({
+      ps: '{"Names":"mc-stack-lobby-1","Labels":"C:\\Users\\nilsw"}',
+    }),
+  });
+  const out = await handleOp("ops_status", {}, deps);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "unexpected_docker_output");
+  assert.match(out.message, /not JSON/);
 });
 
 test("ops_logs redacts secrets and caps the tail", async () => {
@@ -114,15 +184,64 @@ test("ops_restart_game (T2) is refused while OPS_ARMED is false and runs nothing
 });
 
 test("ops_restart_game (T2) restarts and reports a missing announcement honestly", async () => {
-  const deps = makeDeps({ cfg: { armed: true } });
-  const out = await handleOp("ops_restart_game", { service: "survival", confirm: true, delay_seconds: 90 }, deps);
-  assert.equal(out.ok, true);
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  repoAllow.paths.backups = backups;
+  // Real clock: the backup fixture was just created, so it is genuinely fresh.
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", {
+    service: "survival",
+    confirm: true,
+    delay_seconds: 90,
+    acknowledge_no_announce: true,
+  }, deps);
+  assert.equal(out.ok, true, out.message);
   assert.equal(out.result.service, "survival");
   assert.equal(out.result.delay_seconds, 90);
   assert.equal(out.result.announcement.announced, false);
   assert.match(out.result.announcement.detail, /NO in-game announcement/);
   assert.ok(deps.sleeps.includes(90_000), "the lead time must be awaited");
-  assert.ok(deps.runner.find((argv) => argv[1] === "restart"));
+  // The restart must go out by NAME (the filter allowlists names, not ids).
+  const restart = deps.runner.find((argv) => argv[1] === "restart");
+  assert.ok(restart, "the restart must have run");
+  assert.equal(restart.argv[2], CONTAINER_NAME);
+  assert.match(restart.argv[2], /^mc-stack-/, "a container name, never a bare id");
+});
+
+test("ops_restart_game (T2) demands the no-announcement acknowledgement", async () => {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  repoAllow.paths.backups = backups;
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", { service: "lobby", confirm: true, delay_seconds: 60 }, deps);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "announcement_not_acknowledged");
+  assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined, "nothing may restart");
+});
+
+test("ops_restart_game (T2) refuses without a recent backup and never restarts", async () => {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  repoAllow.paths.backups = backups; // empty: no complete backup at all
+  const stale = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const noBackup = await handleOp("ops_restart_game", { service: "lobby", confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, stale);
+  assert.equal(noBackup.code, "no_recent_backup");
+  assert.equal(stale.runner.find((argv) => argv[1] === "restart"), undefined);
+
+  // A backup older than tiers.T2.backup_max_age_hours is refused too.
+  mkdirSync(`${backups}/daily-20260101-000000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20260101-000000/COMPLETE.txt`, "ok");
+  const aged = new Date(Date.now() - 13 * 3600 * 1000);
+  ensureFreshMtime(`${backups}/daily-20260101-000000`, aged);
+  const staleDeps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const old = await handleOp("ops_restart_game", { service: "lobby", confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, staleDeps);
+  assert.equal(old.code, "stale_backup");
+  assert.match(old.message, /backup\.ps1/);
+  assert.equal(staleDeps.runner.find((argv) => argv[1] === "restart"), undefined);
 });
 
 test("the kill switch stops T1 but keeps T0 working", async () => {
@@ -157,74 +276,75 @@ test("a non-object params payload is refused", async () => {
   assert.equal(deps.runner.calls.length, 0);
 });
 
-test("ops_run_tests runs the fixed argv and reads the node test summary", async () => {
-  const repoAllow = enabledAllowlist();
-  repoAllow.paths.repo = REPO_ROOT;
-  const deps = makeDeps({
-    allow: repoAllow,
-    runner: dockerRunner({}),
+test("ops_run_tests hands one strictly shaped job to plugin-builder", async () => {
+  const jobs = new FakeJobClient({
+    result: builderResult({ action: "test", target: "hermes-mcp", tests: { tests: 25, failures: 0, errors: 0, skipped: 0 }, output_tail: "# pass 25\n" }),
   });
-  deps.runner.responses.unshift({
-    match: (argv) => argv[1] === "run",
-    reply: { stdout: "# tests 25\n# pass 25\n# fail 0\n" },
-  });
+  const deps = makeDeps({ jobs, now: () => 1_700_000_000_000 });
   const out = await handleOp("ops_run_tests", { target: "hermes-mcp" }, deps);
-  assert.equal(out.ok, true);
+  assert.equal(out.ok, true, out.message);
   assert.deepEqual(out.result.tests, { tests: 25, failures: 0, errors: 0, skipped: 0 });
-  const runs = deps.runner.calls.filter((call) => call.argv[1] === "run");
-  assert.equal(runs.length, 2, "setup (npm ci) then the test command");
-  assert.deepEqual(runs[0].argv.slice(-5), ["npm", "ci", "--no-audit", "--no-fund", "--offline"]);
-  assert.deepEqual(runs[1].argv.slice(-2), ["npm", "test"]);
-  assert.ok(runs[0].argv.includes("--cap-drop"));
-  assert.ok(runs[0].argv.includes("no-new-privileges"));
+  assert.equal(jobs.submitted.length, 1);
+  const job = jobs.submitted[0];
+  // The exact key set: nothing but an action, the commit sha and a target.
+  assert.deepEqual(Object.keys(job).sort(), ["action", "id", "ref", "requested_at", "target", "v"]);
+  assert.equal(job.action, "test");
+  assert.equal(job.target, "hermes-mcp");
+  assert.match(job.ref, /^[a-f0-9]{40}$/);
+  // The helper starts NO container any more (the filter refuses create).
+  assert.equal(deps.runner.find((argv) => argv[1] === "run"), undefined, "the helper must not start a container");
 });
 
-test("build and test containers run with --network none and hard CPU/RAM/PID caps", async () => {
-  const repoAllow = enabledAllowlist();
-  repoAllow.paths.repo = REPO_ROOT;
-  const deps = makeDeps({ allow: repoAllow, runner: dockerRunner({}) });
-  deps.runner.responses.unshift({ match: (argv) => argv[1] === "run", reply: { stdout: "# tests 1\n# pass 1\n# fail 0\n" } });
-
-  await handleOp("ops_run_tests", { target: "ops-helper" }, deps);
-  const argv = deps.runner.calls.find((call) => call.argv[1] === "run").argv;
-  assert.deepEqual(argv.slice(argv.indexOf("--network"), argv.indexOf("--network") + 2), ["--network", "none"]);
-  assert.deepEqual(argv.slice(argv.indexOf("--cpus"), argv.indexOf("--cpus") + 2), ["--cpus", repoAllow.build.limits.cpus]);
-  assert.deepEqual(argv.slice(argv.indexOf("--memory"), argv.indexOf("--memory") + 2), ["--memory", repoAllow.build.limits.memory]);
-  assert.deepEqual(argv.slice(argv.indexOf("--pids-limit"), argv.indexOf("--pids-limit") + 2), ["--pids-limit", String(repoAllow.build.limits.pids)]);
-  assert.ok(argv.includes("mc-stack-ops-npm-cache:/root/.npm"), "the pre-warmed npm cache must be mounted for offline installs");
-  assert.equal(argv.includes("host"), false, "a build must never share the host network");
+test("a build job carries no target, and a failing build is reported", async () => {
+  const jobs = new FakeJobClient({ result: builderResult({ ok: false, code: "build_failed", output_tail: "FAILURE" }) });
+  const deps = makeDeps({ jobs, now: () => 1_700_000_000_000 });
+  const out = await handleOp("ops_build_plugin", {}, deps);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "build_failed");
+  assert.deepEqual(Object.keys(jobs.submitted[0]).sort(), ["action", "id", "ref", "requested_at", "v"]);
+  assert.equal(deps.runner.find((argv) => argv[1] === "run"), undefined, "the helper must not start a container");
 });
 
-test("ops_build_plugin stages the source, hashes the artifact and does not deploy", async () => {
-  const repoAllow = enabledAllowlist();
+test("ops_build_plugin verifies the artifact hash itself and does not deploy", async () => {
   const dir = tmpDir();
-  repoAllow.paths.repo = REPO_ROOT;
-  const deps = makeDeps({ allow: repoAllow, dataDir: dir });
   const jarBytes = Buffer.from("PK\u0003\u0004 fake craftcore jar");
-  deps.runner.responses.unshift({
-    match: (argv) => argv[1] === "run",
-    reply: (argv) => {
-      const workdir = argv[argv.indexOf("--workdir") + 1];
-      mkdirSync(`${workdir}/build/libs`, { recursive: true });
-      writeFileSync(`${workdir}/build/libs/craftcore.jar`, jarBytes);
-      mkdirSync(`${workdir}/build/test-results/test`, { recursive: true });
-      writeFileSync(
-        `${workdir}/build/test-results/test/TEST-CraftCore.xml`,
-        '<testsuite name="CraftCore" tests="441" skipped="13" failures="0" errors="0"></testsuite>',
-      );
-      return { stdout: "BUILD SUCCESSFUL in 3m 12s" };
-    },
+  const sha = createHash("sha256").update(jarBytes).digest("hex");
+  const jarPath = `${dir}/artifacts/artifacts/craftcore-${sha.slice(0, 12)}.jar`;
+  mkdirSync(jarPath.slice(0, jarPath.lastIndexOf("/")), { recursive: true });
+  writeFileSync(jarPath, jarBytes);
+  const jobs = new FakeJobClient({
+    result: builderResult({
+      tests: { tests: 441, failures: 0, errors: 0, skipped: 13 },
+      artifact: { path: jarPath, sha256: sha, size_bytes: jarBytes.length },
+    }),
   });
+  const deps = makeDeps({ jobs, dataDir: dir, now: () => 1_700_000_000_000 });
 
   const out = await handleOp("ops_build_plugin", {}, deps);
   assert.equal(out.ok, true, out.message);
-  const expected = createHash("sha256").update(jarBytes).digest("hex");
-  assert.equal(out.result.sha256, expected);
+  assert.equal(out.result.sha256, sha);
   assert.deepEqual(out.result.tests, { tests: 441, failures: 0, errors: 0, skipped: 13 });
   assert.equal(out.result.deployed, false);
-  assert.ok(existsSync(out.result.artifact_path), "the artifact must be kept in the artifact volume");
-  const state = JSON.parse(readFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, "utf8"));
-  assert.equal(state.sha256, expected);
+  assert.ok(existsSync(out.result.artifact_path), "the artifact must stay in the artifact volume");
+  const state = JSON.parse(readFileSync(`${dir}/artifacts/state/last-build.json`, "utf8"));
+  assert.equal(state.sha256, sha);
+
+  // A tampered artefact (hash does not match the file) is refused, not deployed.
+  const badJobs = new FakeJobClient({
+    result: builderResult({ artifact: { path: jarPath, sha256: "c".repeat(64), size_bytes: 1 } }),
+  });
+  const badDeps = makeDeps({ jobs: badJobs, dataDir: dir });
+  const bad = await handleOp("ops_build_plugin", {}, badDeps);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, "artifact_hash_mismatch");
+});
+
+test("a silent plugin-builder is reported as a timeout, never as a success", async () => {
+  const deps = makeDeps({ jobs: new FakeJobClient({ result: null }) });
+  const out = await handleOp("ops_run_tests", { target: "ops-helper" }, deps);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "builder_timeout");
+  assert.equal(deps.runner.find((argv) => argv[1] === "run"), undefined);
 });
 
 test("ops_deploy_plugin refuses without a build, without the arm switch and without a backup", async () => {
@@ -232,7 +352,12 @@ test("ops_deploy_plugin refuses without a build, without the arm switch and with
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const mk = (over = {}) => makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true, ...over } });
-  const params = (sha) => ({ confirm: true, delay_seconds: 60, artifact_sha256: sha });
+  const params = (sha) => ({
+    confirm: true,
+    delay_seconds: 60,
+    artifact_sha256: sha,
+    acknowledge_no_announce: true,
+  });
 
   const noBuildDeps = mk();
   const noBuild = await handleOp("ops_deploy_plugin", params("a".repeat(64)), noBuildDeps);
@@ -254,8 +379,8 @@ test("ops_deploy_plugin refuses without a build, without the arm switch and with
 
   const noBackupDeps = mk();
   const noBackup = await handleOp("ops_deploy_plugin", params(sha), noBackupDeps);
-  assert.equal(noBackup.code, "backup_interpreter_missing");
-  assert.equal(noBackup.result.mode, "unavailable");
+  assert.equal(noBackup.code, "no_recent_backup");
+  assert.match(noBackup.message, /backup\.ps1/, "the answer must say how to fix it");
   assert.equal(noBackupDeps.runner.find((argv) => argv[1] === "restart"), undefined, "no restart without a backup");
 
   const unarmedDeps = mk({ armed: false });
@@ -286,7 +411,7 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
   writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
-  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha }, deps);
+  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, true, out.message);
   assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "new-jar-bytes");
   assert.equal(readFileSync(`${pluginSurvival}/craftcore.jar`, "utf8"), "new-jar-bytes");
@@ -331,7 +456,7 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
   writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
-  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha }, deps);
+  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, false);
   assert.equal(out.code, "health_check_failed_rolled_back");
   assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "old-lobby-jar", "the previous lobby jar must be restored");
@@ -368,7 +493,7 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
     }),
   );
 
-  const out = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60 }, deps);
+  const out = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, true, out.message);
   assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "old-lobby-jar");
   assert.equal(readFileSync(`${pluginSurvival}/craftcore.jar`, "utf8"), "old-survival-jar");
@@ -406,30 +531,26 @@ const ENABLED_ACTIONS = [
   "ops_disk",
   "ops_backups_list",
   "ops_git_state",
+  // T0 development: now served by plugin-builder through the job volume, so the
+  // helper never needs `POST /containers/create`.
+  "ops_build_plugin",
+  "ops_run_tests",
   // Enabled on purpose: the docker-socket-filter can serve exactly this one
   // non-GET route (POST /containers/<name>/restart) for the two T1 names.
   "ops_restart_service",
-];
-const DISABLED_ACTIONS = [
-  "ops_players",
-  "ops_build_plugin",
-  "ops_run_tests",
-  "ops_backup_now",
+  // T2: armed + confirm + delay + recent backup + acknowledge_no_announce, and
+  // only over the local listener.
   "ops_restart_game",
   "ops_deploy_plugin",
   "ops_rollback_plugin",
 ];
+const DISABLED_ACTIONS = ["ops_players", "ops_backup_now"];
 const DISABLED_PARAMS = {
   ops_players: { service: "lobby" },
-  ops_build_plugin: {},
-  ops_run_tests: { target: "hermes-mcp" },
   ops_backup_now: { confirm: true },
-  ops_restart_game: { service: "lobby", confirm: true, delay_seconds: 60 },
-  ops_deploy_plugin: { confirm: true, delay_seconds: 60, artifact_sha256: "a".repeat(64) },
-  ops_rollback_plugin: { confirm: true, delay_seconds: 60 },
 };
 
-test("the shipped allowlist enables the read-only tools plus the T1 restart only", () => {
+test("the shipped allowlist enables the ops surface minus the two paused actions", () => {
   const allow = loadAllowlist(ALLOWLIST_PATH);
   for (const name of ENABLED_ACTIONS) {
     assert.equal(allow.actions[name].enabled, true, `${name} must stay enabled`);
@@ -439,6 +560,7 @@ test("the shipped allowlist enables the read-only tools plus the T1 restart only
     assert.ok((allow.actions[name].disabledReason ?? "").length > 0, `${name} must carry a disabled_reason`);
   }
   assert.equal(allow.actions.ops_restart_service.tier, "T1");
+  assert.equal(allow.actions.ops_restart_game.tier, "T2");
 });
 
 test("ops_restart_service still demands confirm=true and the T1 cooldown", async () => {
@@ -455,14 +577,40 @@ test("ops_restart_service still demands confirm=true and the T1 cooldown", async
   assert.equal(again.code, "cooldown_active");
 });
 
-test("a game server is not restartable even through the shipped allowlist", async () => {
+test("the T1 and T2 service lists never overlap", () => {
   const allow = loadAllowlist(ALLOWLIST_PATH);
+  assert.deepEqual(allow.services.restartT1, ["bot", "cloudflared-mcp"]);
+  assert.deepEqual(allow.services.restartGame, ["lobby", "survival", "velocity"]);
+  const overlap = allow.services.restartT1.filter((name) => allow.services.restartGame.includes(name));
+  assert.deepEqual(overlap, [], "no service may be in both the T1 and the T2 restart list");
+  for (const name of ["craftcore-db", "hermes-mcp", "ops-helper", "hermes-test"]) {
+    assert.ok(!allow.services.restartT1.includes(name), `${name} must not be T1-restartable`);
+    assert.ok(!allow.services.restartGame.includes(name), `${name} must not be T2-restartable`);
+    assert.ok(!allow.services.deployPlugin.includes(name), `${name} must not be a deploy target`);
+  }
+});
+
+test("a game server is not restartable through the T1 path, a T1 service not through T2", async () => {
+  const allow = loadAllowlist(ALLOWLIST_PATH);
+  // The T1 action must never reach a game server...
   for (const service of ["lobby", "survival", "velocity", "craftcore-db", "hermes-mcp"]) {
     const deps = makeDeps({ allow });
     const out = await handleOp("ops_restart_service", { service, confirm: true }, deps);
-    assert.equal(out.ok, false, `${service} must be refused`);
+    assert.equal(out.ok, false, `${service} must be refused by ops_restart_service`);
     assert.equal(out.code, "invalid_params");
-    assert.equal(deps.runner.calls.length, 0, `${service} must never reach docker`);
+    assert.equal(deps.runner.calls.length, 0, `${service} must never reach docker via T1`);
+  }
+  // ...and the T2 action must never reach a T1 helper service.
+  for (const service of ["bot", "cloudflared-mcp", "craftcore-db", "hermes-mcp"]) {
+    const deps = makeDeps({ allow, cfg: { armed: true } });
+    const out = await handleOp(
+      "ops_restart_game",
+      { service, confirm: true, delay_seconds: 60, acknowledge_no_announce: true },
+      deps,
+    );
+    assert.equal(out.ok, false, `${service} must be refused by ops_restart_game`);
+    assert.equal(out.code, "invalid_params");
+    assert.equal(deps.runner.calls.length, 0, `${service} must never reach docker via T2`);
   }
 });
 
