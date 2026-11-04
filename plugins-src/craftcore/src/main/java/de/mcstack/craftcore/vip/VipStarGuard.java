@@ -26,13 +26,13 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
 /**
- * Keeps a leftover nether star of the VIP menu out of the way on a VIP server: no drop, no move
- * into a container, no death drop, no creative clone, no sale. The rules live in
- * {@link VipStarRules} and the refusal wording in {@link VipStarRules#UNSELLABLE_MESSAGE}.
+ * Keeps the nether star of the VIP menu in the player's inventory: no drop, no move into a
+ * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules} and
+ * the refusal wording in {@link VipStarRules#UNSELLABLE_MESSAGE}.
  *
- * <p>The star itself is no longer handed out on VIP servers (the menu is {@code /vw}); this guard
- * only covers items that older builds left in an inventory until {@link #remove(Player)} strips
- * them.</p>
+ * <p>The star itself is no longer handed out on VIP servers (the menu is {@code /vw}); the guards
+ * stay as a safety net for items an older build left behind, but nothing is ever stripped from an
+ * inventory.</p>
  */
 public final class VipStarGuard implements Listener {
     /** {@code craftcore:vip_menu_star} as stored by older builds. */
@@ -103,17 +103,5 @@ public final class VipStarGuard implements Listener {
         if (!VipStarRules.mayTransfer(tagged(event.getPlayer().getInventory().getItemInMainHand()))) {
             event.setCancelled(true);
         }
-    }
-
-    /**
-     * Clears leftover menu stars from a player's inventory, every slot including armour and
-     * offhand. The menu is a command now, so the item neither blocks a hotbar slot nor travels
-     * anywhere else.
-     */
-    public static void remove(Player player) {
-        ItemStack[] contents = player.getInventory().getContents();
-        boolean[] tagged = new boolean[contents.length];
-        for (int slot = 0; slot < contents.length; slot++) tagged[slot] = tagged(contents[slot]);
-        for (int slot : VipStarRules.stripSlots(tagged)) player.getInventory().setItem(slot, null);
     }
 }

@@ -8,21 +8,16 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerChangedWorldEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
  * In-world menu on a VIP slot: {@code /vw} opens the manage screen of the world this server
  * belongs to. Invite and kick work from inside the world.
  *
- * <p>There is no menu star on VIP servers. Leftover stars from older builds are stripped on
- * join, respawn and world change, so they cannot be carried or synced anywhere.</p>
+ * <p>There is no menu star on VIP servers and nothing is stripped from an inventory: the VIP
+ * inventories are separate from every other server, so leftovers from older builds are harmless.</p>
  */
-public final class VipWorldMenu implements CommandExecutor, Listener {
+public final class VipWorldMenu implements CommandExecutor {
     private final JavaPlugin plugin;
     private final VipModule module;
     private final VipGui gui;
@@ -38,7 +33,6 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
     public void start() {
         Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this);
         ProxyChannel.register(plugin);
-        Bukkit.getPluginManager().registerEvents(this, plugin);
         Bukkit.getPluginManager().registerEvents(new VipStarGuard(), plugin);
         module.start();
         if (worldId == null || worldId.isBlank()) {
@@ -85,30 +79,6 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
 
     private static void usage(Player player) {
         player.sendMessage("Benutzung: /vw [menu|members|addons|start|stop] | invite <spieler> | kick <spieler>");
-    }
-
-    @EventHandler
-    public void join(PlayerJoinEvent event) {
-        stripStar(event.getPlayer());
-    }
-
-    @EventHandler
-    public void respawn(PlayerRespawnEvent event) {
-        stripStar(event.getPlayer());
-    }
-
-    @EventHandler
-    public void worldChange(PlayerChangedWorldEvent event) {
-        stripStar(event.getPlayer());
-    }
-
-    /**
-     * VIP-Server kennen den Menue-Stern nicht mehr. Alte Items verschwinden beim naechsten Join,
-     * Respawn oder Weltwechsel und koennen damit nicht weitergegeben werden.
-     */
-    private void stripStar(Player player) {
-        if (worldId == null || worldId.isBlank()) return;
-        VipStarGuard.remove(player);
     }
 
     private final class Connector implements VipGui.Connector {

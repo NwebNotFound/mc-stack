@@ -1,9 +1,10 @@
 package de.mcstack.craftcore.vip;
 
 /**
- * Pure rules for the VIP menu nether star. On VIP servers the menu is opened with {@code /vw};
- * the star is no longer handed out and any leftover item is stripped from the inventory.
- * Until it disappears it must never be duplicated, dropped or sold.
+ * Pure rules for the VIP menu nether star. On VIP servers the menu is opened with {@code /vw} and
+ * the star is no longer handed out; since the VIP inventories are separate from every other
+ * server, a leftover item is left alone and only has to be non-duplicable, non-droppable and
+ * unsellable.
  *
  * <p>Kept free of Bukkit types so every rule is unit-testable; {@link VipStarGuard} applies
  * them to the inventory and death events.</p>
@@ -11,7 +12,7 @@ package de.mcstack.craftcore.vip;
 public final class VipStarRules {
     /**
      * PersistentDataContainer key of the menu star, namespace {@code craftcore}. Must not change:
-     * stale stars from older builds are only recognisable through this exact key.
+     * stars from older builds are only recognisable through this exact key.
      */
     public static final String KEY = "vip_menu_star";
 
@@ -62,19 +63,4 @@ public final class VipStarRules {
      * refuse the menu star with exactly one rule and message.
      */
     public static String refusal(boolean tagged) { return tagged ? UNSELLABLE_MESSAGE : null; }
-
-    /** Join, respawn and world change: any leftover star is removed instead of handed out. */
-    public static boolean stripOnJoin(boolean tagged) { return tagged; }
-
-    /**
-     * Inventory slots that still carry the tag and must be cleared. Pure so the sweep over every
-     * slot (storage, armour, offhand) is testable without a server.
-     */
-    public static java.util.List<Integer> stripSlots(boolean[] taggedBySlot) {
-        java.util.List<Integer> slots = new java.util.ArrayList<>();
-        for (int slot = 0; slot < taggedBySlot.length; slot++) {
-            if (stripOnJoin(taggedBySlot[slot])) slots.add(slot);
-        }
-        return slots;
-    }
 }
