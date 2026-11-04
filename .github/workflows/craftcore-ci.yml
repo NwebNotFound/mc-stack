@@ -22,3 +22,5 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check scripts for DB credentials on the command line
         run: python3 tools/check-db-credentials.py
+      - name: Run the scanner regression tests
+        run: python3 tools/test_check_db_credentials.py
