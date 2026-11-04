@@ -62,9 +62,8 @@ class VipStarRulesTest {
         }
     }
 
-    @Test void joinRemovesLeftoverMenuStars() {
-        assertTrue(VipStarRules.stripOnJoin(true), "alte Stern-Items werden beim Join entfernt");
-        assertFalse(VipStarRules.stripOnJoin(false), "normale Nethersterne bleiben im Inventar");
-        assertEquals("vip_menu_star", VipStarRules.KEY);
+    @Test void menuStarKeyStaysStable() {
+        assertEquals("vip_menu_star", VipStarRules.KEY,
+            "der PDC-Key darf sich nicht aendern, sonst erkennen die Schutzregeln alte Items nicht mehr");
     }
 }

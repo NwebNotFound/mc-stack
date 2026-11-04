@@ -26,12 +26,16 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
 /**
- * Keeps the nether star of a VIP world in the player's inventory: no drop, no move into a
+ * Keeps the nether star of the VIP menu in the player's inventory: no drop, no move into a
  * container, no death drop, no creative clone, no sale. The rules live in {@link VipStarRules} and
  * the refusal wording in {@link VipStarRules#UNSELLABLE_MESSAGE}.
+ *
+ * <p>The star itself is no longer handed out on VIP servers (the menu is {@code /vw}); the guards
+ * stay as a safety net for items an older build left behind, but nothing is ever stripped from an
+ * inventory.</p>
  */
 public final class VipStarGuard implements Listener {
-    /** {@code craftcore:vip_menu_star}, the same key {@link VipWorldMenu} stamps on the star. */
+    /** {@code craftcore:vip_menu_star} as stored by older builds. */
     public static final NamespacedKey KEY = Objects.requireNonNull(
         NamespacedKey.fromString("craftcore:" + VipStarRules.KEY), "ungueltiger Star-Key");
 
@@ -98,18 +102,6 @@ public final class VipStarGuard implements Listener {
         if (!(event.getRightClicked() instanceof ItemFrame)) return;
         if (!VipStarRules.mayTransfer(tagged(event.getPlayer().getInventory().getItemInMainHand()))) {
             event.setCancelled(true);
-        }
-    }
-
-    /**
-     * Clears leftover menu stars from a player's inventory. The menu is a command now, so the
-     * hotbar slot stays free and the item no longer blocks a slot forever.
-     */
-    public static void remove(Player player) {
-        ItemStack[] contents = player.getInventory().getContents();
-        for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack item = contents[slot];
-            if (VipStarRules.stripOnJoin(tagged(item))) player.getInventory().setItem(slot, null);
         }
     }
 }

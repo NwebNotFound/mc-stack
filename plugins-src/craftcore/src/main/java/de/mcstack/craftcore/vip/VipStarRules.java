@@ -1,17 +1,20 @@
 package de.mcstack.craftcore.vip;
 
 /**
- * Pure rules for the VIP menu nether star. The star only opens the manage screen; it must
- * never leave the player's inventory, be duplicated, or be sold.
+ * Pure rules for the VIP menu nether star. On VIP servers the menu is opened with {@code /vw} and
+ * the star is no longer handed out; since the VIP inventories are separate from every other
+ * server, a leftover item is left alone and only has to be non-duplicable, non-droppable and
+ * unsellable.
  *
  * <p>Kept free of Bukkit types so every rule is unit-testable; {@link VipStarGuard} applies
  * them to the inventory and death events.</p>
  */
 public final class VipStarRules {
-    /** PersistentDataContainer key of the menu star, namespace {@code craftcore}. */
+    /**
+     * PersistentDataContainer key of the menu star, namespace {@code craftcore}. Must not change:
+     * stars from older builds are only recognisable through this exact key.
+     */
     public static final String KEY = "vip_menu_star";
-    /** Hotbar slot that receives the star on join; it is never overwritten. */
-    public static final int HOTBAR_SLOT = 8;
 
     private VipStarRules() {}
 
@@ -60,7 +63,4 @@ public final class VipStarRules {
      * refuse the menu star with exactly one rule and message.
      */
     public static String refusal(boolean tagged) { return tagged ? UNSELLABLE_MESSAGE : null; }
-
-    /** Join: the menu is a command now, so any leftover star is removed instead of handed out. */
-    public static boolean stripOnJoin(boolean tagged) { return tagged; }
 }
