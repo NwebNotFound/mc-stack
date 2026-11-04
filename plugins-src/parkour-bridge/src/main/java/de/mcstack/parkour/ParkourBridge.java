@@ -149,14 +149,12 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
  }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void move(PlayerMoveEvent e) {
-  Location to=e.getTo(); if(to==null || e.getFrom().getY()==to.getY()) return;
-  Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId()); if(s==null) { peaks.remove(p.getUniqueId()); return; }
-  // Wasser am Fuss bzw. je nach Einstellung bei Beruehrung -> zurueck zum Checkpoint
-  Block feet=to.getBlock(); BlockData data=feet.getBlockData(); boolean water=feet.getType()==Material.WATER;
-  String waterMode=ParkourRules.waterMode(getConfig().getString("water-reset"));
-  boolean feetWater=water || (!"touch".equalsIgnoreCase(waterMode) && data instanceof Waterlogged logged && logged.isWaterlogged());
-  int waterLevel=water && data instanceof Levelled levelled ? levelled.getLevel() : 0;
-  if(ParkourRules.waterReset(waterMode,p.isInWater(),feetWater,waterLevel,to.getY()-feet.getY())) { reset(p,s,e); return; }
+  Location to=e.getTo(); if(to==null) return;
+  Player p=e.getPlayer(); ParkourSession s=ParkourSessionManager.getSession(p.getUniqueId());
+  if(s==null) { if(e.getFrom().getY()!=to.getY()) peaks.remove(p.getUniqueId()); return; }
+  // Wasser zuerst: Hineinlaufen in eine Stroemung ist meist eben, der Y-Wert aendert sich dabei nicht.
+  if(waterTriggered(p,to)) { reset(p,s,e); return; }
+  if(e.getFrom().getY()==to.getY()) return;
   // Optionales Ruecksetzen bei harten Landungen; weiche Bloecke und Schonzeit bleiben ausgenommen.
   boolean climbable=Tag.CLIMBABLE.isTagged(e.getFrom().getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.getBlock().getType())
    || Tag.CLIMBABLE.isTagged(e.getFrom().clone().add(0,1,0).getBlock().getType()) || Tag.CLIMBABLE.isTagged(to.clone().add(0,1,0).getBlock().getType());
@@ -167,6 +165,24 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   // Fallback: weit unter dem tiefsten Kurspunkt
   try { Location cp=checkpoint(s); Double floor=floorY(s.getParkourName()); if(cp!=null && floor!=null && cp.getWorld().equals(to.getWorld()) && to.getY()<floor) reset(p,s,e); }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Checkpoint konnte nicht gelesen werden",ex); }
+ }
+ /**
+  * Wasser am Fuss bzw. je nach Einstellung bei Beruehrung -> zurueck zum Checkpoint.
+  *
+  * <p>Laeuft vor dem Y-Early-Return in {@link #move}, damit auch das ebene Hineinlaufen in eine
+  * Stroemung zuruecksetzt. Kein Datenbankzugriff; im Beruehrungsmodus bleibt der Blockdaten-Zugriff
+  * aus, solange weder Wasser noch Kontakt vorliegt.</p>
+  */
+ boolean waterTriggered(Player p,Location to) {
+  String waterMode=ParkourRules.waterMode(getConfig().getString("water-reset"));
+  if("off".equals(waterMode)) return false;
+  boolean touching=p.isInWater();
+  Block feet=to.getBlock(); boolean water=feet.getType()==Material.WATER;
+  if(!water && "touch".equals(waterMode)) return ParkourRules.waterReset(waterMode,touching,false,0,to.getY()-feet.getY());
+  BlockData data=feet.getBlockData();
+  boolean feetWater=water || (!"touch".equals(waterMode) && data instanceof Waterlogged logged && logged.isWaterlogged());
+  int waterLevel=water && data instanceof Levelled levelled ? levelled.getLevel() : 0;
+  return ParkourRules.waterReset(waterMode,touching,feetWater,waterLevel,to.getY()-feet.getY());
  }
  @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=false) public void damage(EntityDamageEvent e) {
   if(!(e.getEntity() instanceof Player p)) return;

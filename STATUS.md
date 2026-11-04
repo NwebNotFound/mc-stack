@@ -863,6 +863,9 @@ Folgeauftrag aus dem Claude-Review. **Nichts gemergt, deployt oder neu gestartet
 - **Bewusst NICHT gemacht:** nicht gemergt, kein Force-Push (nur neue Commits), nichts deployt/neu gestartet, keine laufenden Container gestoppt/entfernt, kein `docker compose up/build`, keine Secrets ausgegeben, keine Daten geloescht, Nils' Arbeitsbaum nicht angefasst. `ops_backup_now`/`ops_players` bleiben pausiert (unveraendert). Kein Cache-Aufwaermen (Host-Schritt).
 - **Wegwerf-Artefakte (eigene):** Named Volumes `hermes-pb-test-repo`, `hermes-ops-test-repo`, `hermes-other-*`, `hermes-dsf-suite` plus ein kurzlebiger `python:3.12-slim`-Container. Alle Container waren `--rm` und sind beendet.
 
+## ParkourBridge Wasser-Reset bei ebener Bewegung (04.11.2026, Draft-PR, nicht deployt)
+
+`ParkourBridge.move()` prueft den Wasser-Reset jetzt vor dem Y-Early-Return. Damit loest auch das ebene Hineinlaufen in eine Stroemung den Reset zum letzten Checkpoint aus; vorher kehrte der Handler bei unveraendertem Y zuerst zurueck, sodass der Reset ausblieb. Die Pruefung bleibt guenstig: sie laeuft nur fuer Spieler mit laufender Parkour-Session, ohne Datenbankzugriff, und im Modus `water-reset: touch` ganz ohne Blockdaten-Zugriff, solange weder Wasser noch Kontakt vorliegt. Die Entscheidung steckt in `waterTriggered(Player, Location)`; `ParkourWaterResetTest` deckt Stroemung, Wasseroberflaeche, wassergefuellte Bloecke, trockenen Boden sowie `off` und `touch` ab. Build: 53 Tests, 0 Fehler, 0 uebersprungen.
+
 ## TODO
 
-- ParkourBridge: move() kehrt fruehzeitig zurueck, wenn sich der Y-Wert nicht aendert (Y-Early-Return). Beim ebenen Hineinlaufen in eine Wasserstroemung wird daher der Wasser-Reset nicht ausgeloest. Spaeter pruefen, ob die Wasserpruefung vor diesem Early-Return stattfinden sollte.
