@@ -63,8 +63,18 @@ class VipStarRulesTest {
     }
 
     @Test void joinRemovesLeftoverMenuStars() {
-        assertTrue(VipStarRules.stripOnJoin(true), "alte Stern-Items werden beim Join entfernt");
+        assertTrue(VipStarRules.stripOnJoin(true), "alte Stern-Items werden bei Join, Respawn und Weltwechsel entfernt");
         assertFalse(VipStarRules.stripOnJoin(false), "normale Nethersterne bleiben im Inventar");
-        assertEquals("vip_menu_star", VipStarRules.KEY);
+        assertEquals("vip_menu_star", VipStarRules.KEY, "der Key darf sich nicht aendern, sonst ueberleben alte Sterne");
+    }
+
+    @Test void stripSlotsCoversEveryInventoryArea() {
+        boolean[] tagged = new boolean[41];
+        tagged[8] = true;   // Hotbar-Slot, in dem frueher der Stern lag
+        tagged[39] = true;  // Ruestung
+        tagged[40] = true;  // Offhand
+        assertEquals(java.util.List.of(8, 39, 40), VipStarRules.stripSlots(tagged));
+        assertEquals(java.util.List.of(), VipStarRules.stripSlots(new boolean[41]), "ohne Stern wird nichts angefasst");
+        assertEquals(java.util.List.of(), VipStarRules.stripSlots(new boolean[0]));
     }
 }

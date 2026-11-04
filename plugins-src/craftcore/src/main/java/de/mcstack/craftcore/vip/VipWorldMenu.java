@@ -10,15 +10,17 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import org.bukkit.event.block.Action;
-import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * In-world menu on a VIP slot: {@code /vw} or the nether star opens the manage screen
- * of the world this server belongs to. Invite and kick work from inside the world.
+ * In-world menu on a VIP slot: {@code /vw} opens the manage screen of the world this server
+ * belongs to. Invite and kick work from inside the world.
+ *
+ * <p>There is no menu star on VIP servers. Leftover stars from older builds are stripped on
+ * join, respawn and world change, so they cannot be carried or synced anywhere.</p>
  */
 public final class VipWorldMenu implements CommandExecutor, Listener {
     private final JavaPlugin plugin;
@@ -87,17 +89,26 @@ public final class VipWorldMenu implements CommandExecutor, Listener {
 
     @EventHandler
     public void join(PlayerJoinEvent event) {
-        if (worldId == null || worldId.isBlank()) return;
-        VipStarGuard.remove(event.getPlayer());
+        stripStar(event.getPlayer());
     }
 
     @EventHandler
-    public void use(PlayerInteractEvent event) {
+    public void respawn(PlayerRespawnEvent event) {
+        stripStar(event.getPlayer());
+    }
+
+    @EventHandler
+    public void worldChange(PlayerChangedWorldEvent event) {
+        stripStar(event.getPlayer());
+    }
+
+    /**
+     * VIP-Server kennen den Menue-Stern nicht mehr. Alte Items verschwinden beim naechsten Join,
+     * Respawn oder Weltwechsel und koennen damit nicht weitergegeben werden.
+     */
+    private void stripStar(Player player) {
         if (worldId == null || worldId.isBlank()) return;
-        if (event.getHand() != EquipmentSlot.HAND || !VipStarGuard.tagged(event.getItem())) return;
-        if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
-        event.setCancelled(true);
-        gui.openWorld(event.getPlayer(), worldId);
+        VipStarGuard.remove(player);
     }
 
     private final class Connector implements VipGui.Connector {

@@ -1,17 +1,19 @@
 package de.mcstack.craftcore.vip;
 
 /**
- * Pure rules for the VIP menu nether star. The star only opens the manage screen; it must
- * never leave the player's inventory, be duplicated, or be sold.
+ * Pure rules for the VIP menu nether star. On VIP servers the menu is opened with {@code /vw};
+ * the star is no longer handed out and any leftover item is stripped from the inventory.
+ * Until it disappears it must never be duplicated, dropped or sold.
  *
  * <p>Kept free of Bukkit types so every rule is unit-testable; {@link VipStarGuard} applies
  * them to the inventory and death events.</p>
  */
 public final class VipStarRules {
-    /** PersistentDataContainer key of the menu star, namespace {@code craftcore}. */
+    /**
+     * PersistentDataContainer key of the menu star, namespace {@code craftcore}. Must not change:
+     * stale stars from older builds are only recognisable through this exact key.
+     */
     public static final String KEY = "vip_menu_star";
-    /** Hotbar slot that receives the star on join; it is never overwritten. */
-    public static final int HOTBAR_SLOT = 8;
 
     private VipStarRules() {}
 
@@ -61,6 +63,18 @@ public final class VipStarRules {
      */
     public static String refusal(boolean tagged) { return tagged ? UNSELLABLE_MESSAGE : null; }
 
-    /** Join: the menu is a command now, so any leftover star is removed instead of handed out. */
+    /** Join, respawn and world change: any leftover star is removed instead of handed out. */
     public static boolean stripOnJoin(boolean tagged) { return tagged; }
+
+    /**
+     * Inventory slots that still carry the tag and must be cleared. Pure so the sweep over every
+     * slot (storage, armour, offhand) is testable without a server.
+     */
+    public static java.util.List<Integer> stripSlots(boolean[] taggedBySlot) {
+        java.util.List<Integer> slots = new java.util.ArrayList<>();
+        for (int slot = 0; slot < taggedBySlot.length; slot++) {
+            if (stripOnJoin(taggedBySlot[slot])) slots.add(slot);
+        }
+        return slots;
+    }
 }
