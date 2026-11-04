@@ -1,5 +1,9 @@
 # MC Stack – Status
 
+## Gacha-Bauplan (04.11.2026)
+
+`docs/gacha-spec.md` beschreibt den vorgeschlagenen, noch nicht von Nils freigegebenen Ausbau einschließlich bestehender Satchels, Web-Relay, D1-Budget und offener Crash-/Inventarrisiken. Nur Dokumentation; kein Code, keine Migration, kein Deploy und kein Neustart.
+
 Stand: 28.10.2026. Projekt `C:\Users\nilsw\mc-stack`.
 
 ## Betrieb
