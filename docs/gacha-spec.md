@@ -4,7 +4,9 @@ Status: **draft, not approved or implemented**. This is a proposed contract, not
 
 ### Changes 04.11.2026
 
-Added on Nils's feedback to this PR: **§5.1** item value score (`Wert`), tier fit and ability gate; **§5.2** satchel expected value, balance bar and publish warnings with example numbers for the five Beutel; **§6.1** ability limits (uses/charges, cooldown, depletion, durability, charge storage in the PDC); plus the matching schema fields in §2 and the new test cases in §8. Documentation only — no code, migration, deploy or restart in this PR. All numbers are proposals for approval and are computed with the formulas in §5.1/§5.2, not measured production values.
+**Rev 1** (first review round). Added on Nils's feedback to this PR: **§5.1** item value score (`Wert`), tier fit and ability gate; **§5.2** satchel expected value, balance bar and publish warnings with example numbers for the five Beutel; **§6.1** ability limits (uses/charges, cooldown, depletion, durability, charge storage in the PDC); plus the matching schema fields in §2 and the new test cases in §8.
+
+**Rev 2** (addresses the review on this PR). Abilities were almost invisible in `W`: `A` is rescaled from `(P/4)·K·L` (≤ 25 WP) to `P × 6 × K × L` (2–600 WP), so the ability term now has the same order of magnitude as `B` (cap 480 WP). Every worked example, the tier `W` bands (now derived as raw `B+E+A` × `T`) and the §5.2 numbers were recomputed, and the three ability Beutel got new example prices (Baumeister 200 → 210, Wochenbanner 350 → 400, Ausrüstung 450 → 550 CP) so all five stay in green; the Rohstoffe and Baumeister pools carry no abilities, so their average `W` is unchanged. The worked examples were re-checked against the ability gate (row 1 is an `R` item now, plus one explicit gate violation, one over-tier and one under-band case). The ability → minimum tier mapping is its own table instead of an offset column, `EV` is labelled in WP instead of CP, the defaults cover a full registry of all 25 known abilities (the "list still missing" note is obsolete), and question 1 is gone. Documentation only — no code, migration, deploy or restart in this PR. All numbers are proposals for approval and are computed with the formulas in §5.1/§5.2, not measured production values.
 
 ## 1. Decisions, existing system and flow
 
@@ -121,33 +123,51 @@ The editor must answer two questions before anything is published: does an item 
 |---|---|---|
 | `B` base value | Reviewed market table (`config.yml` `market.min-price`/`max-price`) × quantity plus the plain vanilla value of the base item. For equipment `B` is capped at 480 WP (the price of three diamonds), so an expensive material cannot carry an item alone and the value must come from stats or the ability; resource bundles use the market price uncapped, because there the material is the reward. | iron ingot ≈5 CP, diamond ≈160, netherite ingot ≈3200; iron pickaxe `B` = 15, diamond pickaxe 480, netherite boots capped at 480 instead of ≈3200 |
 | `E` enchantments/stats | Reviewed per-enchantment weight × level: Efficiency 8, Fortune 20, Mending 25, Silk Touch 30, Protection 12, Sharpness 12, Unbreaking 10, Looting 18. Levels above the vanilla maximum count ×0.5 and only where the review allows it. Allowlisted attributes get fixed weights (+1 attack damage 4, +1 armour 3, +10% speed 5). Aggregate and combination caps from §5 bound `E`. | Efficiency II = 16, Protection IV = 48, Silk Touch = 30 |
-| `A` abilities | `A = (P / 4) × K × L` per ability slot. `P` reviewed power rating 1..100 from the ability registry (never an editor field); `K` cooldown factor: ≤5 s 1.00, ≤30 s 0.85, ≤2 min 0.70, ≤10 min 0.55, longer 0.45; `L` lifetime factor: unlimited 1.00, limited `min(0.85, 0.25 + 0.12 × uses)` (3 uses 0.61, 5 uses 0.85). | Erzspürer 4 uses/60 s = 5.8; Enterhaken unlimited/20 s = 10.6; Heimkehr 3 uses/10 min = 6.7; Flucht aus den Minen 3 uses = 10.7 |
+| `A` abilities | `A = P × 6 × K × L` per ability slot, integer with the division floored. `P` reviewed power rating 1..100 from the ability registry in §6.1 (never an editor field); `K` cooldown factor in percent: ≤5 s 100, ≤30 s 85, ≤2 min 70, ≤10 min 55, longer 45; `L` lifetime factor in percent: unlimited 100, limited `min(85, 25 + 12 × uses)` (3 uses 61, 5 uses 85). | Erzspürer 4 uses/60 s (`P` 35) = 89; Enterhaken unlimited/20 s (`P` 30) = 153; Heimkehr 3 uses/10 min (`P` 40) = 80; Flucht aus den Minen 3 uses (`P` 45) = 90 |
 | `T` rarity factor | `C` 1.00, `UC` 1.15, `R` 1.35, `S` 1.65, `SR` 2.10, `SSR` 2.80, `SSR+` 3.60. Prices rarity and prestige, not raw power: `T` makes tiers comparable inside one pool and feeds §5.2, so a high tier never needs inflated stats to feel valuable. | SSR `T` 2.80 |
 
-Tier bands (`W`, checked against the item's own tier) and the minimum tier per ability:
+Why the constant `6`: `P` spans 1..100, so `P × 6` spans 6..600 and a legal ability lands between 2 and 600 WP. `B` is capped at 480 WP for equipment and `E` typically stays under 120, so at the top end the ability is the largest single term (1.25 × the `B` cap) without making material and stats irrelevant; a median ability (`P` 25, 30 s cooldown, unlimited) is 127 WP, about a quarter of `B` max and roughly four times the `B+E` of an iron pickaxe with Efficiency II. The old `(P/4)·K·L` topped out at 25 WP (5 % of `B` max), which hid the very thing a player pulls for: the unlimited grappling hook moved the SR diamond pickaxe example by 22 of 1093 WP (2 %); with the new constant it is 321 of 1392 WP (23 %) and decides the tier verdict. Raising the constant further (e.g. 10) would let a single ability outscore a full netherite kit and flatten the material and stat terms, so `A` stays below `1.5 × B` max.
 
-| Tier | `W` band | Ability gate (minimum tier) |
-|---|---|---|
-| `C` | 10–160 | `double_jump`, `magnet`, `miners_light` ≥ `UC` |
-| `UC` | 25–320 | `grapple`, `lumberjack`, `ore_sense` ≥ `R` |
-| `R` | 60–600 | `mine_escape`, `homeward` ≥ `SR` |
-| `S` | 150–1000 | |
-| `SR` | 300–1700 | |
-| `SSR` | 600–3000 | |
-| `SSR+` | 1200–6000 | |
+Tier bands (`W`, checked against the item's own tier). They are defined once in raw pre-rarity points (`B+E+A`) and multiplied by `T`, so they scale with rarity instead of drifting whenever a tier is added:
 
-Bands overlap on purpose: a strong `C` gear item can legitimately be worth more than weak `SR` resource bundles, so the band is a guardrail against an item that is out of its league, not a strict partition. Over-band = `zu stark` and blocks publication; under-band = `zu schwach` and warns; an ability below its gate blocks publication even when `W` is in band. The bands are versioned review policy like the anti-OP limits, not editable in the form.
+| Tier | Raw band `B+E+A` | `W` band (`T` × raw, rounded) |
+|---|---:|---:|
+| `C` | 10–260 | 10–260 |
+| `UC` | 25–420 | 30–480 |
+| `R` | 55–670 | 75–900 |
+| `S` | 110–910 | 180–1500 |
+| `SR` | 160–1100 | 340–2300 |
+| `SSR` | 250–1210 | 700–3400 |
+| `SSR+` | 420–1335 | 1500–4800 |
 
-Worked examples (server formula, integer arithmetic rounded for display):
+The raw ceiling rises towards the largest legal composition (`B` 480 + `E` 200 + `A` 600 = 1280 raw), so a higher tier may use more of the same budget. For `SSR+` the ceiling (1335 raw = 4800 `W`) sits above that maximum, so the top tier can never be flagged `zu stark`; there the anti-OP limits and the value concentration check are the guardrail.
+
+Minimum tier per ability (gate lookup only — the registry in §6.1 is authoritative):
+
+| Minimum tier | Abilities |
+|---|---|
+| `UC` | `double_jump`, `magnet`, `miners_light`, `climb_claws`, `glide_hang`, `path_runner`, `silent_step`, `deep_breath`, `glow_arrow`, `line_builder`, `fish_luck`, `weather_frog` |
+| `R` | `grapple`, `lumberjack`, `ore_sense`, `harvest_sickle`, `smelt_strike`, `self_repair`, `smoke_bomb` |
+| `S` | `track_sense` |
+| `SR` | `mine_escape`, `homeward`, `recall_death`, `lava_reflex` |
+| `SSR` | `soul_pouch` |
+
+An ability may only appear on an item of its minimum tier or higher; the gate is checked per slot on save and publish. Bands overlap on purpose: a strong `C` gear item can legitimately be worth more than weak `SR` resource bundles, so the band is a guardrail against an item that is out of its league, not a strict partition. Over-band = `zu stark` and blocks publication; under-band = `zu schwach` and warns; an ability below its gate blocks publication even when `W` is in band. The bands are versioned review policy like the anti-OP limits, not editable in the form.
+
+Worked examples (server formula, `A` floored by integer division, `W = T × (B+E+A)` rounded to the nearest integer):
 
 | Item | `B` | `E` | `A` | `W` | Band | Verdict |
 |---|---:|---:|---:|---:|---|---|
-| `C` iron pickaxe, Efficiency II, Erzspürer 4 uses | 15 | 16 | 5.8 | 37 | C 10–160 | `passt` |
-| `SR` diamond pickaxe, Silk Touch, Enterhaken unlimited | 480 | 30 | 10.6 | 1093 | SR 300–1700 | `passt` |
-| `SSR` netherite boots, Protection IV, Heimkehr 3 uses | 480 | 48 | 6.7 | 1497 | SSR 600–3000 | `passt` |
-| `C` wooden pickaxe, Erzspürer 4 uses | 2 | 0 | 5.8 | 8 | C 10–160 | `zu schwach` + gate `Erzspürer ≥ R` → blocked |
+| `R` iron pickaxe, Efficiency II, Erzspürer 4 uses | 15 | 16 | 89 | 162 | R 75–900 | `passt` |
+| `SR` diamond pickaxe, Silk Touch, Enterhaken unlimited | 480 | 30 | 153 | 1392 | SR 340–2300 | `passt` |
+| `SSR` netherite boots, Protection IV, Heimkehr 3 uses | 480 | 48 | 80 | 1702 | SSR 700–3400 | `passt` |
+| `C` wooden pickaxe, Erzspürer 4 uses | 2 | 0 | 89 | 91 | C 10–260 | band in range, gate `Erzspürer ≥ R` → blocked `ABILITY_TIER_GATE` |
+| `UC` netherite sword, Sharpness V, Enterhaken unlimited | 480 | 60 | 153 | 797 | UC 30–480 | `zu stark` `ITEM_OVER_TIER` |
+| `C` wooden pickaxe, no ability | 2 | 0 | 0 | 2 | C 10–260 | `zu schwach` |
 
-Editor display: a value badge on each item card (`Wert 37 WP`), a tier-fit chip (`passt`, `zu stark`, `zu schwach`), a breakdown popover with `B`, `E`, `A`, `T` and the ability term including its `P`, `K`, `L` and chosen `uses`/cooldown, the delta against the previous version, and the same number in the live tooltip. Warning colours alone never block: blocking happens server-side on save and publish with a stable error code (`ITEM_OVER_TIER`, `ABILITY_TIER_GATE`), and preview is not authoritative.
+Row 1 is consistent with its own gate now (`Erzspürer` needs `R`): `W` 162 sits in the `R` band. The same iron pickaxe without an ability scores 42 and is `zu schwach`, so the ability is what carries the verdict — the intended effect of the rescale. Row 4 shows the gate working independently of the band: `W` 91 is inside the `C` band, but a `C` item may not carry `Erzspürer`, so publication is blocked anyway. Row 5 is the anti-OP case: a cheap-rarity label on a netherite blade with a strong enchant and ability overshoots `UC` by 317 WP.
+
+Editor display: a value badge on each item card (`Wert 162 WP`), a tier-fit chip (`passt`, `zu stark`, `zu schwach`), a breakdown popover with `B`, `E`, `A`, `T` and the ability term including its `P`, `K`, `L` and chosen `uses`/cooldown, the delta against the previous version, and the same number in the live tooltip. Warning colours alone never block: blocking happens server-side on save and publish with a stable error code (`ITEM_OVER_TIER`, `ABILITY_TIER_GATE`), and preview is not authoritative.
 
 Satchel editor: choose permanent/daily/weekly, name, integer CP cost; per-theme seven tier probabilities in integer ppm totalling exactly 100%, positive integer per-item weights, quantity and versioned item reference. Reject missing nonzero-tier items, overflow, malformed dates, overlaps, mismatched rarity or invalid items. Preview exact odds and per-item odds. Simulate 100/1,000/10,000 independent pulls locally with clearly labelled non-production randomness and no CP/item effects; show distribution and expectation, never imply a guarantee. Only the plugin publishing the whole immutable version changes live pools. Scheduled daily rotations and weekly starts/ends show timezone explicitly; no auto-default to an unspecified zone. The editor also shows the expected value, balance bar and publish warnings of §5.2 for the version being edited.
 
@@ -177,19 +197,29 @@ Further publish checks (all evaluated server-side on publish, warnings cannot be
 | Free or negative price | `cost_cents` ≤ 0 | block `INVALID_PRICE`: nothing is free, no starter or bonus pulls |
 | Empty positive tier, ppm ≠ 1,000,000, weight ≤ 0 | — | already rejected by the §5 satchel editor |
 
-Example numbers for the five planned Beutel — **proposal, not approved prices or odds**; tier columns are percent per pull, `C`/`UC`/`R`/`S`/`SR`/`SSR`/`SSR+`:
+Example numbers for the five planned Beutel — **proposal, not approved prices or odds**; tier columns are percent per pull, `C`/`UC`/`R`/`S`/`SR`/`SSR`/`SSR+`, `EV` in WP:
 
-| Beutel | Cost CP | Tier split % | `EV`/pull CP | `EV`/cost | SSR+ | Verdict |
+| Beutel | Cost CP | Tier split % | `EV`/pull WP | `EV`/cost | SSR+ | Verdict |
 |---|---:|---|---:|---:|---|---|
 | Rohstoffe | 150 | 42.0 / 30.0 / 19.0 / 7.0 / 1.7 / 0.3 / 0 | 115.6 | 0.77 | – | green `passt` |
-| Baumeister (daily) | 200 | 39.0 / 30.0 / 20.0 / 8.5 / 2.0 / 0.35 / 0.15 | 167.3 | 0.84 | 1 in 667 | green, upper edge |
-| Wochenbanner (Ninja) | 350 | 35.0 / 28.0 / 20.0 / 10.0 / 4.5 / 2.0 / 0.5 | 245.8 | 0.70 | 1 in 200 | green `passt` |
-| Ausrüstung | 450 | 40.0 / 28.0 / 18.0 / 9.0 / 3.5 / 1.2 / 0.3 | 360.8 | 0.80 | 1 in 333 | green `passt` |
-| Abenteuer | 500 | 42.0 / 30.0 / 16.0 / 8.0 / 2.8 / 1.0 / 0.2 | 398.8 | 0.80 | 1 in 500 | green `passt` |
+| Baumeister (daily) | 210 | 39.0 / 30.0 / 20.0 / 8.5 / 2.0 / 0.35 / 0.15 | 171.1 | 0.82 | 1 in 667 | green, upper edge |
+| Wochenbanner (Ninja) | 400 | 35.0 / 28.0 / 20.0 / 10.0 / 4.5 / 2.0 / 0.5 | 300.6 | 0.75 | 1 in 200 | green `passt` |
+| Ausrüstung | 550 | 40.0 / 28.0 / 18.0 / 9.0 / 3.5 / 1.2 / 0.3 | 434.6 | 0.79 | 1 in 333 | green `passt` |
+| Abenteuer | 500 | 42.0 / 30.0 / 16.0 / 8.0 / 2.8 / 1.0 / 0.2 | 343.6 | 0.69 | 1 in 500 | green `passt` |
 
-Equivalent 10-pull expectations: 1156 / 1673 / 2458 / 3608 / 3988 CP before rounding, and the per-tier average `W` used above (Rohstoffe 40/90/180/340/620/1100, Ausrüstung 120/250/450/800/1400/2400) is what the pool editor must actually reproduce. Every Beutel keeps a positive sink of at least 16% of spend, and the weekly banner is the only one at the 0.5% SSR+ ceiling; raising it, or cutting any cost without cutting the pool, moves the bar out of green and the publish is flagged.
+The per-tier average `W` behind those numbers is what the pool editor must actually reproduce (`–` = tier not in that pool):
 
-Display: badge per item, tier chip, `EV` per pull and per 10, balance bar with the five zones and the hard blocks named inline (`EV_TOO_HIGH`, `SSR_PLUS_TOO_COMMON`, `VALUE_CONCENTRATION`), the SSR+/SSR "1 in N" lines, and the concentration table of the top five EV contributors. All of it is a balancing aid; the editor never sells, never converts to CP and never changes the published version. Only the plugin publishing the whole immutable version changes live pools; preview is not authoritative.
+| Beutel | `C` | `UC` | `R` | `S` | `SR` | `SSR` | `SSR+` |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Rohstoffe | 40 | 90 | 180 | 340 | 620 | 1100 | – |
+| Baumeister | 54 | 122 | 243 | 459 | 837 | 1485 | 2600 |
+| Wochenbanner | 60 | 180 | 340 | 620 | 1050 | 1800 | 3200 |
+| Ausrüstung | 120 | 332 | 564 | 977 | 1654 | 2781 | 4300 |
+| Abenteuer | 50 | 300 | 520 | 900 | 1550 | 2600 | 4000 |
+
+`EV` is `Σ tier share × average W` over all seven tiers, and every average sits inside its own §5.1 band, so a pool entry that reproduces these averages cannot be an out-of-league item. The resource and building pools carry no abilities, so their `W` and `EV` are unchanged by the `A` rescale; the three ability pools rise because `A` now counts, and their example prices rose with them (Baumeister 200 → 210, Wochenbanner 350 → 400, Ausrüstung 450 → 550 CP; no price went down). Equivalent 10-pull expectations: 1156 / 1711 / 3007 / 4346 / 3436 WP. Every Beutel keeps a positive sink of at least 18.5 % of its spend (Baumeister, the tightest), and the weekly banner remains the only one at the 0.5 % SSR+ ceiling. Raising a tier share, adding ability items to a pool or cutting any cost without cutting the pool moves the bar out of green and the publish is flagged.
+
+Display: badge per item, tier chip, `EV` per pull and per 10 both in WP, balance bar with the five zones and the hard blocks named inline (`EV_TOO_HIGH`, `SSR_PLUS_TOO_COMMON`, `VALUE_CONCENTRATION`), the SSR+/SSR "1 in N" lines, and the concentration table of the top five EV contributors. All of it is a balancing aid; the editor never sells, never converts to CP and never changes the published version. Only the plugin publishing the whole immutable version changes live pools; preview is not authoritative.
 
 `Im Spiel testen (an mich)` creates a separately audited, admin-only, rate-limited **test-mode** request. The plugin rechecks the admin, applies the same validation, and offers an ephemeral, visibly tagged test item only in an isolated non-economic test context: no CP, no real reward/delivery, trading, storage, dropping, market, other-player transfer, or permanent world changes. No test item may persist into production inventory. If that isolation and safe cleanup cannot be proven, keep the button disabled and provide tooltip preview only; do not silently gift items. Publication is a separate explicit action. Ability cooldown/test effects cannot alter real claims or resource economy.
 
@@ -212,20 +242,50 @@ Charges are item state, never a server or client counter:
 - Charges ride on the item, so duplicating an item duplicates its charges: the tag and transfer protection of §3 is a precondition for publishing any charge-limited item. Charges are not in the database, a lost item loses its charges, and there is no restore path.
 - When the last charge is spent: `item_breaks` destroys the item and announces it once, `ability_lost` removes the ability stamp and lore line and leaves the plain item (default for tools), `stays_normal` leaves the item without any stamp. The chosen variant is part of the immutable version and is shown in the editor and the reveal before the pull is confirmed.
 
-Defaults per ability (proposal, review required; the editor may choose `uses` inside the registry range, widening the range or changing `on_depletion` needs a new ability schema version in its own PR):
+Registry of all 25 abilities (proposal, review required). `P`, `on_depletion`, min tier and wave are reviewed registry policy and read-only in the editor; the editor may pick `uses` inside the stated range, and widening a range or changing `on_depletion` needs a new ability schema version in its own PR. Wave 1 is the eight abilities already registered and testable; waves 2 and 3 are documented here so the editor, the value model and the gate cover them, but they stay non-selectable until their own handler PR passes review.
 
-| Ability | `uses` | Cooldown | `on_depletion` | Durability | Min tier | Rationale |
-|---|---|---|---:|---|---|---|
-| `grapple` Enterhaken | unlimited | 20 s | – | yes | `R` | movement tool, the cooldown is the limiter |
-| `mine_escape` Flucht aus den Minen | 3 | 10 min | `ability_lost` | no | `SR` | get-out card; charges are the real cap, the boots stay usable |
-| `miners_light` Grubenlicht | unlimited | none | – | no | `UC` | no competitive advantage; the editor flags "no limit" for explicit approval |
-| `double_jump` Doppelsprung | unlimited | 10 s | – | yes | `UC` | mobility QoL, durability caps the grind |
-| `lumberjack` Holzfäller | unlimited | 2 s per tree | – | yes | `R` | QoL tool, the axe's own durability is the natural cost |
-| `magnet` Magnet | unlimited | 5 s | – | yes | `UC` | small bounded radius, low power |
-| `ore_sense` Erzspürer | 4 (range 3–5) | 60 s | `ability_lost` | no | `R` | strong information ability, therefore charge-limited; picked item stays a normal pickaxe |
-| `homeward` Heimkehr | 3 | 10 min | `ability_lost` | no | `SR` | recall must never be unlimited |
+| `ability_id` | Ability | Effect (one line) | `P` | `uses` | Cooldown | `on_depletion` | Durability | Min tier | Wave |
+|---|---|---|---:|---|---:|---|---|---|---|
+| `grapple` | Enterhaken | pull the player toward a traced block | 30 | unlimited | 20 s | – | yes | `R` | 1 |
+| `double_jump` | Doppelsprung | one extra jump before landing | 18 | unlimited | 10 s | – | yes | `UC` | 1 |
+| `climb_claws` | Kletterkrallen | climb or vault low walls while held, bounded stamina | 20 | unlimited | 5 s | – | yes | `UC` | 2 |
+| `glide_hang` | Gleitumhang | slow, steered glide while sneaking in open air | 24 | unlimited | 3 s | – | yes | `UC` | 2 |
+| `path_runner` | Wegläufer | speed bonus while walking on player-made paths | 14 | unlimited | 15 s | – | yes | `UC` | 3 |
+| `silent_step` | Leiser Schritt | no step sound, smaller mob detection radius | 10 | unlimited | 30 s | – | yes | `UC` | 3 |
+| `mine_escape` | Flucht aus den Minen | still sneak for 5 s, teleport to a safe surface | 45 | 3 | 10 min | `ability_lost` | no | `SR` | 1 |
+| `homeward` | Heimkehr | right-click recall to the approved home point | 40 | 3 | 10 min | `ability_lost` | no | `SR` | 1 |
+| `recall_death` | Rückruf | teleport back to your last death point | 55 | 2 (1–2) | 30 min | `ability_lost` | no | `SR` | 3 |
+| `soul_pouch` | Seelentasche | one death without item loss, contents stay | 50 | 1 | – | `ability_lost` | no | `SSR` | 3 |
+| `lava_reflex` | Lava-Reflex | pull back to the last safe block instead of dying in lava | 45 | 3 | 10 min | `ability_lost` | no | `SR` | 2 |
+| `deep_breath` | Tiefenatmer | longer underwater breath, faster swimming | 22 | unlimited | 5 min | – | no | `UC` | 3 |
+| `miners_light` | Grubenlicht | worn helmet lights the area for its wearer | 8 | unlimited | none | – | no | `UC` | 1 |
+| `ore_sense` | Erzspürer | coarse direction and count of nearby ore | 35 | 4 (3–5) | 60 s | `ability_lost` | no | `R` | 1 |
+| `track_sense` | Spurensucher | shows the trail back to where you came from | 20 | 6 (4–8) | 60 s | `ability_lost` | no | `S` | 2 |
+| `weather_frog` | Wetterfrosch | short forecast of incoming weather | 6 | unlimited | 60 s | – | no | `UC` | 3 |
+| `glow_arrow` | Leuchtpfeile | arrows leave a temporary light where they land | 14 | unlimited | 10 s | – | yes | `UC` | 3 |
+| `lumberjack` | Holzfäller | fell connected natural logs, at most 16 | 22 | unlimited | 2 s | – | yes | `R` | 1 |
+| `harvest_sickle` | Erntesichel | 3×3 crop harvest with replant | 18 | unlimited | 2 s | – | yes | `R` | 2 |
+| `smelt_strike` | Schmelzhauer | mined ore drops already smelted | 16 | unlimited | 1 s | – | yes | `R` | 2 |
+| `magnet` | Magnet | attract nearby drops within 3 blocks | 12 | unlimited | 5 s | – | yes | `UC` | 1 |
+| `line_builder` | Linienbauer | place a straight line of blocks from the inventory | 10 | unlimited | 5 s | – | yes | `UC` | 3 |
+| `self_repair` | Selbstflicker | repairs the item with the holder's XP | 24 | unlimited | 60 s | – | no (repairs) | `R` | 3 |
+| `fish_luck` | Fischglück | better fishing loot rolls | 10 | unlimited | 60 s | – | yes | `UC` | 3 |
+| `smoke_bomb` | Rauchbombe | PvE-only smoke that breaks mob targeting | 20 | 3 (2–4) | 60 s | `ability_lost` | no | `R` | 3 |
 
-Rule for the wave: strong utility (information, escape, recall — `ore_sense`, `mine_escape`, `homeward`) is charge-limited; convenience and mobility use cooldown plus durability; only defensive or cosmetic light (`miners_light`) may be unlimited without cooldown, and even that needs explicit approval. These limits feed the value formula in §5.1, so editing `uses` from 5 to 3 visibly lowers `W` and the satchel `EV`, and changing a limit after publication requires a new item version — no in-place edit of a live item.
+Nothing in the registry is OP by design: everything that changes location, information or death outcome is charge-limited (`ore_sense`, `track_sense`, `mine_escape`, `homeward`, `recall_death`, `soul_pouch`, `lava_reflex`), convenience and mobility are capped by cooldown plus the item's own durability, and the two life/combat entries stay small (`fish_luck` only touches fishing loot rolls, `smoke_bomb` is explicitly PvE-only and has no effect on players in a PvP context).
+
+Special safety concerns for the new entries (each must be proven in its handler PR before enablement, otherwise the ability stays disabled):
+
+- `soul_pouch` Seelentasche changes death drops, so it must interoperate with `keepInventory`, other plugins' death handlers, claims and inventory overflow: exactly one save per death, no refund after the death already paid out, no duplication with satchel leftovers; if the interaction cannot be proven, stay disabled.
+- `recall_death` Rückruf: a death point is not automatically safe or reachable — require a safe-spot check, same world only, no combat/PvP/claim bypass, and a bounded lifetime for the stored point (proposal 30 min, relog only, no cross-server).
+- `lava_reflex` Lava-Reflex: it fires in the tick before the fatal damage only. It may never undo a death that already happened, never grant an invulnerability window, and spends no charge when no safe block exists.
+- `line_builder` Linienbauer: blocks come only from the player's own inventory, one permission/claim check per block, bounded length, no duplication on cancel, disconnect or server stop.
+- `self_repair` Selbstflicker: XP goes through the normal cost path, it never repairs other items or the ability stamp, it cannot stack with Mending into free repair, and its cooldown prevents XP-farming an unlimited tool.
+- `harvest_sickle` Erntesichel: replants only the same crop, respects block provenance and claims, no seed duplication, bounded to 3×3.
+- `smoke_bomb` Rauchbombe is PvE-only: no effect on a player target in any PvP context and no combat-log or escape abuse.
+- `track_sense` Spurensucher is information, so it is charge-limited and must not reveal other players' bases, claims or offline activity; trail length is bounded.
+
+Rule for the waves: strong utility (information, escape, recall — `ore_sense`, `track_sense`, `mine_escape`, `homeward`, `recall_death`, `soul_pouch`, `lava_reflex`) is charge-limited; convenience and mobility use cooldown plus durability; only defensive or cosmetic light (`miners_light`) may be unlimited without cooldown, and even that needs explicit approval. These limits feed the value formula in §5.1, so editing `uses` from 5 to 3 visibly lowers `W` and the satchel `EV`, and changing a limit after publication requires a new item version — no in-place edit of a live item.
 
 | Wave 1 | Trigger / mechanics | Initial bounds and safety gates (proposals) |
 |---|---|---|
@@ -238,7 +298,7 @@ Rule for the wave: strong utility (information, escape, recall — `ore_sense`, 
 | `ore_sense` Erzspürer | Right-click to sense nearby ore | ≤8 blocks, 60 s cooldown, only loaded chunks and authorized area; coarse direction/count, no exact wallhack coordinates or protected-area leakage; bounded scan, configurable ore allowlist |
 | `homeward` Heimkehr | Right-click, then normal warm-up | Reuse existing approved home teleport target, delay, cancellation, cost and safety/claim checks; 10 min cooldown; no free bypass of existing costs, combat or dimensions |
 
-These numerical caps are conservative implementation proposals, not approved balance. The supplied `McItemEditor.html` references `{{abilities}}` and says 25, but its static markup does **not** contain the 25 names. Framework supports future entries without reserving/inventing the other 17; request the actual list before designing their individual mechanics. Only the eight registered and tested abilities may be selectable.
+These numerical caps are conservative implementation proposals, not approved balance. The full set of 25 abilities is known (mockup session 03/04.11.2026) and is registered in §6.1 with a stable `ability_id`, so the editor, the gate and the value model already cover all of them. Only the eight wave-1 abilities are registered handlers, testable today, and selectable in the editor; the wave 2/3 entries stay non-selectable until their own handler PR documents mechanics and bounds like the wave-1 table above and passes the safety review. `McItemEditor.html` references `{{abilities}}` dynamically and does not contain the names, so the registry — not the mockup — is the source of truth for IDs, defaults and tiers.
 
 ## 7. In-game UX and announcement
 
@@ -254,17 +314,16 @@ All implementation requires this design's approval first; each PR reviewed and C
 4. **Worker/D1:** additive migrations, auth/CSRF/mandatory Turnstile, rate buckets, indexed queue/status/ack and catalog, liveness/expiry semantics, measured D1 cost and flag. Tests: authorization, CSRF, Turnstile failure, no cross-user read, concurrency, stale prices, duplicate and out-of-order ack, query plans + row metrics. Acceptance: bounded costs under budget and no D1 monetary authority.
 5. **Website player UX:** catalog, odds, 1/10 consent, bounded polling, accessibility, reveal/sort/SSR+ and recovery. Tests: offline/error/pending, repeated clicks/tabs, 1/10 with multiple SSR+, no invented results, mobile and keyboard. Acceptance: all results correspond exactly to the committed plugin draw; no paid path.
 6. **Admin editors:** item/satchel proposal, plugin validation and versioned publish, safe simulation/test mode. Tests: non-admin/stale rank and concurrent edit, unsafe NBT/enchants/attributes, overflow, schedule boundaries/DST, malicious text, invalid ability, test isolation, deterministic server-side value computation and its caps, tier-band and ability-gate blocks, EV/balance thresholds, SSR+ frequency, value concentration, ignored client-sent value or charge fields. Acceptance: only authorized, validated versions go live; preview has no side effects.
-7. **Ability wave 1:** registry and eight individually feature-flagged handlers, ideally split into small sub-PRs grouped by risk. Tests for cooldown persistence, cancellation, protection and performance, rejoin, malicious tags and anti-OP limits, charge accounting exactly once per applied effect with restore on cancel, all three depletion variants and their idempotency, no refill via anvil/grindstone/Mending/enchanting/crafting/smithing, stacked-item rejection, restart persistence, plus authenticated in-game tests in a safe environment. Acceptance: each ability independently enabled only after safety and balance review; failing light/lumberjack isolation leaves those disabled.
+7. **Ability wave 1:** registry and eight individually feature-flagged handlers, ideally split into small sub-PRs grouped by risk. Tests for registry completeness (every registered entry has `P`, `uses` range, cooldown, `on_depletion`, min tier and wave; unknown or retyped IDs are rejected), cooldown persistence, cancellation, protection and performance, rejoin, malicious tags and anti-OP limits, charge accounting exactly once per applied effect with restore on cancel, all three depletion variants and their idempotency, no refill via anvil/grindstone/Mending/enchanting/crafting/smithing, stacked-item rejection, restart persistence, plus authenticated in-game tests in a safe environment. Acceptance: each ability independently enabled only after safety and balance review; failing light/lumberjack isolation leaves those disabled.
 
 Future deploys require approved backup, review/CI, standard CraftCore procedure and Nils's explicit OK before recreating services; this document performs none of those actions. Website design PRs must follow the existing mockup comparison process, without removing features or weakening tests.
 
 ## Risks and questions for Nils
 
-1. Please supply the actual list of the remaining 17 proposed abilities: the delivered static mockup contains only a dynamic placeholder, not their names. Confirm whether all 25 should eventually be included.
-2. What are the initial CP prices, seven exact tier odds and item quantities for each Beutel/theme? Is `S` initially empty in any legacy pool? Please approve the resource resale/cap and bound-item policies before implementation.
-3. Which timezone and daily/weekly boundary apply to rotations (including DST), and which weekly Ninja dates and building schedule should launch?
-4. Approve/tune the proposed eight ability bounds and the rules for claims, PvP/combat, cooldowns and teleport costs. `miners_light` and `lumberjack` are conditional on proving safe implementation.
-5. Is the explicit `needs_review` path acceptable for unavoidable inventory/DB crash ambiguity, with admin reconciliation rather than automatic duplicate or silent loss? No claim of unconditional exactly-once delivery is made.
-6. Confirm admin identity source/permissions and whether a genuinely isolated test context exists; otherwise test button remains disabled. Approve the D1 feature budget and liveness deadline after whole-site measurements.
-7. Approve or correct the value model (§5.1): the `B`/`E`/`A`/`T` weights, the tier `W` bands, the ability minimum tiers and the `EV` zones. Are the example costs (150 / 200 / 350 / 450 / 500 CP) and pools in §5.2 close to what you want? Should `EV/cost` below 0.40 be a hard block too, or stay a warning with your approval?
-8. Confirm the ability limits (§6.1): `ore_sense` 4 charges (range 3–5), `mine_escape` 3, `homeward` 3 — and should utility items keep the base item (`ability_lost`) or be destroyed (`item_breaks`) when used up? Is `miners_light` acceptable as the only ability with neither a cooldown nor charges?
+1. What are the initial CP prices, seven exact tier odds and item quantities for each Beutel/theme? Is `S` initially empty in any legacy pool? Please approve the resource resale/cap and bound-item policies before implementation.
+2. Which timezone and daily/weekly boundary apply to rotations (including DST), and which weekly Ninja dates and building schedule should launch?
+3. Approve/tune the proposed eight wave-1 ability bounds and the rules for claims, PvP/combat, cooldowns and teleport costs. `miners_light` and `lumberjack` are conditional on proving safe implementation. Are the `P` ratings, default limits and minimum tiers of the wave 2/3 entries in §6.1 acceptable, and should any of them move between wave 2 and wave 3?
+4. Is the explicit `needs_review` path acceptable for unavoidable inventory/DB crash ambiguity, with admin reconciliation rather than automatic duplicate or silent loss? No claim of unconditional exactly-once delivery is made.
+5. Confirm admin identity source/permissions and whether a genuinely isolated test context exists; otherwise test button remains disabled. Approve the D1 feature budget and liveness deadline after whole-site measurements.
+6. Approve or correct the value model (§5.1): the `B`/`E`/`A`/`T` weights, the constant 6 in `A`, the raw `W` bands, the ability minimum tiers and the `EV` zones. Are the example costs (150 / 210 / 400 / 550 / 500 CP) and the per-tier average `W` in §5.2 close to what you want? Should `EV/cost` below 0.40 be a hard block too, or stay a warning with your approval?
+7. Confirm the ability limits (§6.1): `ore_sense` 4 charges (range 3–5), `mine_escape` 3, `homeward` 3, plus the new charge-limited `recall_death` 2, `soul_pouch` 1, `lava_reflex` 3, `track_sense` 6 — and should utility items keep the base item (`ability_lost`) or be destroyed (`item_breaks`) when used up? Is `miners_light` acceptable as the only ability with neither a cooldown nor charges?
