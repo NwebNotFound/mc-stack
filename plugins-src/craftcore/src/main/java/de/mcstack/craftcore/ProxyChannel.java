@@ -106,6 +106,9 @@ public final class ProxyChannel {
         if (resent) { verifyLater(plugin, id, server, 2, token); return; }
       }
       still.sendMessage(notMovedText(server));
+      // A click sends the command from the client, so Velocity runs its own /server, which works (Nils, 05.11.).
+      still.sendMessage(net.kyori.adventure.text.Component.text("[Hier klicken: nach " + server + " wechseln]", net.kyori.adventure.text.format.NamedTextColor.GREEN)
+          .clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/server " + server)));
     }, 100L);
   }
 
@@ -121,6 +124,9 @@ public final class ProxyChannel {
   public static boolean send(JavaPlugin plugin, Player player, byte[] payload) {
     try {
       register(plugin);
+      ChannelFix.Outcome fix = ChannelFix.ensure(player, player.getListeningPluginChannels(), SpawnRoute.CHANNEL);
+      if (fix == ChannelFix.Outcome.ADDED) plugin.getLogger().info("Kanal " + SpawnRoute.CHANNEL + " fuer " + player.getName() + " nachregistriert (Proxy-Register fehlte)");
+      else if (fix == ChannelFix.Outcome.UNSUPPORTED) plugin.getLogger().warning("Kanal " + SpawnRoute.CHANNEL + " fehlt fuer " + player.getName() + " und laesst sich nicht nachregistrieren");
       player.sendPluginMessage(plugin, SpawnRoute.CHANNEL, payload);
       return true;
     } catch (RuntimeException e) {
