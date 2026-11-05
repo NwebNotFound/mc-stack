@@ -18,6 +18,7 @@ public final class ProxyChannel {
    * still in flight, so the switch is then sent once more after 3 s (bug 4, 05.11.2026).
    */
   public interface SwitchListener { boolean beforeSwitch(Player player, String server); }
+  static final SwitchIntent INTENT = new SwitchIntent();
   private static final java.util.List<SwitchListener> LISTENERS = new java.util.concurrent.CopyOnWriteArrayList<>();
   public static void onSwitch(SwitchListener listener) { LISTENERS.add(listener); }
   static boolean notifySwitch(Player player, String server) {
@@ -47,11 +48,8 @@ public final class ProxyChannel {
    */
   public static boolean send(JavaPlugin plugin, Player player, String server) {
     try {
-      boolean recent = notifySwitch(player, server);
-      byte[] payload = SpawnRoute.connect(server);
-      boolean ok = send(plugin, player, payload);
-      if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline()) send(plugin, player, payload); }, 60L);
-      return ok;
+      long token = INTENT.begin(player.getUniqueId());
+      return sendFor(plugin, player, server, token);
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
       return false;
@@ -61,6 +59,16 @@ public final class ProxyChannel {
           + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage()));
       return false;
     }
+  }
+
+  /** One switch under {@code token}; the delayed resend only fires while that token is still the player's latest choice. */
+  private static boolean sendFor(JavaPlugin plugin, Player player, String server, long token) throws IOException {
+    boolean recent = notifySwitch(player, server);
+    byte[] payload = SpawnRoute.connect(server);
+    boolean ok = send(plugin, player, payload);
+    java.util.UUID id = player.getUniqueId();
+    if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline() && INTENT.current(id, token)) send(plugin, player, payload); }, 60L);
+    return ok;
   }
 
   /** Like {@link #send(JavaPlugin, Player, String)}, but tells the player in chat when the switch could not be sent. */
@@ -78,19 +86,25 @@ public final class ProxyChannel {
    */
   public static boolean sendVerified(JavaPlugin plugin, Player player, String server) {
     if (!sendOrTell(plugin, player, server)) return false;
-    verifyLater(plugin, player.getUniqueId(), server, 1);
+    // send() just began a new intent; verify only that one.
+    verifyLater(plugin, player.getUniqueId(), server, 1, INTENT.latestFor(player.getUniqueId()));
     return true;
   }
 
   /** Attempt 1 still here after 5 s: send once more from a plain scheduler tick, then tell the player and log. */
-  private static void verifyLater(JavaPlugin plugin, java.util.UUID id, String server, int attempt) {
+  private static void verifyLater(JavaPlugin plugin, java.util.UUID id, String server, int attempt, long token) {
     Bukkit.getScheduler().runTaskLater(plugin, () -> {
       Player still = Bukkit.getPlayer(id);
       if (still == null || !still.isOnline()) return; // switched away: fine
+      if (!INTENT.current(id, token)) return;          // a newer choice (another portal, /lobby, VIP) wins
       boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL);
       plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Versuch "
           + attempt + ", Kanal " + SpawnRoute.CHANNEL + " registriert: " + registered + ")");
-      if (attempt == 1 && send(plugin, still, server)) { verifyLater(plugin, id, server, 2); return; }
+      if (attempt == 1) {
+        boolean resent;
+        try { resent = sendFor(plugin, still, server, token); } catch (IOException e) { resent = false; }
+        if (resent) { verifyLater(plugin, id, server, 2, token); return; }
+      }
       still.sendMessage(notMovedText(server));
     }, 100L);
   }
