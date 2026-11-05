@@ -1,4 +1,4 @@
-# Shared implementation for the restricted CraftCore database accounts.
+# Shared implementation for restricted CraftCore accounts and manual admin SQL.
 function Invoke-DbUserSetup([string]$PasswordKey, [string]$SqlFile, [string]$Placeholder) {
   $ErrorActionPreference = 'Stop'
   $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -17,7 +17,9 @@ function Invoke-DbUserSetup([string]$PasswordKey, [string]$SqlFile, [string]$Pla
       $vals[$Matches[1]] = $value
     }
   }
-  foreach ($key in @('MARIADB_ADMIN_USER', 'MARIADB_ADMIN_PASSWORD', $PasswordKey)) {
+  $required = @('MARIADB_ADMIN_USER', 'MARIADB_ADMIN_PASSWORD')
+  if ($PasswordKey) { $required += $PasswordKey }
+  foreach ($key in $required) {
     if ($unsupported[$key]) { throw "${key}: Wertformat nicht unterstuetzt (\, `$, Anfuehrungszeichen oder Inline-Kommentar). Wert in einfache Anfuehrungszeichen setzen oder ohne diese Zeichen neu erzeugen." }
     if (-not $vals[$key]) { throw "$key fehlt in .env" }
     if ($vals[$key] -match '[\r\n\x00]') { throw "$key enthaelt unzulaessige Zeichen" }
@@ -26,10 +28,12 @@ function Invoke-DbUserSetup([string]$PasswordKey, [string]$SqlFile, [string]$Pla
   $user = $vals['MARIADB_ADMIN_USER'].Replace('\', '\\').Replace('"', '\"')
   $password = $vals['MARIADB_ADMIN_PASSWORD'].Replace('\', '\\').Replace('"', '\"')
   $optionFile = "[client]`nuser=`"$user`"`npassword=`"$password`"`n"
-  # Force normal backslash escaping in this session before substituting a SQL literal.
-  $escaped = $vals[$PasswordKey].Replace('\', '\\').Replace("'", "''")
-  $sql = "SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', '');`n" +
-    (Get-Content -LiteralPath (Join-Path $root $SqlFile) -Raw -Encoding UTF8).Replace($Placeholder, $escaped)
+  $sql = Get-Content -LiteralPath (Join-Path $root $SqlFile) -Raw -Encoding UTF8
+  if ($PasswordKey) {
+    # Force normal backslash escaping before substituting an account password.
+    $escaped = $vals[$PasswordKey].Replace('\', '\\').Replace("'", "''")
+    $sql = "SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', '');`n" + $sql.Replace($Placeholder, $escaped)
+  }
   $path = '/tmp/craftcore-db-' + [Guid]::NewGuid().ToString('N') + '.cnf'
   $oldEncoding = $OutputEncoding
   $OutputEncoding = New-Object System.Text.UTF8Encoding $false
