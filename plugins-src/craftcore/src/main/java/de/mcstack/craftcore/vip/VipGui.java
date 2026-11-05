@@ -71,13 +71,14 @@ public final class VipGui implements Listener {
     private final String worldId;
     private final Map<UUID, Consumer<String>> inputs = new ConcurrentHashMap<>();
     private final Map<UUID, Long> inputExpiry = new ConcurrentHashMap<>();
-    private final Map<UUID, String> waiting = new ConcurrentHashMap<>();
+    private final VipQueueState queue = new VipQueueState();
+    private final Map<UUID, String> waiting = queue.waiting;
     /** Players that already left this server, so a connect retry does not bounce them again. */
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
     /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
-    private final Map<UUID, Integer> generation = new ConcurrentHashMap<>();
-    private final Map<UUID, String> sentSlot = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> sentAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> generation = queue.generation;
+    private final Map<UUID, String> sentSlot = queue.sentSlot;
+    private final Map<UUID, Long> sentAt = queue.sentAt;
 
     public VipGui(JavaPlugin plugin, VipStore.ConnectionSource source, VipStartCoordinator coordinator,
                   VipStartBars bars, VipConfig.Values config, Connector connector,
@@ -104,15 +105,11 @@ public final class VipGui implements Listener {
      */
     boolean beforeSwitch(Player player, String server) {
         UUID id = player.getUniqueId();
-        if (server != null && server.equals(sentSlot.get(id))) return false; // our own VIP connect
-        String world = waiting.remove(id);
-        boolean hadConnect = sentSlot.remove(id) != null;
-        if (world == null && !hadConnect) return false;
-        generation.merge(id, 1, Integer::sum);
-        if (world != null) { coordinator.leave(world, id); bars.clear(id); }
-        message(player, VipSwitch.leftQueueText(server));
-        Long at = sentAt.remove(id);
-        return VipSwitch.recent(at, System.currentTimeMillis());
+        VipQueueState.Left left = queue.beforeSwitch(id, server, System.currentTimeMillis());
+        if (left == null) return false;
+        if (left.world() != null) { coordinator.leave(left.world(), id); bars.clear(id); }
+        message(player, left.message());
+        return left.recentConnect();
     }
 
     // ---------------------------------------------------------------- screens
