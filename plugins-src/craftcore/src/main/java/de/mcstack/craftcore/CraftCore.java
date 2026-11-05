@@ -116,10 +116,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
     };
     getServer().getPluginManager().registerEvents(waiting,this);
     int[] task={-1};
+    java.util.concurrent.atomic.AtomicBoolean queued=new java.util.concurrent.atomic.AtomicBoolean();
+    // The timer only stops once the modules really started: if the main-thread attempt finds the DB gone again,
+    // the next tick probes again (Gatekeeper #136 round 1).
     task[0]=getServer().getScheduler().runTaskTimerAsynchronously(this,()->{
-      if(!databaseAnswers()) return;
-      getServer().getScheduler().cancelTask(task[0]);
-      getServer().getScheduler().runTask(this,()->{ org.bukkit.event.HandlerList.unregisterAll(waiting); gate.attempt(); });
+      if(gate.started()) { getServer().getScheduler().cancelTask(task[0]); return; }
+      if(queued.get() || !databaseAnswers()) return;
+      queued.set(true);
+      getServer().getScheduler().runTask(this,()->{
+        try { if(gate.attempt()) org.bukkit.event.HandlerList.unregisterAll(waiting); }
+        finally { queued.set(false); }
+      });
     },200L,200L).getTaskId();
   }
   static final String NOT_READY="§cCraftCore wartet noch auf die Datenbank. Teleports, VIP-Welten und Server-Wechsel gehen in einer Minute wieder.";

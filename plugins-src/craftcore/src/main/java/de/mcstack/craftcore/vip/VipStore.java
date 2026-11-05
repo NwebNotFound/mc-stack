@@ -14,11 +14,11 @@ public final class VipStore {
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
     static final String FIND_WORLD = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE id=? AND status<>'deleted'";
     static final String RENAME_WORLD = "UPDATE vip_worlds SET name=? WHERE id=? AND owner=? AND status<>'deleted'";
-    static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=?";
+    static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=? AND status<>'deleted'";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
     static final String INSERT_RUN = "INSERT INTO vip_world_runs (world_id,slot,started_at) VALUES (?,?,?)";
     static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL WHERE id=? AND status IN ('stopped','error')";
-    static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=?";
+    static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=? AND status<>'deleted'";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
     static final String STOP_IDLE_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='idle' WHERE world_id=? AND stopped_at IS NULL";
@@ -154,8 +154,9 @@ public final class VipStore {
     public void rename(UUID owner, String id, String name) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(RENAME_WORLD)) { s.setString(1,name); s.setString(2,id); s.setString(3,owner.toString()); s.executeUpdate(); }
     }
-    public void status(String id, String status, String slot) throws SQLException {
-        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_STATUS)) { s.setString(1,status); s.setString(2,slot); s.setString(3,id); s.executeUpdate(); }
+    /** A deleted world is never brought back by a later status write (a start racing a delete). Returns false then. */
+    public boolean status(String id, String status, String slot) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_STATUS)) { s.setString(1,status); s.setString(2,slot); s.setString(3,id); return s.executeUpdate()==1; }
     }
     public void running(String id, String slot) throws SQLException {
         long now=clock.millis();

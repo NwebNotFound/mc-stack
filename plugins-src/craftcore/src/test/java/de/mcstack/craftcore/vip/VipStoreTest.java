@@ -94,4 +94,19 @@ class VipStoreTest {
         }
     }
 
+    @Test void aDeletedWorldIsNeverResurrectedByALateStartOrStop() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(); store.create(owner,"world","normal");
+            String id=store.list(owner).get(0).id();
+            assertTrue(store.markDeleted(id), "stopped world can be deleted");
+            assertFalse(store.status(id,"starting",null), "a start that read the row before the delete cannot bring it back");
+            store.idleStopped(id);
+            try (Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT status FROM vip_worlds WHERE id='"+id+"'")) {
+                assertTrue(r.next()); assertEquals("deleted", r.getString(1));
+            }
+            assertFalse(store.markDeleted(id), "second delete is a no-op");
+        }
+    }
 }

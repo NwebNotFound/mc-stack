@@ -235,7 +235,7 @@ public final class VipGui implements Listener {
                 }
                 case START -> {
                     if (d.staleRow()) store.idleStopped(id);
-                    store.status(id, "starting", null);
+                    if (!store.status(id, "starting", null)) { message(player, "Diese VIP-Welt wurde gerade geloescht."); return; }
                     waitFor(player, entry);
                 }
             }
