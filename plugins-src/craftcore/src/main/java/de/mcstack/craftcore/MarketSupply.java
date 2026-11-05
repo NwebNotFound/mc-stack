@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -33,9 +32,14 @@ final class MarketSupply implements Listener {
   private static volatile MarketSupply running = null;
   private final CraftCore core;
   private final DemandLedger ledger = new DemandLedger();
-  private final AtomicBoolean flushing = new AtomicBoolean();
+  private final DemandFlusher flusher;
+  private final DemandSpill spill;
 
-  private MarketSupply(CraftCore core) { this.core = core; }
+  private MarketSupply(CraftCore core) {
+    this.core = core;
+    this.spill = new DemandSpill(new java.io.File(core.getDataFolder(), "scarcity-demand-spill.yml"));
+    this.flusher = new DemandFlusher(ledger, this::write, spill::save, msg -> core.getLogger().warning(msg));
+  }
 
   static void start(CraftCore core) throws Exception {
     Scarcity.Settings settings = Scarcity.settings(core.getConfig());
@@ -44,32 +48,20 @@ final class MarketSupply implements Listener {
     active = settings;
     MarketSupply supply = new MarketSupply(core);
     running = supply;
+    // Demand that could not reach the database at the last shutdown goes into the next flush.
+    supply.ledger.add(supply.spill.takeAll());
     Bukkit.getPluginManager().registerEvents(supply, core);
     long period = Math.max(20L, core.getConfig().getLong("market.scarcity.period-ticks", 1200L));
     long flush = Math.max(20L, core.getConfig().getLong("market.scarcity.demand-flush-ticks", 100L));
     Bukkit.getScheduler().runTaskTimer(core, supply::scanOnline, 40L, period);
-    Bukkit.getScheduler().runTaskTimerAsynchronously(core, supply::flush, flush, flush);
+    Bukkit.getScheduler().runTaskTimerAsynchronously(core, supply.flusher::flush, flush, flush);
   }
 
-  /**
-   * Orderly shutdown (called from Market.shutdown, before the plugin is gone): waits up to 5 s for an in-flight async
-   * flush, then writes everything still pending, including a batch a failed flush just put back, on this thread.
-   */
+  /** Orderly shutdown (Market.shutdown): see {@link DemandFlusher#stop}. Leftovers go to the spill file. */
   static void stop() {
     MarketSupply supply = running;
     running = null;
-    if (supply == null) return;
-    long until = System.currentTimeMillis() + 5000;
-    while (!supply.flushing.compareAndSet(false, true)) {
-      if (System.currentTimeMillis() > until) { supply.core.getLogger().warning("Craft-Nachfrage: Flush beim Stopp haengt, schreibe trotzdem"); break; }
-      try { Thread.sleep(20); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-    }
-    try {
-      for (int attempt = 1; attempt <= 2 && !supply.ledger.isEmpty(); attempt++) {
-        try { supply.write(supply.ledger.drain()); }
-        catch (Exception e) { if (attempt == 2) supply.core.getLogger().warning("Craft-Nachfrage beim Stopp verloren: " + e.getMessage()); }
-      }
-    } finally { supply.flushing.set(false); }
+    if (supply != null) supply.flusher.stop(5000);
   }
 
   /** Price multiplier for one item. 1 when the feature is off or nothing is known about the item. */
@@ -131,17 +123,10 @@ final class MarketSupply implements Listener {
 
   /* ---------- demand ---------- */
 
-  private void flush() {
-    if (ledger.isEmpty() || !flushing.compareAndSet(false, true)) return;
-    try { write(ledger.drain()); }
-    catch (Exception e) { core.getLogger().warning("Craft-Nachfrage: " + e.getMessage()); }
-    finally { flushing.set(false); }
-  }
-
-  /** Writes one batch; on failure the batch goes back into the ledger and the exception is rethrown. */
+  /** Writes one batch. {@link DemandFlusher} owns retries, restore and spill. */
   private void write(Map<String, Long> batch) throws Exception {
     if (batch.isEmpty()) return;
-    try {
+    {
       long now = System.currentTimeMillis();
       CurvePrice.Factors factors = CurvePrice.factors(core.getConfig());
       Map<String, Double> halves = new HashMap<>();
@@ -151,9 +136,6 @@ final class MarketSupply implements Listener {
       }
       Map<String, SupplyStore.Sample> loaded = core.tx(c -> { SupplyStore.addDemand(c, batch, halves, now); return SupplyStore.load(c); });
       publish(loaded);
-    } catch (Exception e) {
-      ledger.restore(batch);
-      throw e;
     }
   }
 
