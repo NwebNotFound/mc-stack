@@ -109,10 +109,22 @@ public final class LobbyVip implements CommandExecutor {
             VipStore.Entry entry = null;
             String problem = null;
             try {
-                for (VipStore.World world : store.list(player.getUniqueId())) {
+                if (name.startsWith("#")) {
+                    String id = UUID.fromString(name.substring(1)).toString();
+                    entry = (VipGui.isAdmin(player) ? store.findById(id) : store.findJoinableById(player.getUniqueId(), id)).orElse(null);
+                }
+                for (VipStore.World world : name.startsWith("#") ? List.<VipStore.World>of() : store.list(player.getUniqueId())) {
                     if (!world.name().equalsIgnoreCase(name)) continue;
                     entry = store.findById(world.id()).orElse(null);
                     break;
+                }
+                if (entry == null) {
+                    // A world the player was invited to: "/vw join <name>" from the invite notice.
+                    for (VipStore.World world : store.listShared(player.getUniqueId())) {
+                        if (!world.name().equalsIgnoreCase(name)) continue;
+                        entry = store.findById(world.id()).orElse(null);
+                        break;
+                    }
                 }
                 if (entry == null && VipGui.isAdmin(player)) {
                     int colon = name.indexOf(':');
@@ -146,7 +158,7 @@ public final class LobbyVip implements CommandExecutor {
         public void connect(Player player, String slot) { send(player, slot); }
         public void lobby(Player player) { send(player, "lobby"); }
         private void send(Player player, String server) {
-            ProxyChannel.send(plugin, player, server);
+            ProxyChannel.sendOrTell(plugin, player, server);
         }
     }
 

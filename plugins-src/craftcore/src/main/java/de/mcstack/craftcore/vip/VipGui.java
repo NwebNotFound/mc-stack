@@ -71,9 +71,14 @@ public final class VipGui implements Listener {
     private final String worldId;
     private final Map<UUID, Consumer<String>> inputs = new ConcurrentHashMap<>();
     private final Map<UUID, Long> inputExpiry = new ConcurrentHashMap<>();
-    private final Map<UUID, String> waiting = new ConcurrentHashMap<>();
+    private final VipQueueState queue = new VipQueueState();
+    private final Map<UUID, String> waiting = queue.waiting;
     /** Players that already left this server, so a connect retry does not bounce them again. */
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
+    /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
+    private final Map<UUID, Integer> generation = queue.generation;
+    private final Map<UUID, String> sentSlot = queue.sentSlot;
+    private final Map<UUID, Long> sentAt = queue.sentAt;
 
     public VipGui(JavaPlugin plugin, VipStore.ConnectionSource source, VipStartCoordinator coordinator,
                   VipStartBars bars, VipConfig.Values config, Connector connector,
@@ -91,6 +96,20 @@ public final class VipGui implements Listener {
     public void start() {
         Bukkit.getPluginManager().registerEvents(this, plugin);
         Bukkit.getScheduler().runTaskTimer(plugin, bars::tick, 20L, 20L);
+        de.mcstack.craftcore.ProxyChannel.onSwitch(this::beforeSwitch);
+    }
+
+    /**
+     * Another server was chosen (portal, menu, NPC, /lobby) while a VIP start is queued: leave the queue with a chat
+     * line and drop the pending auto-connects, so they cannot pull the player away or block the switch.
+     */
+    boolean beforeSwitch(Player player, String server) {
+        UUID id = player.getUniqueId();
+        VipQueueState.Left left = queue.beforeSwitch(id, server, System.currentTimeMillis());
+        if (left == null) return false;
+        if (left.world() != null) { coordinator.leave(left.world(), id); bars.clear(id); }
+        message(player, left.message());
+        return left.recentConnect();
     }
 
     // ---------------------------------------------------------------- screens
@@ -117,6 +136,11 @@ public final class VipGui implements Listener {
                     case LOCKED -> buttons.add(new Button("Gesperrter Slot", Material.BARRIER,
                         List.of(slot.reason()), "none", ""));
                 }
+            }
+            // Worlds the player was invited to: open read-only (Beitreten), at most one row.
+            for (VipStore.World shared : store.listShared(id).stream().limit(8).toList()) {
+                buttons.add(new Button("Eingeladen: " + shared.name(), Material.OAK_DOOR,
+                    List.of("Status: " + statusText(shared.status()), "Klick: ansehen und beitreten"), "world", shared.id()));
             }
             buttons.add(new Button("Hilfe", Material.BOOK, List.of(
                 "VIP: " + config.vipPlayers() + " Spieler, MVP: " + config.mvpPlayers() + " Spieler",
@@ -151,6 +175,7 @@ public final class VipGui implements Listener {
                     addons.isEmpty() ? "Keine Addons aktiv" : "Aktiv: " + String.join(", ", addons),
                     "Pro Welt waehlbar, maximal " + config.addonMax()), "addons", id),
                 new Button("Umbenennen", Material.NAME_TAG, List.of("Neuen Namen im Chat eingeben"), "rename", id),
+                new Button("Loeschen", Material.LAVA_BUCKET, List.of("Nur gestoppte Welten", "Zur Bestaetigung den Weltnamen eintippen"), "delete", id),
                 new Button("Zurueck", Material.ARROW, List.of("Zurueck zum Menue"), "hub", ""));
             return new Loaded(buttons, null);
         }, loaded -> {
@@ -220,10 +245,24 @@ public final class VipGui implements Listener {
             VipStore.Entry entry = store.findById(id).orElse(null);
             if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
             if (!mayStart(player, entry)) { message(player, "Du darfst diese Welt nicht starten."); return; }
-            if ("running".equals(entry.status()) && entry.slot() != null) { connect(player, entry.slot()); return; }
-            if ("starting".equals(entry.status()) && entry.slot() != null) { waitFor(player, entry); return; }
-            store.status(id, "starting", null);
-            waitFor(player, entry);
+            VipStartDecision.Decision d = VipStartDecision.decide(entry.status(), entry.slot(), entry.id(), host.slots());
+            switch (d.step()) {
+                case HOST_DOWN -> message(player, "VIP-Host nicht erreichbar, bitte spaeter erneut versuchen.");
+                case CONNECT -> {
+                    if (d.staleRow()) store.status(id, "running", d.slot());
+                    message(player, "Die Welt laeuft schon, du wirst verbunden ...");
+                    retryConnect(player, d.slot(), generation.getOrDefault(player.getUniqueId(), 0));
+                }
+                case WAIT -> {
+                    if (d.staleRow()) store.status(id, "starting", d.slot());
+                    waitFor(player, entry);
+                }
+                case START -> {
+                    if (d.staleRow()) store.idleStopped(id);
+                    if (!store.status(id, "starting", null)) { message(player, "Diese VIP-Welt wurde gerade geloescht."); return; }
+                    waitFor(player, entry);
+                }
+            }
         }, error -> failed(player, "VIP-Start", error));
     }
 
@@ -236,7 +275,7 @@ public final class VipGui implements Listener {
             switch (decision.kind()) {
                 case RUNNING -> {
                     if (!"running".equals(entry.status()) || !decision.slot().equals(entry.slot())) store.status(id, "running", decision.slot());
-                    connect(player, decision.slot());
+                    retryConnect(player, decision.slot(), generation.getOrDefault(player.getUniqueId(), 0));
                 }
                 case STARTING -> {
                     if (!decision.slot().equals(entry.slot())) store.status(id, "starting", decision.slot());
@@ -247,6 +286,24 @@ public final class VipGui implements Listener {
                 case UNCHANGED -> message(player, "Starte die Welt zuerst.");
             }
         }, error -> failed(player, "VIP-Beitritt", error));
+    }
+
+    /** Soft delete (status 'deleted'); only the exact typed name confirms it. World files are left to the host. */
+    public void deleteWorld(Player player, String id, String typed) {
+        async(() -> {
+            VipStore.Entry entry = store.findById(id).orElse(null);
+            if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
+            if (!mayManage(player, entry)) { message(player, "Du darfst diese Welt nicht verwalten."); return; }
+            switch (VipRules.deleteCheck(entry.name(), typed, entry.status())) {
+                case NAME_MISMATCH -> message(player, "Name stimmt nicht, die Welt wurde nicht geloescht.");
+                case RUNNING -> message(player, "Stoppe die Welt zuerst, dann kannst du sie loeschen.");
+                case OK -> {
+                    if (!store.markDeleted(id)) { message(player, "Loeschen fehlgeschlagen, die Welt laeuft wieder oder wurde schon geloescht."); return; }
+                    message(player, "VIP-Welt \"" + entry.name() + "\" wurde geloescht.");
+                    Bukkit.getScheduler().runTask(plugin, () -> openHub(player));
+                }
+            }
+        }, error -> failed(player, "Loeschen", error));
     }
 
     public void stopWorld(Player player, String id) {
@@ -368,11 +425,13 @@ public final class VipGui implements Listener {
 
     private void waitFor(Player player, VipStore.Entry entry) {
         UUID id = player.getUniqueId();
+        int gen = generation.getOrDefault(id, 0);
         waiting.put(id, entry.id());
         bars.wait(player, entry.id());
         message(player, "Deine Welt startet ... du wirst automatisch verbunden.");
         CompletableFuture<VipStartCoordinator.Outcome> future = coordinator.join(entry.id(), id);
         future.whenComplete((outcome, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (generation.getOrDefault(id, 0) != gen) return; // the player chose another server meanwhile
             waiting.remove(id);
             bars.clear(id);
             if (outcome == null || !outcome.ok()) {
@@ -383,23 +442,42 @@ public final class VipGui implements Listener {
                 return;
             }
             message(player, VipStartProgress.ready(outcome.slot()).message());
-            retryConnect(player, outcome.slot());
+            retryConnect(player, outcome.slot(), gen);
         }));
     }
 
     /**
-     * Velocity may not accept the slot the moment the host reports ready, so the connect is
-     * sent up to three times. A player who already left this server is not sent again.
+     * Connects only once the slot answers a status ping (bounded), then checks that the player really left; one retry,
+     * then a clear chat line instead of Velocity's raw error.
      */
-    private void retryConnect(Player player, String slot) {
+    private void retryConnect(Player player, String slot, int gen) {
         UUID id = player.getUniqueId();
-        for (int attempt = 0; attempt < VipConnectRetry.ATTEMPTS; attempt++) {
-            int current = attempt;
-            Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                if (!VipConnectRetry.maySend(current, player.isOnline(), !transferred.contains(id))) return;
-                connector.connect(player, slot);
-            }, VipConnectRetry.delayTicks(current));
-        }
+        sentSlot.put(id, slot);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            de.mcstack.craftcore.pvp.PvpPing ping = new de.mcstack.craftcore.pvp.PvpPing(slot, 25565);
+            boolean up = VipReachable.waitFor(ping::ping, VipReachable.PING_ATTEMPTS, VipReachable.PING_DELAY_MS, Thread::sleep);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!stillHere(player, id, gen)) return;
+                if (!up) { sentSlot.remove(id); message(player, VipReachable.NOT_REACHABLE); return; }
+                attemptConnect(player, slot, gen, 1);
+            });
+        });
+    }
+
+    private void attemptConnect(Player player, String slot, int gen, int attempt) {
+        UUID id = player.getUniqueId();
+        sentAt.put(id, System.currentTimeMillis());
+        connector.connect(player, slot);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (!stillHere(player, id, gen)) return;
+            message(player, VipReachable.afterStillHere(attempt));
+            if (attempt < VipReachable.CONNECT_ATTEMPTS) attemptConnect(player, slot, gen, attempt + 1);
+            else sentSlot.remove(id);
+        }, VipReachable.CONNECT_CHECK_TICKS);
+    }
+
+    private boolean stillHere(Player player, UUID id, int gen) {
+        return player.isOnline() && !transferred.contains(id) && generation.getOrDefault(id, 0) == gen;
     }
 
     // ---------------------------------------------------------------- clicks
@@ -433,6 +511,7 @@ public final class VipGui implements Listener {
             case "addons" -> openAddons(player, button.arg());
             case "invite" -> ask(player, "Spielername zum Einladen", name -> invite(player, button.arg(), name));
             case "rename" -> ask(player, "Neuer Weltname", name -> renameWorld(player, button.arg(), name));
+            case "delete" -> ask(player, "Zum Loeschen den Weltnamen genau eintippen", typed -> deleteWorld(player, button.arg(), typed));
             case "addon" -> {
                 String[] parts = button.arg().split(":", 2);
                 if (parts.length == 2) toggleAddon(player, parts[0], parts[1]);
@@ -501,6 +580,8 @@ public final class VipGui implements Listener {
         String world = waiting.remove(id);
         if (world != null) coordinator.leave(world, id);
         bars.clear(id);
+        sentSlot.remove(id);
+        sentAt.remove(id);
     }
 
     @EventHandler

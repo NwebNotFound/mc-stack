@@ -10,7 +10,7 @@ public final class PvpPing {
     private final String host;
     private final int port;
     public PvpPing() { this(System.getenv().getOrDefault("PVP_PING_HOST", "pvp"), Integer.parseInt(System.getenv().getOrDefault("PVP_PING_PORT", "25565"))); }
-    PvpPing(String host, int port) { this.host = host; this.port = port; }
+    public PvpPing(String host, int port) { this.host = host; this.port = port; }
 
     public boolean ping() {
         try (Socket socket = new Socket()) {

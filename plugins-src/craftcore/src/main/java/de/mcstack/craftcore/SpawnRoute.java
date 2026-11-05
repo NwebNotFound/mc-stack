@@ -17,6 +17,7 @@ final class SpawnRoute {
    * reads for {@code Connect}.
    */
   static final String CHANNEL = "bungeecord:main";
+  static final String DIRECT_CHANNEL = "craftcore:switch";
   static final String LOBBY = "lobby";
   /** Every spelling that has to lead back to the lobby, {@code /spawn} included. */
   static final List<String> LOBBY_COMMANDS = List.of("lobby", "l", "hub", "leave", "spawn");
@@ -35,6 +36,16 @@ final class SpawnRoute {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (DataOutputStream out = new DataOutputStream(bytes)) {
       out.writeUTF("Connect");
+      out.writeUTF(server);
+    }
+    return bytes.toByteArray();
+  }
+
+  /** Versioned by its channel: long revision followed by one UTF target. No database operation. */
+  static byte[] direct(String server, long revision) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (DataOutputStream out = new DataOutputStream(bytes)) {
+      out.writeLong(revision);
       out.writeUTF(server);
     }
     return bytes.toByteArray();

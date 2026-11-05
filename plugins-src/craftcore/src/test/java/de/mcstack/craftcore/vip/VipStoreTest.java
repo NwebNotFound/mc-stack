@@ -22,6 +22,27 @@ class VipStoreTest {
         return c;
     }
 
+    @Test void inviteIdentitySurvivesDuplicateNamesAndRevokedMembershipIsRejected() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url));
+            UUID recipient=UUID.randomUUID(), owner=UUID.randomUUID();
+            store.create(recipient,"Bauwelt","normal"); store.create(owner,"Bauwelt","normal");
+            String invited=store.list(owner).get(0).id();
+            try (PreparedStatement q=c.prepareStatement("INSERT INTO vip_world_members VALUES(?,?,'member',1000)")) {
+                q.setString(1,invited); q.setString(2,recipient.toString()); q.executeUpdate();
+            }
+            VipStore.Invite notice=store.invitesSince(recipient,0).get(0);
+            assertEquals(invited,notice.id());
+            assertEquals(invited,store.findJoinableById(recipient,notice.id()).orElseThrow().id());
+            assertNotEquals(store.list(recipient).get(0).id(),notice.id());
+            try (PreparedStatement q=c.prepareStatement("DELETE FROM vip_world_members WHERE world_id=?")) {
+                q.setString(1,invited); q.executeUpdate();
+            }
+            assertTrue(store.findJoinableById(recipient,notice.id()).isEmpty());
+        }
+    }
+
     @Test void sqlConstantsHaveExpectedParameters() throws Exception {
         Map<String, Integer> expected = Map.ofEntries(
                 Map.entry("COUNT_WORLDS", 1), Map.entry("INSERT_WORLD", 5), Map.entry("LIST_WORLDS", 1),
@@ -31,7 +52,7 @@ class VipStoreTest {
                 Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
                 Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
                 Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
-                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2));
+                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1), Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;
@@ -94,4 +115,37 @@ class VipStoreTest {
         }
     }
 
+    @Test void aDeletedWorldIsNeverResurrectedByALateStartOrStop() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(); store.create(owner,"world","normal");
+            String id=store.list(owner).get(0).id();
+            assertTrue(store.markDeleted(id), "stopped world can be deleted");
+            assertFalse(store.status(id,"starting",null), "a start that read the row before the delete cannot bring it back");
+            store.idleStopped(id);
+            try (Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT status FROM vip_worlds WHERE id='"+id+"'")) {
+                assertTrue(r.next()); assertEquals("deleted", r.getString(1));
+            }
+            assertFalse(store.markDeleted(id), "second delete is a no-op");
+        }
+    }
+    @Test void invitedPlayersSeeTheWorldAndGetEachInviteOnce() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(), guest=UUID.randomUUID();
+            try (Statement s=c.createStatement()) { s.execute("INSERT INTO known_players VALUES ('"+owner+"','Nani_San123'),('"+guest+"','NwebNotFound')"); }
+            store.create(owner,"Bauwelt","normal");
+            String id=store.list(owner).get(0).id();
+            store.addMember(id, guest, "member");
+            assertEquals(List.of("Bauwelt"), store.listShared(guest).stream().map(VipStore.World::name).toList(), "the invited world is listed for the guest");
+            var invites=store.invitesSince(guest, EPOCH-1);
+            assertEquals(1, invites.size());
+            assertEquals("Nani_San123", invites.get(0).owner());
+            assertTrue(store.invitesSince(guest, invites.get(0).addedAt()).isEmpty(), "told once");
+            store.markDeleted(id);
+            assertTrue(store.listShared(guest).isEmpty(), "a deleted world is not offered");
+        }
+    }
 }
