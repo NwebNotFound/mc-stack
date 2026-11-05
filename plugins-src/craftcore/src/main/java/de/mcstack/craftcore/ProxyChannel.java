@@ -46,11 +46,11 @@ public final class ProxyChannel {
    * @return false when the proxy message could not be sent; the caller decides what happens next
    *         (kick, retry or a chat hint).
    */
-  public static boolean send(JavaPlugin plugin, Player player, String server) {
+  public static synchronized boolean send(JavaPlugin plugin, Player player, String server) {
     try {
       long token = INTENT.begin(player.getUniqueId());
       // Second path: the proxy plugin executes this if the plugin message below does not move the player in time.
-      if (plugin instanceof CraftCore core && core.queueReady()) ProxySwitchQueue.enqueueAsync(core, player.getUniqueId(), server, System.getenv().getOrDefault("CRAFTCORE_SERVER", "Server").toLowerCase(java.util.Locale.ROOT), token);
+      if (plugin instanceof CraftCore core && core.queueReady()) ProxySwitchQueue.publish(core, player.getUniqueId(), server, System.getenv().getOrDefault("CRAFTCORE_SERVER", "Server").toLowerCase(java.util.Locale.ROOT), token);
       return sendFor(plugin, player, server, token);
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
@@ -125,7 +125,7 @@ public final class ProxyChannel {
   }
 
   /** @return false when Bukkit refused the message, e.g. an unregistered channel. */
-  public static boolean send(JavaPlugin plugin, Player player, byte[] payload) {
+  public static synchronized boolean send(JavaPlugin plugin, Player player, byte[] payload) {
     try {
       register(plugin);
       ChannelFix.Outcome fix = ChannelFix.ensure(player, player.getListeningPluginChannels(), SpawnRoute.CHANNEL);

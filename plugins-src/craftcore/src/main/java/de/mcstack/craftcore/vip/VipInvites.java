@@ -10,8 +10,8 @@ public final class VipInvites {
         return invite.owner() + " hat dich in die VIP-Welt \"" + invite.world() + "\" eingeladen.";
     }
 
-    /** World names are validated by VipNames (no spaces), so the plain name is a safe command argument. */
-    public static String joinCommand(String world) { return "/vw join " + world; }
+    /** UUID references cannot collide with owned or shared world names. */
+    public static String joinCommand(String id) { return "/vw join #" + java.util.UUID.fromString(id); }
 
     /** The newest added_at seen, so each invite is told exactly once per server. */
     public static long nextMark(long since, List<VipStore.Invite> invites) {

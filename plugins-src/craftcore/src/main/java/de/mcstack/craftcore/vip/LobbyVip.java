@@ -109,7 +109,11 @@ public final class LobbyVip implements CommandExecutor {
             VipStore.Entry entry = null;
             String problem = null;
             try {
-                for (VipStore.World world : store.list(player.getUniqueId())) {
+                if (name.startsWith("#")) {
+                    String id = UUID.fromString(name.substring(1)).toString();
+                    entry = (VipGui.isAdmin(player) ? store.findById(id) : store.findJoinableById(player.getUniqueId(), id)).orElse(null);
+                }
+                for (VipStore.World world : name.startsWith("#") ? List.<VipStore.World>of() : store.list(player.getUniqueId())) {
                     if (!world.name().equalsIgnoreCase(name)) continue;
                     entry = store.findById(world.id()).orElse(null);
                     break;

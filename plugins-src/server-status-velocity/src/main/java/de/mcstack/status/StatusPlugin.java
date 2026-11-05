@@ -37,9 +37,9 @@ public final class StatusPlugin {
   private synchronized void switches() {
     long now=System.currentTimeMillis();
     try(Connection c=db()) {
-      c.setAutoCommit(false);
+
       try(PreparedStatement x=c.prepareStatement("UPDATE proxy_switch_requests SET done_at=?,result='expired' WHERE done_at IS NULL AND created_at<=?")) { x.setLong(1,now); x.setLong(2,now-SwitchDecision.MAX_AGE_MS); x.executeUpdate(); }
-      try(PreparedStatement q=c.prepareStatement("SELECT id,player,server,created_at,source FROM proxy_switch_requests WHERE done_at IS NULL AND created_at<=? ORDER BY id LIMIT 50 FOR UPDATE")) {
+      try(PreparedStatement q=c.prepareStatement("SELECT id,player,server,created_at,source FROM proxy_switch_requests WHERE done_at IS NULL AND created_at<=? ORDER BY id LIMIT 50")) {
         q.setLong(1,now-SwitchDecision.GRACE_MS);
         try(ResultSet r=q.executeQuery(); PreparedStatement done=c.prepareStatement("UPDATE proxy_switch_requests SET done_at=?,result=? WHERE id=? AND done_at IS NULL")) {
           while(r.next()) {
@@ -50,6 +50,7 @@ public final class StatusPlugin {
             SwitchDecision.Action action=SwitchDecision.decide(r.getLong(4),now,player.isPresent(),current,target,server.isPresent());
             if (!SwitchDecision.belongsToSession(r.getLong(4), sessions.get(UUID.fromString(r.getString(2))), r.getString(5), current)) action=SwitchDecision.Action.EXPIRED;
             if(action==SwitchDecision.Action.WAIT) continue;
+            if (!SwitchDispatch.latest(c, id, r.getString(2))) action=SwitchDecision.Action.EXPIRED;
             if(action==SwitchDecision.Action.CONNECT) {
               player.get().createConnectionRequest(server.get()).fireAndForget();
               logger.info("Wechsel per Queue: {} -> {}",player.get().getUsername(),target);
@@ -58,7 +59,6 @@ public final class StatusPlugin {
           }
         }
       }
-      c.commit();
       switchWarned=false;
     } catch(Exception e) { if(!switchWarned) { logger.warn("Wechsel-Queue nicht lesbar: {}",e.getMessage()); switchWarned=true; } }
   }

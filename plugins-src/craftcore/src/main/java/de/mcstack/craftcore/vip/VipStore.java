@@ -36,7 +36,7 @@ public final class VipStore {
     /** Worlds the player was invited to (member of), for the hub and /vw join. */
     static final String LIST_SHARED = "SELECT w.id,w.name,w.status,w.slot,w.type FROM vip_worlds w JOIN vip_world_members m ON m.world_id=w.id WHERE m.player=? AND w.status<>'deleted' ORDER BY w.name";
     /** Invites added after a point in time, with the owner's name, for the cross-server invite notice. */
-    static final String NEW_INVITES = "SELECT w.name,p.name,m.added_at FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=w.owner WHERE m.player=? AND m.added_at>? AND w.status<>'deleted' ORDER BY m.added_at";
+    static final String NEW_INVITES = "SELECT w.name,p.name,m.added_at,w.id FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=w.owner WHERE m.player=? AND m.added_at>? AND w.status<>'deleted' ORDER BY m.added_at";
     static final String FIND_OWNERS_BY_NAME = "SELECT owner FROM vip_worlds WHERE name=? AND status<>'deleted'";
     static final String FIND_BY_OWNER_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE owner=? AND name=? AND status<>'deleted'";
 
@@ -65,11 +65,11 @@ public final class VipStore {
             s.setString(1,player.toString()); try (ResultSet r=s.executeQuery()) { List<World> worlds=new ArrayList<>(); while(r.next()) worlds.add(new World(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5))); return worlds; }
         }
     }
-    public record Invite(String world, String owner, long addedAt) {}
+    public record Invite(String world, String owner, long addedAt, String id) {}
     public List<Invite> invitesSince(UUID player, long since) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(NEW_INVITES)) {
             s.setString(1,player.toString()); s.setLong(2,since);
-            try (ResultSet r=s.executeQuery()) { List<Invite> out=new ArrayList<>(); while(r.next()) out.add(new Invite(r.getString(1), r.getString(2)==null?"?":r.getString(2), r.getLong(3))); return out; }
+            try (ResultSet r=s.executeQuery()) { List<Invite> out=new ArrayList<>(); while(r.next()) out.add(new Invite(r.getString(1), r.getString(2)==null?"?":r.getString(2), r.getLong(3), r.getString(4))); return out; }
         }
     }
     public Optional<World> find(UUID owner, String name) throws SQLException { return list(owner).stream().filter(w->w.name().equalsIgnoreCase(name)).findFirst(); }
@@ -82,6 +82,13 @@ public final class VipStore {
             }
         }
     }
+    public Optional<Entry> findJoinableById(UUID player, String id) throws SQLException {
+        Optional<Entry> entry=findById(id);
+        if (entry.isEmpty()) return entry;
+        if (entry.get().owner().equals(player) || members(id).stream().anyMatch(m -> m.player().equals(player))) return entry;
+        return Optional.empty();
+    }
+
     public List<Member> members(String worldId) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_MEMBERS)) {
             s.setString(1,worldId);

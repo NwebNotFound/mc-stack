@@ -48,7 +48,7 @@ public final class VipInviteNotices {
     }
 
     private void send(Player p, VipStore.Invite invite) {
-        String command = lobby ? VipInvites.joinCommand(invite.world()) : "/lobby";
+        String command = lobby ? VipInvites.joinCommand(invite.id()) : "/lobby";
         p.sendMessage(Component.text("[VIP] " + VipInvites.text(invite), NamedTextColor.LIGHT_PURPLE)
             .append(Component.text(lobby ? " [Beitreten]" : " [Zur Lobby, dann /vw]", NamedTextColor.GREEN).clickEvent(ClickEvent.runCommand(command))));
     }

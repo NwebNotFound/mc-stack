@@ -22,6 +22,27 @@ class VipStoreTest {
         return c;
     }
 
+    @Test void inviteIdentitySurvivesDuplicateNamesAndRevokedMembershipIsRejected() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url));
+            UUID recipient=UUID.randomUUID(), owner=UUID.randomUUID();
+            store.create(recipient,"Bauwelt","normal"); store.create(owner,"Bauwelt","normal");
+            String invited=store.list(owner).get(0).id();
+            try (PreparedStatement q=c.prepareStatement("INSERT INTO vip_world_members VALUES(?,?,'member',1000)")) {
+                q.setString(1,invited); q.setString(2,recipient.toString()); q.executeUpdate();
+            }
+            VipStore.Invite notice=store.invitesSince(recipient,0).get(0);
+            assertEquals(invited,notice.id());
+            assertEquals(invited,store.findJoinableById(recipient,notice.id()).orElseThrow().id());
+            assertNotEquals(store.list(recipient).get(0).id(),notice.id());
+            try (PreparedStatement q=c.prepareStatement("DELETE FROM vip_world_members WHERE world_id=?")) {
+                q.setString(1,invited); q.executeUpdate();
+            }
+            assertTrue(store.findJoinableById(recipient,notice.id()).isEmpty());
+        }
+    }
+
     @Test void sqlConstantsHaveExpectedParameters() throws Exception {
         Map<String, Integer> expected = Map.ofEntries(
                 Map.entry("COUNT_WORLDS", 1), Map.entry("INSERT_WORLD", 5), Map.entry("LIST_WORLDS", 1),

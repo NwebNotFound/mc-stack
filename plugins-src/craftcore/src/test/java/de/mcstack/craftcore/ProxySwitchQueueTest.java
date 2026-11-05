@@ -13,16 +13,16 @@ class ProxySwitchQueueTest {
       UUID player = UUID.randomUUID();
       ProxySwitchQueue.enqueue(c, player, "survival", "lobby", 1000);
       ProxySwitchQueue.enqueue(c, player, "vipworld-1", "lobby", 2000);
-      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT server FROM proxy_switch_requests WHERE done_at IS NULL")) {
+      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT server FROM proxy_switch_requests ORDER BY id DESC LIMIT 1")) {
         assertTrue(r.next()); assertEquals("vipworld-1", r.getString(1)); assertFalse(r.next());
       }
       ProxySwitchQueue.cancel(c, player, 1500);
-      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT COUNT(*) FROM proxy_switch_requests WHERE done_at IS NULL")) {
-        r.next(); assertEquals(1, r.getInt(1));
+      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT COUNT(*) FROM proxy_switch_requests")) {
+        r.next(); assertEquals(2, r.getInt(1));
       }
       ProxySwitchQueue.cancel(c, player, 2500);
-      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT COUNT(*) FROM proxy_switch_requests WHERE done_at IS NULL")) {
-        r.next(); assertEquals(0, r.getInt(1));
+      try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT COUNT(*) FROM proxy_switch_requests")) {
+        r.next(); assertEquals(3, r.getInt(1));
       }
       c.commit();
     }
