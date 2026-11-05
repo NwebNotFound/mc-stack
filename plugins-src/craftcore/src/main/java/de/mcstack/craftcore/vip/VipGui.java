@@ -246,7 +246,7 @@ public final class VipGui implements Listener {
                 case CONNECT -> {
                     if (d.staleRow()) store.status(id, "running", d.slot());
                     message(player, "Die Welt laeuft schon, du wirst verbunden ...");
-                    connect(player, d.slot());
+                    retryConnect(player, d.slot(), generation.getOrDefault(player.getUniqueId(), 0));
                 }
                 case WAIT -> {
                     if (d.staleRow()) store.status(id, "starting", d.slot());
@@ -270,7 +270,7 @@ public final class VipGui implements Listener {
             switch (decision.kind()) {
                 case RUNNING -> {
                     if (!"running".equals(entry.status()) || !decision.slot().equals(entry.slot())) store.status(id, "running", decision.slot());
-                    connect(player, decision.slot());
+                    retryConnect(player, decision.slot(), generation.getOrDefault(player.getUniqueId(), 0));
                 }
                 case STARTING -> {
                     if (!decision.slot().equals(entry.slot())) store.status(id, "starting", decision.slot());
@@ -442,21 +442,37 @@ public final class VipGui implements Listener {
     }
 
     /**
-     * Velocity may not accept the slot the moment the host reports ready, so the connect is
-     * sent up to three times. A player who already left this server is not sent again.
+     * Connects only once the slot answers a status ping (bounded), then checks that the player really left; one retry,
+     * then a clear chat line instead of Velocity's raw error.
      */
     private void retryConnect(Player player, String slot, int gen) {
         UUID id = player.getUniqueId();
         sentSlot.put(id, slot);
-        for (int attempt = 0; attempt < VipConnectRetry.ATTEMPTS; attempt++) {
-            int current = attempt;
-            Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                if (!VipConnectRetry.maySend(current, player.isOnline(), !transferred.contains(id))) return;
-                if (generation.getOrDefault(id, 0) != gen) return;
-                sentAt.put(id, System.currentTimeMillis());
-                connector.connect(player, slot);
-            }, VipConnectRetry.delayTicks(current));
-        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            de.mcstack.craftcore.pvp.PvpPing ping = new de.mcstack.craftcore.pvp.PvpPing(slot, 25565);
+            boolean up = VipReachable.waitFor(ping::ping, VipReachable.PING_ATTEMPTS, VipReachable.PING_DELAY_MS, Thread::sleep);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!stillHere(player, id, gen)) return;
+                if (!up) { sentSlot.remove(id); message(player, VipReachable.NOT_REACHABLE); return; }
+                attemptConnect(player, slot, gen, 1);
+            });
+        });
+    }
+
+    private void attemptConnect(Player player, String slot, int gen, int attempt) {
+        UUID id = player.getUniqueId();
+        sentAt.put(id, System.currentTimeMillis());
+        connector.connect(player, slot);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (!stillHere(player, id, gen)) return;
+            message(player, VipReachable.afterStillHere(attempt));
+            if (attempt < VipReachable.CONNECT_ATTEMPTS) attemptConnect(player, slot, gen, attempt + 1);
+            else sentSlot.remove(id);
+        }, VipReachable.CONNECT_CHECK_TICKS);
+    }
+
+    private boolean stillHere(Player player, UUID id, int gen) {
+        return player.isOnline() && !transferred.contains(id) && generation.getOrDefault(id, 0) == gen;
     }
 
     // ---------------------------------------------------------------- clicks
