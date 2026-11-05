@@ -99,7 +99,7 @@ public final class ProxyChannel {
       if (!INTENT.current(id, token)) return;          // a newer choice (another portal, /lobby, VIP) wins
       boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL);
       plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Versuch "
-          + attempt + ", Kanal " + SpawnRoute.CHANNEL + " registriert: " + registered + ")");
+          + attempt + ", Kanal " + SpawnRoute.CHANNEL + " registriert: " + registered + ", alle Kanaele: " + new java.util.TreeSet<>(still.getListeningPluginChannels()) + ")");
       if (attempt == 1) {
         boolean resent;
         try { resent = sendFor(plugin, still, server, token); } catch (IOException e) { resent = false; }
