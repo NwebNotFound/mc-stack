@@ -181,6 +181,14 @@ mc-stack pushes the current worlds to `POST /api/mc-vip-worlds` with the ingest 
         }
       ],
       "addons": ["keep-inventory"],
+      "settings": {
+        "gamemode": "survival",
+        "difficulty": "normal",
+        "pvp": true,
+        "keepInventory": false,
+        "mobGriefing": true,
+        "doDaylightCycle": true
+      },
       "created_at": 1793500000000,
       "last_started_at": 1793501000000
     }
@@ -200,7 +208,7 @@ mc-stack pushes the current worlds to `POST /api/mc-vip-worlds` with the ingest 
 }
 ```
 
-`visibility` on each world is `friends` or `private`. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
+`visibility` on each world is `friends` or `private`. `settings` carries the six plain world rules the panel edits; when the key is absent the website applies the same defaults as this example. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
 
 For each of `vip_worlds` and `vip_admin_log`:
 
