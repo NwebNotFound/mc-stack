@@ -85,6 +85,7 @@ final class Market implements Listener {
     core.tx(c->{core.exec(c,"CREATE TABLE IF NOT EXISTS bank_buy_daily (owner VARCHAR(40) NOT NULL, item VARCHAR(64) NOT NULL, day_key VARCHAR(10) NOT NULL, amount INT NOT NULL, PRIMARY KEY(owner,item,day_key))"); core.exec(c,"INSERT IGNORE INTO bank_link_revenue(owner,day_key,cents) SELECT CONCAT('u:',player),day_key,cents FROM bank_revenue_daily"); return null;});
     long boot=System.currentTimeMillis(); for(Material m:curveOrder()) core.tx(c->{persistCurve(c,m,boot);return null;});
     Bukkit.getPluginManager().registerEvents(this,core);
+    MarketSupply.start(core);
     Bukkit.getScheduler().runTaskAsynchronously(core,()->recoverSales(null));
     Bukkit.getScheduler().runTaskTimerAsynchronously(core,this::snapshotCurves,1L,72000L);
     int dropped=core.tx(c->SurvivalItems.purge(c,name->!SurvivalItems.obtainable(name, core.getConfig().getStringList("market.unobtainable"))));
@@ -114,7 +115,7 @@ final class Market implements Listener {
     double net=CurvePrice.folded(row,base,now,factors);
     CurvePrice.save(c,m.name(),net,now);
     Long cap=sellCap(c,m,now,false);
-    CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+    CurvePrice.Cent cent=CurvePrice.scaled(CurvePrice.mid(base,net),scarcity(m,base,factors,now),cap,factors);
     long sell=Math.min(cent.sell(),sellConfig(m).maxSell());
     WebsiteStats.catalog(c,m.name(),cent.buy(),sell,base,now);
   }
@@ -183,9 +184,10 @@ final class Market implements Listener {
       CurvePrice.Row row=CurvePrice.read(c,m.name());
       double net=CurvePrice.folded(row,base,now,factors);
       Long cap=sellCap(c,m,now,false);
-      CurvePrice.Cent cent=CurvePrice.cents(base,net,cap,factors);
+      double s=scarcity(m,base,factors,now);
+      CurvePrice.Cent cent=CurvePrice.scaled(CurvePrice.mid(base,net),s,cap,factors);
       long sell=Math.min(cent.sell(),config.maxSell());
-      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net),"-");
+      return new Price(buy?cent.buy():sell,CurvePrice.mid(base,net)*s,"-");
     }
     List<String> names=new ArrayList<>();
     names.add(m.name());
@@ -195,18 +197,19 @@ final class Market implements Listener {
     for(String name:names) locked.put(name,CurvePrice.lock(c,name,now));
     double net=CurvePrice.folded(locked.get(m.name()),base,now,factors);
     Long cap=sellCap(c,m,now,true);
+    double s=scarcity(m,base,factors,now);
     long total=0;
     for(int i=0;i<qty;i++) {
       double step=buy ? net+i : net-i;
-      CurvePrice.Cent cent=CurvePrice.cents(base,step,cap,factors);
+      CurvePrice.Cent cent=CurvePrice.scaled(CurvePrice.mid(base,step),s,cap,factors);
       long unit=buy ? cent.buy() : Math.min(cent.sell(),config.maxSell());
       total=Math.addExact(total,unit);
     }
     double end=buy ? net+qty : net-qty;
     CurvePrice.save(c,m.name(),end,now);
-    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    CurvePrice.Cent after=CurvePrice.scaled(CurvePrice.mid(base,end),s,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
-    return new Price(total, CurvePrice.mid(base,end), buy?"auf":"ab");
+    return new Price(total, CurvePrice.mid(base,end)*s, buy?"auf":"ab");
   }
   private long commitSell(Connection c, Material m, int amount, List<SellPricing.Enchant> enchants, int damage, SellConfig config, Long satchelCap) throws SQLException {
     long now=System.currentTimeMillis();
@@ -219,14 +222,15 @@ final class Market implements Listener {
     for(String name:names) CurvePrice.lock(c,name,now);
     double net=CurvePrice.folded(CurvePrice.read(c,m.name()),base,now,factors);
     Long cap=sellCap(c,m,now,true);
+    double s=scarcity(m,base,factors,now);
     long total=0;
     for(int i=0;i<amount;i++) {
-      long unit=Math.min(CurvePrice.sellCents(CurvePrice.mid(base,net-i),cap,factors),config.maxSell());
+      long unit=Math.min(CurvePrice.sellCents(CurvePrice.mid(base,net-i)*s,cap,factors),config.maxSell());
       total=Math.addExact(total,SatchelSell.payout(sellBreakdown(m,unit,enchants,damage,config.pricing()).total(),satchelCap));
     }
     double end=net-amount;
     CurvePrice.save(c,m.name(),end,now);
-    CurvePrice.Cent after=CurvePrice.cents(base,end,cap,factors);
+    CurvePrice.Cent after=CurvePrice.scaled(CurvePrice.mid(base,end),s,cap,factors);
     WebsiteStats.catalog(c,m.name(),after.buy(),Math.min(after.sell(),config.maxSell()),base,now);
     return total;
   }
@@ -256,7 +260,8 @@ final class Market implements Listener {
           double base=items.get(option).base();
           CurvePrice.Row row=locked ? CurvePrice.lock(c,option.name(),now) : CurvePrice.read(c,option.name());
           double net=CurvePrice.folded(row,base,now,factors);
-          best=Math.min(best,CurvePrice.buyCents(CurvePrice.mid(base,net),factors));
+          // The cap reads the same scaled buy a player pays, so scarcity can never open a craft-and-sell loop.
+          best=Math.min(best,CurvePrice.scaledBuy(CurvePrice.mid(base,net),scarcity(option,base,factors,now),factors));
         }
         if(best==Long.MAX_VALUE) { ok=false; break; }
         cost+=best;
@@ -273,6 +278,15 @@ final class Market implements Listener {
     return Math.max(1,capped);
   }
   boolean hasPrice(Material m) { return items.containsKey(m); }
+  /** Scarcity factor (1 while market.scarcity.enabled is false). */
+  private static double scarcity(Material m, double base, CurvePrice.Factors factors, long now) {
+    return MarketSupply.multiplier(m.name(), base, CurvePrice.halfLifeHours(base, factors), now);
+  }
+  Double basePrice(String name) {
+    Material material=Material.matchMaterial(name);
+    if(material==null || !items.containsKey(material)) return null;
+    return items.get(material).base();
+  }
   private long bankCents(Material m,double current,boolean buy) {
     long value=cents(core.getConfig(),m,current,buy);
     if(buy) return Math.max(1,value);
@@ -559,6 +573,7 @@ final class Market implements Listener {
     if(chest!=null) returnChest(e.getPlayer(),chest);
   }
   void shutdown(){
+    MarketSupply.stop();
     for(SellMenu menu:new ArrayList<>(sellMenus.values())){Player p=Bukkit.getPlayer(menu.owner);if(p!=null)p.closeInventory();}
     sellMenus.clear();
     for(SellChest chest:new ArrayList<>(sellChests.values())){Player p=Bukkit.getPlayer(chest.owner);if(p!=null)p.closeInventory(); else returnChest(null,chest);}

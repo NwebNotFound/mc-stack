@@ -452,3 +452,19 @@ Keine dieser Dateien wird in der Plan-PR angefasst.
 - [ ] **Schritt 5.** Ein Commit pro Schritt, Message mit dem Verhalten (`market: ein Stück bewegt den Mid`, `market: Quote und Fill getrennt`).
 
 Akzeptanz: die Tests aus Abschnitt 9 sind grün, 10000 Bruchstein, Erde oder Sand bleiben unter 180000 Cent, und ein wiederholter Snapshot plus `maintain` bewegt weder `quote_price` noch `avg_price` einer abgeschlossenen Stunde.
+
+## 11. Knappheit (v2, ersetzt #109, standardmäßig aus)
+
+`market.scarcity.enabled: false` bis Nils sie einschaltet. Dann gilt auf den Handels-Mid `m(net)`:
+
+```text
+s = clamp( (ref / (smoothed + 1))^k * (1 + demand-weight * max(0, netDemand) / ref), smin, smax )
+Kauf  = buy(m * max(1, s))     Verkauf = sell(m * s)   (Rezeptdeckel wie bisher auf die Kaufpreise der Zutaten)
+```
+
+- **Bestand:** letzter bekannter Inventar- und Enderkistenstand je Spieler (Join, Quit, alle `period-ticks` für Online-Spieler) plus offene Auktionen und AH. Ein Logout löscht den Stand nicht; ein leerer Server schreibt nichts, der EMA bleibt stehen. Stände älter als `holder-ttl-days` (30) fallen raus; unter `min-holders` (3) Spielern bewegt sich der EMA nicht.
+- **Nachfrage ist netto:** verbrauchte Zutat `+1`, erzeugtes Ergebnis `-1` (Werkbank inkl. Shift-Klick, Steinsäge, Ofen/Schmelzofen/Räucherofen). Hin- und Zurückcraften (Barren ↔ Block) ergibt 0 und pumpt nichts. Negative Nachfrage senkt den Preis nicht.
+- **Schreiben:** Ereignisse sammeln sich im Speicher und gehen alle `demand-flush-ticks` (5 s) in einer Transaktion raus. Zerfall und Addition passieren in einem Upsert (`demand = demand * 2^(-dt/H) + delta`), damit sich parallele Schreiber nicht überschreiben.
+- **Überfluss (`s < 1`)** senkt nur den Ankauf der Bank, nie ihren Verkaufspreis: sonst zahlt der 1-Cent-Boden eines Rezeptergebnisses (16 Scheiben aus 6 Glas) mehr aus, als die Zutaten kosten.
+
+Tests: `ScarcityTest` (Grenzen, Flag aus), `CraftDemandTest` (Netto, Shift-Klick, Bündelung), `SupplyStoreTest` (keine verlorenen Updates, leerer Server, TTL), `ScarcityArbitrageTest` (alle Rezepte an den Knappheitsecken, umkehrbare Paare ohne Gewinnschleife und ohne Pumpen).
