@@ -11,10 +11,17 @@ import org.junit.jupiter.api.Test;
 
 class CraftDemandTest {
   @Test void shiftClickCountsWhatTheInventoryCanTake() {
-    assertEquals(1, CraftDemand.crafts(false, new int[] {64, 64}, 4, 64, 0, 0));
-    assertEquals(16, CraftDemand.crafts(true, new int[] {64, 0, 16}, 4, 64, 36, 0), "smallest filled slot limits");
-    assertEquals(3, CraftDemand.crafts(true, new int[] {64}, 4, 64, 0, 12), "only 12 free result slots");
-    assertEquals(0, CraftDemand.crafts(true, new int[] {0, 0}, 1, 64, 36, 0));
+    assertEquals(1, CraftDemand.crafts(false, new int[] {64, 64}, 4, 64, 0, 0, 64));
+    assertEquals(16, CraftDemand.crafts(true, new int[] {64, 0, 16}, 4, 64, 36, 0, 0), "smallest filled slot limits");
+    assertEquals(3, CraftDemand.crafts(true, new int[] {64}, 4, 64, 0, 12, 0), "only 12 free result slots");
+    assertEquals(0, CraftDemand.crafts(true, new int[] {0, 0}, 1, 64, 36, 0, 0));
+  }
+
+  @Test void noOpClicksAddNoDemand() {
+    assertEquals(0, CraftDemand.crafts(false, new int[] {64, 64}, 4, 64, 36, 0, 0), "incompatible cursor or no-op action");
+    assertEquals(0, CraftDemand.crafts(false, new int[] {64}, 4, 64, 36, 0, 3), "cursor has room for 3, result is 4");
+    assertEquals(0, CraftDemand.crafts(true, new int[] {64}, 4, 64, 0, 0, 0), "shift-click into a full inventory");
+    assertTrue(CraftDemand.craftDelta(new String[] {"OAK_LOG"}, 0, "OAK_PLANKS", 4).isEmpty());
   }
 
   @Test void craftingNetsConsumptionAgainstTheResult() {

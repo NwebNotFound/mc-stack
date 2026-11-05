@@ -30,6 +30,7 @@ import org.bukkit.inventory.StonecutterInventory;
 final class MarketSupply implements Listener {
   private static volatile Map<String, SupplyStore.Sample> samples = Map.of();
   private static volatile Scarcity.Settings active = null;
+  private static volatile MarketSupply running = null;
   private final CraftCore core;
   private final DemandLedger ledger = new DemandLedger();
   private final AtomicBoolean flushing = new AtomicBoolean();
@@ -42,11 +43,33 @@ final class MarketSupply implements Listener {
     samples = Map.copyOf(core.tx(c -> { SupplyStore.migrate(c); return SupplyStore.load(c); }));
     active = settings;
     MarketSupply supply = new MarketSupply(core);
+    running = supply;
     Bukkit.getPluginManager().registerEvents(supply, core);
     long period = Math.max(20L, core.getConfig().getLong("market.scarcity.period-ticks", 1200L));
     long flush = Math.max(20L, core.getConfig().getLong("market.scarcity.demand-flush-ticks", 100L));
     Bukkit.getScheduler().runTaskTimer(core, supply::scanOnline, 40L, period);
     Bukkit.getScheduler().runTaskTimerAsynchronously(core, supply::flush, flush, flush);
+  }
+
+  /**
+   * Orderly shutdown (called from Market.shutdown, before the plugin is gone): waits up to 5 s for an in-flight async
+   * flush, then writes everything still pending, including a batch a failed flush just put back, on this thread.
+   */
+  static void stop() {
+    MarketSupply supply = running;
+    running = null;
+    if (supply == null) return;
+    long until = System.currentTimeMillis() + 5000;
+    while (!supply.flushing.compareAndSet(false, true)) {
+      if (System.currentTimeMillis() > until) { supply.core.getLogger().warning("Craft-Nachfrage: Flush beim Stopp haengt, schreibe trotzdem"); break; }
+      try { Thread.sleep(20); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+    }
+    try {
+      for (int attempt = 1; attempt <= 2 && !supply.ledger.isEmpty(); attempt++) {
+        try { supply.write(supply.ledger.drain()); }
+        catch (Exception e) { if (attempt == 2) supply.core.getLogger().warning("Craft-Nachfrage beim Stopp verloren: " + e.getMessage()); }
+      }
+    } finally { supply.flushing.set(false); }
   }
 
   /** Price multiplier for one item. 1 when the feature is off or nothing is known about the item. */
@@ -78,7 +101,7 @@ final class MarketSupply implements Listener {
     Map<String, Long> counts = new HashMap<>();
     tally(counts, player.getInventory().getStorageContents());
     tally(counts, player.getEnderChest().getContents());
-    return new Counted("player:" + player.getUniqueId(), counts);
+    return new Counted("player:" + player.getUniqueId(), counts, System.currentTimeMillis());
   }
 
   private static void tally(Map<String, Long> counts, ItemStack[] stacks) {
@@ -95,7 +118,7 @@ final class MarketSupply implements Listener {
     try {
       long now = System.currentTimeMillis();
       Map<String, SupplyStore.Sample> loaded = core.tx(c -> {
-        for (Counted holder : holders) SupplyStore.replaceHolder(c, holder.holder(), holder.counts(), now);
+        for (Counted holder : holders) SupplyStore.replaceHolder(c, holder.holder(), holder.counts(), holder.captured());
         if (recompute) {
           SupplyStore.replaceHolder(c, "market", SupplyStore.marketStock(c), now);
           SupplyStore.recompute(c, settings.emaAlpha(), now, settings.holderTtlMs(), settings.minHolders());
@@ -110,7 +133,14 @@ final class MarketSupply implements Listener {
 
   private void flush() {
     if (ledger.isEmpty() || !flushing.compareAndSet(false, true)) return;
-    Map<String, Long> batch = ledger.drain();
+    try { write(ledger.drain()); }
+    catch (Exception e) { core.getLogger().warning("Craft-Nachfrage: " + e.getMessage()); }
+    finally { flushing.set(false); }
+  }
+
+  /** Writes one batch; on failure the batch goes back into the ledger and the exception is rethrown. */
+  private void write(Map<String, Long> batch) throws Exception {
+    if (batch.isEmpty()) return;
     try {
       long now = System.currentTimeMillis();
       CurvePrice.Factors factors = CurvePrice.factors(core.getConfig());
@@ -123,8 +153,8 @@ final class MarketSupply implements Listener {
       publish(loaded);
     } catch (Exception e) {
       ledger.restore(batch);
-      core.getLogger().warning("Craft-Nachfrage: " + e.getMessage());
-    } finally { flushing.set(false); }
+      throw e;
+    }
   }
 
   /** Both writers reload the whole table after their commit; the newer demand timestamp wins per item. */
@@ -156,8 +186,11 @@ final class MarketSupply implements Listener {
       types[i] = slot.getType().name();
     }
     int max = Math.max(1, result.getMaxStackSize()), per = Math.max(1, result.getAmount());
-    int[] space = space(player.getInventory().getStorageContents(), result.getType(), max);
-    int crafts = CraftDemand.crafts(event.isShiftClick(), amounts, per, max, space[0], space[1]);
+    // Only clicks that really craft: shift moves into the inventory, everything else must have room for the result.
+    boolean shift = event.isShiftClick() && event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
+    int[] space = shift ? space(player.getInventory().getStorageContents(), result, max) : new int[] {0, 0};
+    int room = shift ? 0 : takeRoom(event, player, result, max);
+    int crafts = CraftDemand.crafts(shift, amounts, per, max, space[0], space[1], room);
     ledger.add(CraftDemand.craftDelta(types, crafts, result.getType().name(), per));
   }
 
@@ -175,7 +208,7 @@ final class MarketSupply implements Listener {
     if (result.getAmount() <= 0 || input.getAmount() <= 0) return;
     boolean shift = event.isShiftClick() && event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY;
     int max = Math.max(1, result.getMaxStackSize()), per = result.getAmount();
-    int[] space = shift ? space(player.getInventory().getStorageContents(), result.getType(), max) : new int[] {0, 0};
+    int[] space = shift ? space(player.getInventory().getStorageContents(), result, max) : new int[] {0, 0};
     int room = shift ? 0 : takeRoom(event, player, result, max);
     int takes = CraftDemand.stonecutterTakes(shift, input.getAmount(), per, max, space[0], space[1], room);
     ledger.add(CraftDemand.stonecutterDelta(input.getType().name(), takes, result.getType().name(), per));
@@ -190,11 +223,12 @@ final class MarketSupply implements Listener {
     ledger.add(CraftDemand.smeltDelta(source.getType().name(), result == null ? null : result.getType().name(), result == null ? 1 : result.getAmount()));
   }
 
-  private static int[] space(ItemStack[] storage, Material type, int maxStack) {
+  /** Empty slots and free room in stacks the result can merge with (same item and meta, not just the same material). */
+  private static int[] space(ItemStack[] storage, ItemStack result, int maxStack) {
     int empty = 0, partial = 0;
     if (storage != null) for (ItemStack slot : storage) {
       if (slot == null || slot.getType().isAir()) empty++;
-      else if (slot.getType() == type) partial += Math.max(0, maxStack - slot.getAmount());
+      else if (slot.isSimilar(result)) partial += Math.max(0, maxStack - slot.getAmount());
     }
     return new int[] {empty, partial};
   }
@@ -211,7 +245,7 @@ final class MarketSupply implements Listener {
 
   private static int cursorRoom(ItemStack cursor, ItemStack result, int maxStack) {
     if (cursor == null || cursor.getType().isAir()) return maxStack;
-    if (cursor.getType() != result.getType()) return 0;
+    if (!cursor.isSimilar(result)) return 0;
     return Math.max(0, maxStack - cursor.getAmount());
   }
 
@@ -226,5 +260,5 @@ final class MarketSupply implements Listener {
   /** The inventory a player logs out with stays part of the supply (until holder-ttl-days). */
   @EventHandler public void quit(PlayerQuitEvent event) { capture(event.getPlayer()); }
 
-  private record Counted(String holder, Map<String, Long> counts) {}
+  private record Counted(String holder, Map<String, Long> counts, long captured) {}
 }

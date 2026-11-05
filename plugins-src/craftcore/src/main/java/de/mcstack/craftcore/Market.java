@@ -573,6 +573,7 @@ final class Market implements Listener {
     if(chest!=null) returnChest(e.getPlayer(),chest);
   }
   void shutdown(){
+    MarketSupply.stop();
     for(SellMenu menu:new ArrayList<>(sellMenus.values())){Player p=Bukkit.getPlayer(menu.owner);if(p!=null)p.closeInventory();}
     sellMenus.clear();
     for(SellChest chest:new ArrayList<>(sellChests.values())){Player p=Bukkit.getPlayer(chest.owner);if(p!=null)p.closeInventory(); else returnChest(null,chest);}

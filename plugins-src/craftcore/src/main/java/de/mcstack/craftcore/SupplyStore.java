@@ -19,6 +19,7 @@ final class SupplyStore {
   static void migrate(Connection c) throws SQLException {
     try (Statement s = c.createStatement()) {
       s.execute("CREATE TABLE IF NOT EXISTS market_supply_holder (holder VARCHAR(80) NOT NULL, item VARCHAR(64) NOT NULL, qty BIGINT NOT NULL, seen BIGINT NOT NULL, PRIMARY KEY(holder, item))");
+      s.execute("CREATE TABLE IF NOT EXISTS market_supply_holder_version (holder VARCHAR(80) PRIMARY KEY, captured BIGINT NOT NULL)");
       s.execute("CREATE TABLE IF NOT EXISTS market_supply (item VARCHAR(64) PRIMARY KEY, raw_qty BIGINT NOT NULL, smoothed DOUBLE NOT NULL, updated BIGINT NOT NULL, demand DOUBLE NOT NULL DEFAULT 0, demand_updated BIGINT NOT NULL DEFAULT 0)");
     }
   }
@@ -47,8 +48,23 @@ final class SupplyStore {
     }
   }
 
-  /** Last-seen inventory of one holder. Holders stay after a quit, so an empty server keeps its supply. */
-  static void replaceHolder(Connection c, String holder, Map<String, Long> counts, long now) throws SQLException {
+  /**
+   * Last-seen inventory of one holder, taken at {@code captured} (server-thread time of the snapshot). Holders stay after
+   * a quit, so an empty server keeps its supply. Snapshots of one holder are applied in capture order: the version row is
+   * upserted first, which locks it for the rest of the transaction, and an older snapshot than the stored one is
+   * dropped. Returns false when the snapshot was older.
+   */
+  static boolean replaceHolder(Connection c, String holder, Map<String, Long> counts, long captured) throws SQLException {
+    try (PreparedStatement up = c.prepareStatement("INSERT INTO market_supply_holder_version(holder, captured) VALUES(?,?) ON DUPLICATE KEY UPDATE captured = GREATEST(captured, VALUES(captured))")) {
+      up.setString(1, holder);
+      up.setLong(2, captured);
+      up.executeUpdate();
+    }
+    try (PreparedStatement read = c.prepareStatement("SELECT captured FROM market_supply_holder_version WHERE holder=? FOR UPDATE")) {
+      read.setString(1, holder);
+      try (ResultSet r = read.executeQuery()) { if (r.next() && r.getLong(1) > captured) return false; }
+    }
+    long now = captured;
     try (PreparedStatement delete = c.prepareStatement("DELETE FROM market_supply_holder WHERE holder=?")) {
       delete.setString(1, holder);
       delete.executeUpdate();
@@ -68,6 +84,7 @@ final class SupplyStore {
       }
       if (any) insert.executeBatch();
     }
+    return true;
   }
 
   static Map<String, Long> marketStock(Connection c) {
@@ -90,6 +107,10 @@ final class SupplyStore {
    */
   static int recompute(Connection c, double alpha, long now, long ttlMs, int minHolders) throws SQLException {
     try (PreparedStatement purge = c.prepareStatement("DELETE FROM market_supply_holder WHERE seen < ?")) {
+      purge.setLong(1, now - ttlMs);
+      purge.executeUpdate();
+    }
+    try (PreparedStatement purge = c.prepareStatement("DELETE FROM market_supply_holder_version WHERE captured < ?")) {
       purge.setLong(1, now - ttlMs);
       purge.executeUpdate();
     }

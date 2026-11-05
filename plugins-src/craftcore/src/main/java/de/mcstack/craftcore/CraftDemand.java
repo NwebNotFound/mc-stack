@@ -12,7 +12,11 @@ final class CraftDemand {
   private CraftDemand() {}
 
   /** How many crafts one click performs. Shift-click repeats while the smallest filled slot and the inventory allow. */
-  static int crafts(boolean shift, int[] matrixAmounts, int resultPerCraft, int resultMaxStack, int emptySlots, int partialSpace) {
+  /**
+   * {@code destinationRoom} is how many result items a non-shift click can actually take (cursor of the same item with
+   * space, drop, empty hotbar slot); 0 for a click that does nothing, so it adds no demand.
+   */
+  static int crafts(boolean shift, int[] matrixAmounts, int resultPerCraft, int resultMaxStack, int emptySlots, int partialSpace, int destinationRoom) {
     if (matrixAmounts == null) return 0;
     int limiting = Integer.MAX_VALUE;
     boolean any = false;
@@ -22,7 +26,7 @@ final class CraftDemand {
       limiting = Math.min(limiting, amount);
     }
     if (!any) return 0;
-    if (!shift) return 1;
+    if (!shift) return destinationRoom >= Math.max(1, resultPerCraft) ? 1 : 0;
     long space = (long) Math.max(0, emptySlots) * Math.max(1, resultMaxStack) + Math.max(0, partialSpace);
     return (int) Math.max(0, Math.min(limiting, space / Math.max(1, resultPerCraft)));
   }

@@ -75,6 +75,17 @@ class SupplyStoreTest {
     }
   }
 
+  @Test void olderSnapshotNeverOverwritesANewerOne() throws Exception {
+    try (Connection c = open(url())) {
+      assertTrue(SupplyStore.replaceHolder(c, "player:a", Map.of("DIAMOND", 0L), 2_000), "quit snapshot, empty inventory");
+      assertFalse(SupplyStore.replaceHolder(c, "player:a", Map.of("DIAMOND", 64L), 1_000), "delayed join snapshot is older");
+      try (var r = c.createStatement().executeQuery("SELECT SUM(qty) FROM market_supply_holder WHERE holder='player:a' AND item='DIAMOND'")) {
+        r.next(); assertEquals(0, r.getLong(1));
+      }
+      assertTrue(SupplyStore.replaceHolder(c, "player:a", Map.of("DIAMOND", 5L), 3_000));
+    }
+  }
+
   @Test void tooFewHoldersDoNotMoveTheEma() throws Exception {
     try (Connection c = open(url())) {
       for (int p = 0; p < 3; p++) SupplyStore.replaceHolder(c, "player:" + p, Map.of("DIAMOND", 10L), 0);
