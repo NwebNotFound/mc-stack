@@ -78,15 +78,21 @@ public final class ProxyChannel {
    */
   public static boolean sendVerified(JavaPlugin plugin, Player player, String server) {
     if (!sendOrTell(plugin, player, server)) return false;
-    java.util.UUID id = player.getUniqueId();
+    verifyLater(plugin, player.getUniqueId(), server, 1);
+    return true;
+  }
+
+  /** Attempt 1 still here after 5 s: send once more from a plain scheduler tick, then tell the player and log. */
+  private static void verifyLater(JavaPlugin plugin, java.util.UUID id, String server, int attempt) {
     Bukkit.getScheduler().runTaskLater(plugin, () -> {
       Player still = Bukkit.getPlayer(id);
       if (still == null || !still.isOnline()) return; // switched away: fine
-      plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Kanal "
-          + SpawnRoute.CHANNEL + " registriert: " + still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL) + ")");
+      boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL);
+      plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Versuch "
+          + attempt + ", Kanal " + SpawnRoute.CHANNEL + " registriert: " + registered + ")");
+      if (attempt == 1 && send(plugin, still, server)) { verifyLater(plugin, id, server, 2); return; }
       still.sendMessage(notMovedText(server));
     }, 100L);
-    return true;
   }
 
   static String notMovedText(String server) {
