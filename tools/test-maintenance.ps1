@@ -86,6 +86,11 @@ $cands = @(Get-RetentionCandidates (Join-Path $root 'backups') 7)
 Check ($cands.Count -eq 1 -and $cands[0] -like '*daily-20261020-045000-000') 'old COMPLETE backup is a candidate'
 Check (Test-Path $old) 'and is not deleted'
 Check (-not (Select-String -Path "$root/backup.ps1" -Pattern 'Remove-Item' -Quiet)) 'backup.ps1 contains no Remove-Item'
+1..9 | ForEach-Object { Set-Content (Join-Path $root ("backups/survival-dev-reset-2026110{0}-050000-000.zip" -f $_)) 'zip' }
+$zips = @(Get-DevResetCandidates (Join-Path $root 'backups') 7)
+Check ($zips.Count -eq 2 -and $zips[0] -like '*20261102*' -and $zips[1] -like '*20261101*') 'the two oldest reset zips are reported'
+Check (@(Get-ChildItem (Join-Path $root 'backups') -Filter 'survival-dev-reset-*.zip').Count -eq 9) 'and all nine stay'
+Check (-not (Select-String -Path "$root/dev-reset.ps1" -Pattern "survival-dev-reset-\*\.zip.*Remove-Item" -Quiet)) 'dev-reset.ps1 never removes reset zips'
 
 Write-Host 'backup.ps1 with the DB down (the 05.11. 11:36 case)'
 $global:DbStates = @('exited')

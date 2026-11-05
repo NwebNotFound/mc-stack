@@ -89,3 +89,9 @@ function Get-RetentionCandidates([string]$BackupRoot, [int]$Days = 7) {
     Where-Object { $_.Name -notlike '*-FAILED*' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'COMPLETE.txt')) -and $_.CreationTime -lt (Get-Date).AddDays(-$Days) } |
     ForEach-Object { $_.FullName })
 }
+
+# Survival dev-reset zips beyond the newest $Keep. Only reported (rule 5).
+function Get-DevResetCandidates([string]$BackupDir, [int]$Keep = 7) {
+  if (-not (Test-Path -LiteralPath $BackupDir)) { return @() }
+  @(Get-ChildItem -LiteralPath $BackupDir -Filter 'survival-dev-reset-*.zip' -File | Sort-Object Name -Descending | Select-Object -Skip $Keep | ForEach-Object { $_.FullName })
+}

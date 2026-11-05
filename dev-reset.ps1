@@ -48,7 +48,7 @@ if ($DryRun) {
     foreach ($name in @('world','world_nether','world_the_end')) { Write-Host "Wuerde sichern und entfernen: data/survival/$name (falls vorhanden)" }
     Write-Host 'Wuerde vorher warnen, 5 Minuten warten, Survival stoppen und ZIP mit Welten und CraftCore-Weltdaten erstellen und pruefen.'
     Write-Host 'Wuerde nur Survival-Daten fuer world, world_nether, world_the_end aus claims, homes, graves entfernen; CP, Teams und Lobby/Parkour bleiben.'
-    Write-Host 'Wuerde Survival starten, Chat leeren und nur die letzten 7 Survival-Reset-Backups behalten.'
+    Write-Host 'Wuerde Survival starten, Chat leeren und Reset-Backups ueber den letzten 7 nur im Log melden (nichts loeschen).'
     exit 0
 }
     if ($ClearChat) { Clear-AllChat; exit 0 }
@@ -106,7 +106,8 @@ if ($DryRun) {
         do { Start-Sleep 5; $health = (Invoke-Docker @('inspect','--format','{{.State.Health.Status}}','mc-stack-survival-1')) -join '' } while ($health -ne 'healthy' -and (Get-Date) -lt $deadline)
         if ($health -ne 'healthy') { throw 'Survival wurde nicht rechtzeitig healthy.' }
         Clear-AllChat
-        Get-ChildItem -LiteralPath $backupDir -Filter 'survival-dev-reset-*.zip' -File | Sort-Object Name -Descending | Select-Object -Skip 7 | Remove-Item -Force
+        # PROJECT.md rule 5: older reset backups are only reported, never deleted (Gatekeeper #137).
+        foreach ($old in @(Get-DevResetCandidates $backupDir 7)) { Write-MaintLog 'retention' 'warn' "mehr als 7 Reset-Backups, nur mit Nils' OK von Hand entfernen: $old" }
         Write-Host "DEV-Reset abgeschlossen. Backup: $zip"
     } catch {
         if (-not $destructive) { try { Invoke-Docker @('compose','up','-d','--no-deps','survival') | Out-Null } catch { Write-Warning "Survival-Neustart fehlgeschlagen: $_" } }
