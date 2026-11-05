@@ -66,7 +66,25 @@ Do not deploy only CraftCore: the fallback needs the new proxy consumer.
 
 The proxy polls every 500 ms and executes a pending request after a four-second grace period via its own connection API.
 It rejects requests older than 15 seconds, requests from earlier proxy logins, and requests whose source backend no longer matches.
-Rows are claimed under a database lock; backend writes use one ordered worker and supersede older pending choices.
+Choices are published synchronously as append-only rows. The proxy holds no row lock while dispatching and rechecks the latest published choice immediately before connecting.
 Backends without database write access retain the plugin-message path and clickable `/server` fallback.
 Test the Survival portal, NPC/menu joins, a newer destination replacing an older one, and disconnect/reconnect within five seconds.
 Successful fallback switches log `Wechsel per Queue` in Velocity. Check both backend and proxy logs for queue permission errors.
+## Wartungs-Tasks: Backup und Dev-Reset (fuer Homelab Deployer)
+
+Nach dem Vorfall vom 05.11. (beide Nachhol-Laeufe um 11:36 gleichzeitig, `craftcore-db` noch aus) gilt fuer `backup.ps1` und `dev-reset.ps1`:
+
+- **Log:** jeder Lauf schreibt JSON-Zeilen (Start, Schritte, Exit-Code, Fehler) nach `logs/maintenance/<backup|dev-reset>-<yyyy-MM>.log`, eine Datei pro Monat. Es wird nichts automatisch geloescht; alte Monate nur mit Nils' OK von Hand entfernen.
+- **Bereitschaft:** vor jeder Aktion prueft das Skript Docker, `craftcore-db` healthy und `SELECT 1` (Standard 12 Versuche × 10 s, `-ReadyAttempts`). Danach klarer Fehler im Log, Exit 1, es wird nichts gestoppt.
+- **Unvollstaendige Backups:** gueltig ist nur ein Ordner mit `COMPLETE.txt`. Ein abgebrochener Lauf bekommt `FAILED.txt` mit dem Grund und wird zu `daily-…-FAILED` umbenannt (nichts geloescht; die 7-Tage-Aufbewahrung fasst `-FAILED` nicht an).
+- **Aufbewahrung:** `backup.ps1` loescht keine alten Backups mehr (PROJECT.md Regel 5). Vollstaendige Backups aelter als 7 Tage stehen als `retention`-Warnung im Log; entfernt werden sie nur von Hand mit Nils' OK. `-PreserveBackups` bleibt als Schalter erhalten, hat aber keine Wirkung mehr.
+- **Sperre:** beide nutzen `backups/.maintenance.lock` (exklusiver Datei-Handle, auch ueber Sitzungen hinweg). `dev-reset.ps1` wartet bis zu 30 min (`-LockWaitSeconds`), bis ein laufendes Backup fertig ist; `backup.ps1` bricht sofort ab, wenn die Sperre belegt ist.
+
+Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig von der Benutzeranmeldung ausfuehren"):
+
+| Task | Zeit | Aktion | Einstellungen |
+|---|---|---|---|
+| `MCStack-Backup` | 04:50 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\backup.ps1` | "Task so schnell wie moeglich nach verpasstem Start ausfuehren" an; "Verzoegerung" 5 min; "Wenn bereits ausgefuehrt: neue Instanz nicht starten"; Abbruch nach 2 h |
+| `MCStack-Dev-Reset` | 05:10 (20 min Abstand) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\dev-reset.ps1` | verpasster Start an, Verzoegerung 10 min; neue Instanz nicht starten; Abbruch nach 1 h |
+
+Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben aktivieren"). Kein AtStartup-Task. Die Scheduler-Aenderungen gehoeren nicht in diesen PR und werden vom Homelab Deployer umgesetzt.
