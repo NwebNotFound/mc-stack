@@ -19,21 +19,27 @@ public final class LobbyVip implements CommandExecutor {
     private final VipStore store;
     private final VipModule module;
     private final VipGui gui;
+    private final VipWebRunner webQueue;
+    private final VipStore.ConnectionSource source;
 
     public LobbyVip(JavaPlugin plugin, VipStore.ConnectionSource source) {
         this.plugin = plugin;
+        this.source = source;
         this.store = new VipStore(source);
         this.module = new VipModule(plugin, source, new Connector(), false, null);
         this.gui = module.gui();
+        this.webQueue = new VipWebRunner(plugin);
     }
 
     public void start() {
         Objects.requireNonNull(plugin.getCommand("vw")).setExecutor(this);
         ProxyChannel.register(plugin);
         module.start();
+        // Web-Queue nur mit VIP_WEB_QUEUE=1; ohne Flag pollt hier nichts.
+        webQueue.start(source, new VipHostClient(), VipConfig.load());
     }
 
-    public void shutdown() { module.shutdown(); }
+    public void shutdown() { webQueue.shutdown(); module.shutdown(); }
 
     public VipGui gui() { return gui; }
 

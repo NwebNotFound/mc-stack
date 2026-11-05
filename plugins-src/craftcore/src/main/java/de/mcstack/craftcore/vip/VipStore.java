@@ -32,6 +32,12 @@ public final class VipStore {
     static final String INSERT_ADDON = "INSERT INTO vip_world_addons (world_id,addon,added_at) VALUES (?,?,?)";
     static final String SET_STARTED = "UPDATE vip_worlds SET status='running',slot=?,last_started_at=? WHERE id=? AND status<>'deleted'";
     static final String FIND_PLAYER = "SELECT uuid FROM known_players WHERE name=?";
+    static final String SET_SETTINGS = "UPDATE vip_worlds SET settings=? WHERE id=? AND status<>'deleted'";
+    static final String FIND_SETTINGS = "SELECT settings FROM vip_worlds WHERE id=? AND status<>'deleted'";
+    static final String SET_VISIBILITY = "UPDATE vip_worlds SET visibility=? WHERE id=? AND status<>'deleted'";
+    static final String DELETE_WORLD = "UPDATE vip_worlds SET status='deleted',deleted_at=? WHERE id=? AND status<>'deleted'";
+    static final String INSERT_AUDIT = "INSERT INTO vip_world_audit (world_id,action,admin_uuid,admin_name,owner_uuid,owner_name,detail,created_at) VALUES (?,?,?,?,?,?,?,?)";
+
     static final String FIND_OWNERS_BY_NAME = "SELECT owner FROM vip_worlds WHERE name=? AND status<>'deleted'";
     static final String FIND_BY_OWNER_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE owner=? AND name=? AND status<>'deleted'";
 
@@ -173,6 +179,41 @@ public final class VipStore {
             try (PreparedStatement s=c.prepareStatement(sql)) { s.setLong(1,now); s.setString(2,id); s.executeUpdate(); }
             c.commit();
         } catch(SQLException e) { c.rollback(); throw e; } }
+    }
+    /** Die sechs Regeln als JSON; NULL heisst Vertrags-Defaults. */
+    public void setSettings(String id, VipWorldSettings settings) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_SETTINGS)) {
+            s.setString(1, settings==null ? null : settings.toJson().toString()); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    public VipWorldSettings settings(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_SETTINGS)) {
+            s.setString(1,id);
+            try (ResultSet r=s.executeQuery()) {
+                if (!r.next()) return VipWorldSettings.DEFAULTS;
+                String json=r.getString(1);
+                return json==null ? VipWorldSettings.DEFAULTS : VipWorldSettings.fromJson(com.google.gson.JsonParser.parseString(json));
+            }
+        }
+    }
+    /** Vertrag schreibt friends/private; die Spalte kennt historisch public statt friends. */
+    public void visibility(String id, String visibility) throws SQLException {
+        String stored = "private".equals(visibility) ? "private" : "public";
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_VISIBILITY)) {
+            s.setString(1,stored); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    /** Weiches Loeschen: die Zeile bleibt fuer Verlauf und Audit, das Panel blendet sie aus. */
+    public void delete(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(DELETE_WORLD)) {
+            s.setLong(1,clock.millis()); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    public void audit(String worldId, String action, UUID admin, String adminName, UUID owner, String ownerName, String detail) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(INSERT_AUDIT)) {
+            s.setString(1,worldId); s.setString(2,action); s.setString(3,admin.toString()); s.setString(4,adminName);
+            s.setString(5,owner.toString()); s.setString(6,ownerName); s.setString(7,detail); s.setLong(8,clock.millis()); s.executeUpdate();
+        }
     }
     public static boolean duplicate(SQLException e) { return e.getErrorCode()==1062 || "23505".equals(e.getSQLState()); }
 }
