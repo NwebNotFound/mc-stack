@@ -49,6 +49,32 @@ class DemandFlusherTest {
     assertTrue(ledger.isEmpty());
   }
 
+  /** Round 4: flush paused between drain and publishing inFlight while stop times out must still be journaled. */
+  @Test void pauseBetweenDrainAndInFlightIsCoveredByStop() throws Exception {
+    DemandLedger ledger = new DemandLedger();
+    CountDownLatch drained = new CountDownLatch(1), release = new CountDownLatch(1);
+    List<DemandFlusher.Batch> journal = new CopyOnWriteArrayList<>();
+    CountDownLatch neverEnds = new CountDownLatch(1);
+    DemandFlusher f = new DemandFlusher(ledger, b -> neverEnds.await(10, TimeUnit.SECONDS), journal::addAll, msg -> {});
+    f.afterDrain = () -> { drained.countDown(); try { release.await(10, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } };
+    ledger.add(Map.of("STONE", 9L));
+    Thread worker = new Thread(f::flush);
+    worker.setDaemon(true);
+    worker.start();
+    assertTrue(drained.await(5, TimeUnit.SECONDS), "flush paused right after the drain");
+    assertTrue(ledger.isEmpty(), "the batch is out of the ledger and not yet in flight");
+    Thread stopper = new Thread(() -> f.stop(100));
+    stopper.start();
+    Thread.sleep(300);
+    assertTrue(stopper.isAlive(), "stop cannot read the state in the middle of the handoff");
+    release.countDown();
+    stopper.join(5000);
+    assertFalse(stopper.isAlive());
+    assertEquals(Map.of("STONE", 9L), sum(journal), "the drained batch is journaled before stop returns");
+    neverEnds.countDown();
+    worker.join(5000);
+  }
+
   /** The blocked write commits after stop journaled it: replay skips the batch id, so nothing is counted twice. */
   @Test void lateCommitPlusReplayCountsOnce() throws Exception {
     String url = "jdbc:h2:mem:flush_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1";

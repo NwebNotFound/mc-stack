@@ -33,6 +33,13 @@ final class DemandFlusher {
   private volatile Batch inFlight;
   /** A batch whose write failed. Retried with the same id, because a failed commit ack can still mean it landed. */
   private volatile Batch retry;
+  /**
+   * Guards the handoff of demand between the ledger, {@code inFlight} and {@code retry}. Drain + publish happen in one
+   * step under it, and stop reads all three under it, so there is no moment in which a batch is in none of them.
+   */
+  private final Object handoff = new Object();
+  /** Test hook: runs inside the handoff, after the drain and before the batch is published as in flight. */
+  Runnable afterDrain = () -> {};
 
   DemandFlusher(DemandLedger ledger, Writer writer, Journal journal, Consumer<String> warn) {
     this.ledger = ledger; this.writer = writer; this.journal = journal; this.warn = warn;
@@ -44,16 +51,27 @@ final class DemandFlusher {
   boolean flush() {
     if (stopping || (retry == null && ledger.isEmpty()) || !lock.tryLock()) return false;
     try {
-      Batch b = retry;
-      if (b == null) {
-        Map<String, Long> drained = ledger.drain();
-        if (drained.isEmpty()) return true;
-        b = batch(drained);
+      Batch b;
+      synchronized (handoff) {
+        if (stopping) return false;
+        b = retry;
+        if (b == null) {
+          Map<String, Long> drained = ledger.drain();
+          if (drained.isEmpty()) return true;
+          b = batch(drained);
+        }
+        afterDrain.run();
+        inFlight = b;
       }
-      inFlight = b;
-      try { writer.write(b); retry = null; }
-      catch (Exception e) { retry = b; warn.accept("Craft-Nachfrage: " + e.getMessage()); }
-      finally { inFlight = null; }
+      boolean ok = false;
+      try { writer.write(b); ok = true; }
+      catch (Exception e) { warn.accept("Craft-Nachfrage: " + e.getMessage()); }
+      finally {
+        synchronized (handoff) {
+          retry = ok ? null : b;
+          inFlight = null;
+        }
+      }
       return true;
     } finally { lock.unlock(); }
   }
@@ -64,18 +82,20 @@ final class DemandFlusher {
    * Returns only after everything accepted is either committed or on disk.
    */
   void stop(long waitMs) {
-    stopping = true;
+    synchronized (handoff) { stopping = true; }
     boolean owned = false;
     try { owned = lock.tryLock(waitMs, TimeUnit.MILLISECONDS); }
     catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     if (!owned) {
       warn.accept("Craft-Nachfrage: laufender Flush beim Stopp blockiert, wird auf Platte gesichert");
       List<Batch> rest = new ArrayList<>();
-      Batch pending = inFlight, failed = retry;
-      if (pending != null) rest.add(pending);
-      if (failed != null && failed != pending) rest.add(failed);
-      Map<String, Long> left = ledger.drain();
-      if (!left.isEmpty()) rest.add(batch(left));
+      synchronized (handoff) {
+        Batch pending = inFlight, failed = retry;
+        if (pending != null) rest.add(pending);
+        if (failed != null && failed != pending) rest.add(failed);
+        Map<String, Long> left = ledger.drain();
+        if (!left.isEmpty()) rest.add(batch(left));
+      }
       save(rest);
       return;
     }
