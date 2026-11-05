@@ -131,6 +131,8 @@ public final class CraftCore extends JavaPlugin implements Listener {
   }
   static final String NOT_READY="§cCraftCore wartet noch auf die Datenbank. Teleports, VIP-Welten und Server-Wechsel gehen in einer Minute wieder.";
   private volatile boolean modulesReady;
+  private volatile boolean switchQueueReady;
+  boolean queueReady() { return switchQueueReady; }
   private boolean databaseAnswers() {
     try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=connection(); Statement s=c.createStatement()) { s.execute("SELECT 1"); return true; } }
     catch(Exception e) { return false; }
@@ -151,6 +153,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
         InviteStore.prepareSchema(c);
         SidebarPreference.prepare(c);
       }
+      try { tx(c->{ProxySwitchQueue.migrate(c);return null;}); switchQueueReady=true; } catch(Exception ex) { getLogger().warning("Wechsel-Queue-Tabelle nicht angelegt: "+ex.getMessage()); }
       if (InventorySync.tracks(server)) { playerStats=new PlayerStats(this,server.toLowerCase(Locale.ROOT)); playerStats.start(); inventorySync=new InventorySync(this,server); inventorySync.start(); }
       deathEvents=new DeathEvents(this,server); deathEvents.start();
       teamInvites=new TeamInvites(this,server); teamInvites.start();

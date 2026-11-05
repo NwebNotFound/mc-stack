@@ -52,3 +52,21 @@ Helper ohne Docker-/DB-Zugriff testen: `powershell -NoProfile -File tools\test-c
 ### One-off presence backfill
 
 After the presence and player stats tables exist, an administrator may run `scripts/backfill-player-presence.sql` once using a secure option file or the existing database helper. It inserts missing lobby and survival rows from `player_playtime_world`; existing presence rows, including online state and last seen, are preserved on repeat runs. New rows are offline. Their `last_seen` is NULL (unknown). The script first permits NULL in the existing `last_seen` column. This script is manual and is not run at startup or deploy.
+
+
+### #136: Velocity switch fallback
+
+Build both `plugins-src/craftcore` and `plugins-src/server-status-velocity` with Java 25.
+After the required backup, deploy CraftCore to lobby/survival and the usual templates.
+CraftCore creates `proxy_switch_requests` using the existing craftcore database account.
+Also copy the rebuilt server-status-velocity jar to the Velocity plugin directory (replace the previous MCStack Status jar),
+then restart Velocity in the same maintenance window. A proxy restart disconnects players.
+The existing `CRAFTCORE_DB_PASSWORD` environment variable is sufficient; no proxy configuration change is required.
+Do not deploy only CraftCore: the fallback needs the new proxy consumer.
+
+The proxy polls every 500 ms and executes a pending request after a four-second grace period via its own connection API.
+It rejects requests older than 15 seconds, requests from earlier proxy logins, and requests whose source backend no longer matches.
+Rows are claimed under a database lock; backend writes use one ordered worker and supersede older pending choices.
+Backends without database write access retain the plugin-message path and clickable `/server` fallback.
+Test the Survival portal, NPC/menu joins, a newer destination replacing an older one, and disconnect/reconnect within five seconds.
+Successful fallback switches log `Wechsel per Queue` in Velocity. Check both backend and proxy logs for queue permission errors.
