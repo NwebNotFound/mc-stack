@@ -24,3 +24,6 @@ jobs:
         run: python3 tools/check-db-credentials.py
       - name: Run the scanner regression tests
         run: python3 tools/test_check_db_credentials.py
+      - name: Maintenance script tests (backup.ps1, dev-reset.ps1; mocked docker)
+        shell: pwsh
+        run: ./tools/test-maintenance.ps1

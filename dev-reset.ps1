@@ -1,6 +1,7 @@
-﻿param([switch]$DryRun, [switch]$ClearChat)
+﻿param([switch]$DryRun, [switch]$ClearChat, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 1800)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+. (Join-Path $PSScriptRoot 'tools/maintenance-common.ps1')
 function Get-ServerMode {
     $sql = "SELECT mode FROM server_status WHERE id=1;"
     $result = $sql | & docker compose exec -T craftcore-db sh -c 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb -N -u "$MARIADB_USER" "$MARIADB_DATABASE"' 2>&1
@@ -23,13 +24,20 @@ function Clear-AllChat {
         catch { Write-Warning "Chat auf $server nicht geleert: $_" }
     }
 }
+Start-MaintLog 'dev-reset' $PSScriptRoot | Out-Null
+$maintLock = $null
+$maintExit = 0
+$maintError = ''
+try {
+# A catch-up run right after a backup waits for the backup's lock (up to 30 min) instead of colliding with it,
+# and only then checks that Docker and craftcore-db answer (05.11., 11:36: both tasks started while the DB was down).
+if (-not $DryRun) { $maintLock = Enter-MaintLock $PSScriptRoot $LockWaitSeconds }
+Wait-MaintReady $ReadyAttempts
 if (-not (Check-Dev)) {
     $online = (Get-ServerMode) -ceq 'online'
     if ($online -and -not $ClearChat) {
         if ($DryRun) { Write-Host 'TROCKENLAUF: wuerde Lobby und Survival sauber neu starten.'; exit 0 }
-        $mutex = New-Object System.Threading.Mutex($false, 'Local\MCStackMaintenance')
-        if (-not $mutex.WaitOne(0)) { throw 'Ein anderer Wartungsvorgang laeuft.' }
-        try { Invoke-Docker @('compose','restart','lobby','survival') | Out-Null } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
+        Invoke-Docker @('compose','restart','lobby','survival') | Out-Null
         Write-Host 'Online-Neustart abgeschlossen.'; exit 0
     }
     Write-Host 'Server nicht im Dev-Modus: keine Aktion.'; exit 0
@@ -43,9 +51,6 @@ if ($DryRun) {
     Write-Host 'Wuerde Survival starten, Chat leeren und nur die letzten 7 Survival-Reset-Backups behalten.'
     exit 0
 }
-$mutex = New-Object System.Threading.Mutex($false, 'Local\MCStackMaintenance')
-if (-not $mutex.WaitOne(0)) { throw 'Ein anderer DEV-Vorgang laeuft bereits.' }
-try {
     if ($ClearChat) { Clear-AllChat; exit 0 }
     foreach ($server in @('lobby','survival')) {
         Invoke-Docker @('compose','exec','-T',$server,'rcon-cli','say [DEV] Survival wird in 5 Minuten zurueckgesetzt.') | Out-Null
@@ -107,4 +112,12 @@ try {
         if (-not $destructive) { try { Invoke-Docker @('compose','up','-d','--no-deps','survival') | Out-Null } catch { Write-Warning "Survival-Neustart fehlgeschlagen: $_" } }
         throw
     }
-} finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
+} catch {
+    $maintExit = 1
+    $maintError = $_.Exception.Message
+    Write-MaintLog 'error' 'error' $maintError
+    throw
+} finally {
+    Exit-MaintLock $maintLock
+    Stop-MaintLog $maintExit $maintError
+}

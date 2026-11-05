@@ -52,3 +52,21 @@ Helper ohne Docker-/DB-Zugriff testen: `powershell -NoProfile -File tools\test-c
 ### One-off presence backfill
 
 After the presence and player stats tables exist, an administrator may run `scripts/backfill-player-presence.sql` once using a secure option file or the existing database helper. It inserts missing lobby and survival rows from `player_playtime_world`; existing presence rows, including online state and last seen, are preserved on repeat runs. New rows are offline. Their `last_seen` is NULL (unknown). The script first permits NULL in the existing `last_seen` column. This script is manual and is not run at startup or deploy.
+
+## Wartungs-Tasks: Backup und Dev-Reset (fuer Homelab Deployer)
+
+Nach dem Vorfall vom 05.11. (beide Nachhol-Laeufe um 11:36 gleichzeitig, `craftcore-db` noch aus) gilt fuer `backup.ps1` und `dev-reset.ps1`:
+
+- **Log:** jeder Lauf schreibt JSON-Zeilen (Start, Schritte, Exit-Code, Fehler) nach `logs/maintenance/<backup|dev-reset>-<yyyy-MM>.log`, eine Datei pro Monat. Es wird nichts automatisch geloescht; alte Monate nur mit Nils' OK von Hand entfernen.
+- **Bereitschaft:** vor jeder Aktion prueft das Skript Docker, `craftcore-db` healthy und `SELECT 1` (Standard 12 Versuche × 10 s, `-ReadyAttempts`). Danach klarer Fehler im Log, Exit 1, es wird nichts gestoppt.
+- **Unvollstaendige Backups:** gueltig ist nur ein Ordner mit `COMPLETE.txt`. Ein abgebrochener Lauf bekommt `FAILED.txt` mit dem Grund und wird zu `daily-…-FAILED` umbenannt (nichts geloescht; die 7-Tage-Aufbewahrung fasst `-FAILED` nicht an).
+- **Sperre:** beide nutzen `backups/.maintenance.lock` (exklusiver Datei-Handle, auch ueber Sitzungen hinweg). `dev-reset.ps1` wartet bis zu 30 min (`-LockWaitSeconds`), bis ein laufendes Backup fertig ist; `backup.ps1` bricht sofort ab, wenn die Sperre belegt ist.
+
+Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig von der Benutzeranmeldung ausfuehren"):
+
+| Task | Zeit | Aktion | Einstellungen |
+|---|---|---|---|
+| `MCStack-Backup` | 04:50 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\backup.ps1` | "Task so schnell wie moeglich nach verpasstem Start ausfuehren" an; "Verzoegerung" 5 min; "Wenn bereits ausgefuehrt: neue Instanz nicht starten"; Abbruch nach 2 h |
+| `MCStack-Dev-Reset` | 05:10 (20 min Abstand) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\dev-reset.ps1` | verpasster Start an, Verzoegerung 10 min; neue Instanz nicht starten; Abbruch nach 1 h |
+
+Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben aktivieren"). Kein AtStartup-Task. Die Scheduler-Aenderungen gehoeren nicht in diesen PR und werden vom Homelab Deployer umgesetzt.
