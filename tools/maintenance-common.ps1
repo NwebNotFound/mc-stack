@@ -98,6 +98,7 @@ function Get-DevResetCandidates([string]$BackupDir, [int]$Keep = 7) {
 
 # One RCON command on a running Minecraft service (rcon-cli in the itzg image). -Optional only logs a failure.
 function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional) {
+  $ErrorActionPreference = 'Continue'  # PS 5.1: stderr via 2>&1 would throw under 'Stop'; only the exit code decides
   $out = & docker compose exec -T $Server rcon-cli $Command 2>&1
   if ($LASTEXITCODE -ne 0) {
     $msg = "RCON $Server '$Command' fehlgeschlagen: $(($out | Out-String).Trim())"

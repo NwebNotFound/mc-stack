@@ -26,6 +26,7 @@ function global:docker {
       if ($global:DbStates.Count -gt 1) { $global:DbStates = $global:DbStates[1..($global:DbStates.Count - 1)] }
       return $state
     }
+    if ($global:DockerStderr -and ($a -join ' ') -like '*rcon-cli*') { Write-Error 'warning: stderr noise'; return }
     if (($a -join ' ') -like '*mariadb*') { return '1' }
     return ''
   }
@@ -147,6 +148,13 @@ Check ($msg -like 'Kopieren fehlgeschlagen*') "copy failure is reported ($msg)"
 Check ((Idx 'compose exec -T survival rcon-cli save-off') -ge 0 -and (Idx 'compose exec -T survival rcon-cli save-on') -gt (Idx 'compose exec -T survival rcon-cli save-off')) 'survival: save-on after the failed copy (finally)'
 Check ((Idx 'compose stop*') -lt 0) 'still no container stop'
 Check (@(Get-ChildItem "$root/backups" -Directory -Filter '*-FAILED').Count -ge 2) 'the failed run is marked FAILED'
+
+Write-Host 'online backup: stderr from docker (exit 0) does not abort'
+Reset-Calls
+$global:DockerStderr = $true
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$global:DockerStderr = $false
+Check ($msg -eq '') "docker stderr with exit 0 does not fail the backup ($msg)"
 
 Write-Host '-StopServers keeps the old behaviour'
 Reset-Calls
