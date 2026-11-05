@@ -114,6 +114,14 @@ public final class LobbyVip implements CommandExecutor {
                     entry = store.findById(world.id()).orElse(null);
                     break;
                 }
+                if (entry == null) {
+                    // A world the player was invited to: "/vw join <name>" from the invite notice.
+                    for (VipStore.World world : store.listShared(player.getUniqueId())) {
+                        if (!world.name().equalsIgnoreCase(name)) continue;
+                        entry = store.findById(world.id()).orElse(null);
+                        break;
+                    }
+                }
                 if (entry == null && VipGui.isAdmin(player)) {
                     int colon = name.indexOf(':');
                     if (colon > 0) {

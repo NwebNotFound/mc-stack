@@ -31,7 +31,7 @@ class VipStoreTest {
                 Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
                 Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
                 Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
-                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1));
+                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1), Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;
@@ -107,6 +107,24 @@ class VipStoreTest {
                 assertTrue(r.next()); assertEquals("deleted", r.getString(1));
             }
             assertFalse(store.markDeleted(id), "second delete is a no-op");
+        }
+    }
+    @Test void invitedPlayersSeeTheWorldAndGetEachInviteOnce() throws Exception {
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(), guest=UUID.randomUUID();
+            try (Statement s=c.createStatement()) { s.execute("INSERT INTO known_players VALUES ('"+owner+"','Nani_San123'),('"+guest+"','NwebNotFound')"); }
+            store.create(owner,"Bauwelt","normal");
+            String id=store.list(owner).get(0).id();
+            store.addMember(id, guest, "member");
+            assertEquals(List.of("Bauwelt"), store.listShared(guest).stream().map(VipStore.World::name).toList(), "the invited world is listed for the guest");
+            var invites=store.invitesSince(guest, EPOCH-1);
+            assertEquals(1, invites.size());
+            assertEquals("Nani_San123", invites.get(0).owner());
+            assertTrue(store.invitesSince(guest, invites.get(0).addedAt()).isEmpty(), "told once");
+            store.markDeleted(id);
+            assertTrue(store.listShared(guest).isEmpty(), "a deleted world is not offered");
         }
     }
 }

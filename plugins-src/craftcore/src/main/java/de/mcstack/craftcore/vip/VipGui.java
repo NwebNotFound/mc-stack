@@ -137,6 +137,11 @@ public final class VipGui implements Listener {
                         List.of(slot.reason()), "none", ""));
                 }
             }
+            // Worlds the player was invited to: open read-only (Beitreten), at most one row.
+            for (VipStore.World shared : store.listShared(id).stream().limit(8).toList()) {
+                buttons.add(new Button("Eingeladen: " + shared.name(), Material.OAK_DOOR,
+                    List.of("Status: " + statusText(shared.status()), "Klick: ansehen und beitreten"), "world", shared.id()));
+            }
             buttons.add(new Button("Hilfe", Material.BOOK, List.of(
                 "VIP: " + config.vipPlayers() + " Spieler, MVP: " + config.mvpPlayers() + " Spieler",
                 "Maximal " + VipLimits.MAX_PLAYERS + " Spieler pro Welt",

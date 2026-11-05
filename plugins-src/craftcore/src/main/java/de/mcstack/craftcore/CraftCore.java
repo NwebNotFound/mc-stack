@@ -162,6 +162,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       portals=new Portals(this); portals.start();
       if ("lobby".equalsIgnoreCase(server)) { lobbyPvp=new de.mcstack.craftcore.pvp.LobbyPvp(this, this::connection); lobbyPvp.start(); lobbyVip=new de.mcstack.craftcore.vip.LobbyVip(this, this::connection); lobbyVip.start(); }
       if (SpawnRoute.isSurvival(server)) { getServer().getPluginManager().registerEvents(new SafeSpawn(this), this); getServer().getPluginManager().registerEvents(new EndLock(this), this); }
+      if ("lobby".equalsIgnoreCase(server) || SpawnRoute.isSurvival(server)) new de.mcstack.craftcore.vip.VipInviteNotices(this, this::connection, "lobby".equalsIgnoreCase(server)).start();
       userMenu=new UserMenu(this); userMenu.start();
       new TeamTeleport(this,server).start();
       new Challenges(this,server).start();
