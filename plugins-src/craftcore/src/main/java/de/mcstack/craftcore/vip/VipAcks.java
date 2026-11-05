@@ -5,7 +5,7 @@ import java.util.Optional;
 
 /** Stores the decision for {@code (discord_id, request_id)} so a second poll never runs it again. */
 public final class VipAcks implements VipWebQueue.Acks {
-    private static final String FIND = "SELECT status FROM vip_command_acks WHERE discord_id=? AND request_id=?";
+    private static final String FIND = "SELECT status,reason FROM vip_command_acks WHERE discord_id=? AND request_id=?";
     private static final String SAVE = "INSERT INTO vip_command_acks (discord_id,request_id,status,reason,created_at) "
         + "VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status), reason=VALUES(reason)";
 
@@ -19,11 +19,13 @@ public final class VipAcks implements VipWebQueue.Acks {
     }
 
     @Override
-    public Optional<String> look(String discordId, String requestId) throws SQLException {
+    public Optional<VipWebQueue.Outcome> look(String discordId, String requestId) throws SQLException {
         try (Connection c = source.open(); PreparedStatement s = c.prepareStatement(FIND)) {
             s.setString(1, discordId);
             s.setString(2, requestId);
-            try (ResultSet r = s.executeQuery()) { return r.next() ? Optional.of(r.getString(1)) : Optional.empty(); }
+            try (ResultSet r = s.executeQuery()) {
+                return r.next() ? Optional.of(new VipWebQueue.Outcome(r.getString(1), r.getString(2))) : Optional.empty();
+            }
         }
     }
 

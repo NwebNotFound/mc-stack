@@ -14,7 +14,7 @@ public final class VipCommandRules {
 
     /** What the checks need to know about the caller and the target world. */
     public record Context(boolean admin, boolean owner, boolean trusted, boolean trustedMayStart,
-                          String actorRank, int ownedWorlds, int slots, int members,
+                          String actorRank, String ownerRank, int ownedWorlds, int slots, int members,
                           boolean nameTaken, boolean targetIsOwner, boolean alreadyMember) {
     }
 
@@ -56,11 +56,12 @@ public final class VipCommandRules {
         if (world == null) return "world_not_found";
         return switch (c.action()) {
             case "start" -> {
-                boolean may = ctx.owner() || ctx.admin() || (ctx.trusted() && ctx.trustedMayStart());
-                // Vertrag: ein Nicht-Owner ohne Vertrauen ist bei start immer not_trusted.
-                if (!may) yield "not_trusted";
-                // A trusted start is only allowed while the owner still holds a panel rank.
-                if (!ctx.owner() && !ctx.admin() && !hasRank(ctx.actorRank())) yield "no_rank";
+                if (ctx.admin()) yield OK;
+                // Vertrag: nur Owner oder ein vertrauenswuerdiges Mitglied mit Flag darf starten.
+                if (!ctx.owner() && !ctx.trusted()) yield "not_trusted";
+                if (!ctx.owner() && !ctx.trustedMayStart()) yield "not_trusted";
+                // Der Start haengt am Rang des Owners, nicht am Rang des Startenden.
+                if (!hasRank(ctx.ownerRank())) yield "no_rank";
                 yield OK;
             }
             case "stop", "rename", "settings", "set_visibility", "invite", "uninvite", "trust", "delete" -> {

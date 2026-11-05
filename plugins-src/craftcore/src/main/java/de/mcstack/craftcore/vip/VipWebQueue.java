@@ -30,7 +30,8 @@ public final class VipWebQueue {
         int post(String path, String body) throws Exception;
     }
     public interface Acks {
-        Optional<String> look(String discordId, String requestId) throws Exception;
+        /** Die gespeicherte Entscheidung, damit ein verlorener Ack-POST wiederholt werden kann. */
+        Optional<Outcome> look(String discordId, String requestId) throws Exception;
         void save(String discordId, String requestId, String status, String reason) throws Exception;
     }
     @FunctionalInterface public interface Applier { Outcome apply(VipCommand command); }
@@ -64,8 +65,14 @@ public final class VipWebQueue {
             }
             VipCommand command = item.command();
             try {
-                Optional<String> done = acks.look(command.discordId(), command.requestId());
-                if (done.isPresent()) continue;
+                Optional<Outcome> done = acks.look(command.discordId(), command.requestId());
+                if (done.isPresent()) {
+                    // Der Auftrag lief schon, aber der Ack-POST kann verloren gegangen sein: die
+                    // gespeicherte Entscheidung erneut mitschicken, ohne ihn noch einmal auszufuehren.
+                    acksOut.add(ack(command, done.get()));
+                    answered++;
+                    continue;
+                }
                 Outcome outcome;
                 if (now - command.createdAt() >= TTL_MILLIS) {
                     outcome = new Outcome(EXPIRED, "");

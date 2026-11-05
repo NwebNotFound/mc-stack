@@ -22,8 +22,11 @@ class VipWebQueueTest {
 
     private static final class MemoryAcks implements VipWebQueue.Acks {
         final Map<String, String> saved = new HashMap<>();
-        @Override public java.util.Optional<String> look(String discordId, String requestId) {
-            return java.util.Optional.ofNullable(saved.get(discordId + "/" + requestId));
+        @Override public java.util.Optional<VipWebQueue.Outcome> look(String discordId, String requestId) {
+            String stored = saved.get(discordId + "/" + requestId);
+            if (stored == null) return java.util.Optional.empty();
+            int split = stored.indexOf(':');
+            return java.util.Optional.of(new VipWebQueue.Outcome(stored.substring(0, split), stored.substring(split + 1)));
         }
         @Override public void save(String discordId, String requestId, String status, String reason) {
             saved.put(discordId + "/" + requestId, status + ":" + reason);
@@ -36,7 +39,7 @@ class VipWebQueueTest {
             + "\"world_id\":\"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\"}";
     }
 
-    @Test void appliesOnceAndAcksDone() throws Exception {
+    @Test void appliesOnceAndResendsTheStoredAck() throws Exception {
         FakeTransport http = new FakeTransport();
         MemoryAcks acks = new MemoryAcks();
         List<String> applied = new ArrayList<>();
@@ -49,10 +52,31 @@ class VipWebQueueTest {
         assertEquals("done:", acks.saved.get("100000000000000001/req-1"));
         assertTrue(http.posts.get(0).contains("\"status\":\"done\""));
 
-        // Dieselbe Kennung ein zweites Mal: keine Ausfuehrung, kein zweiter Ack.
-        assertEquals(0, queue.pollOnce(NOW + 5000));
+        // Dieselbe Kennung bleibt im Panel offen, weil der Ack-POST verloren ging: die gespeicherte
+        // Entscheidung geht erneut raus, ausgefuehrt wird nichts.
+        assertEquals(1, queue.pollOnce(NOW + 5000));
         assertEquals(1, applied.size());
-        assertEquals(1, http.posts.size());
+        assertEquals(2, http.posts.size());
+        assertTrue(http.posts.get(1).contains("\"request_id\":\"req-1\""));
+    }
+
+    @Test void lostAckIsResentOnTheNextPoll() throws Exception {
+        FakeTransport http = new FakeTransport();
+        MemoryAcks acks = new MemoryAcks();
+        List<String> applied = new ArrayList<>();
+        http.body = "{\"items\":[" + item("req-9", "rename", NOW - 1000) + "]}";
+        http.postCode = 500;
+        VipWebQueue queue = new VipWebQueue(http, acks,
+            c -> { applied.add(c.requestId()); return VipWebQueue.Outcome.denied("not_owner"); }, line -> { });
+
+        assertThrows(IllegalStateException.class, () -> queue.pollOnce(NOW));
+        assertEquals(1, applied.size());
+        assertEquals("denied:not_owner", acks.saved.get("100000000000000001/req-9"));
+
+        http.postCode = 200;
+        assertEquals(1, queue.pollOnce(NOW + 5000));
+        assertEquals(1, applied.size(), "kein zweiter Lauf");
+        assertTrue(http.posts.get(1).contains("\"reason\":\"not_owner\""));
     }
 
     @Test void expiredItemsAreAckedWithoutRunning() throws Exception {

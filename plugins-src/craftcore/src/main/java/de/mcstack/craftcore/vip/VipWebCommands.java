@@ -57,7 +57,7 @@ public final class VipWebCommands implements VipWebQueue.Applier {
         int owned = store.count(actor);
         boolean taken = !store.ownersOf(c.name()).isEmpty();
         VipCommandRules.Context ctx = new VipCommandRules.Context(admin, false, false, trustedMayStart,
-            rank, owned, VipCommandRules.slots(rank, adminSlots), 0, taken, false, false);
+            rank, "", owned, VipCommandRules.slots(rank, adminSlots), 0, taken, false, false);
         String reason = VipCommandRules.decide(withType, ctx, null);
         if (!reason.isEmpty()) return VipWebQueue.Outcome.denied(reason);
         store.create(actor, c.name(), type);
@@ -73,11 +73,14 @@ public final class VipWebCommands implements VipWebQueue.Applier {
         List<VipStore.Member> members = store.members(id);
         String target = c.name() == null ? "" : c.name().trim();
         boolean member = members.stream().anyMatch(m -> m.name() != null && m.name().equalsIgnoreCase(target));
-        boolean trusted = members.stream().anyMatch(m ->
-            m.name() != null && m.name().equalsIgnoreCase(target) && "trusted".equals(m.role()));
+        // Vertrauen ist die Rolle des Aufrufers, nicht die des angesprochenen Namens (bei start gibt
+        // es keinen Namen, deshalb war der Trusted-Start vorher nie erreichbar).
+        boolean trusted = members.stream().anyMatch(m -> m.player().equals(actor) && "trusted".equals(m.role()));
         boolean targetIsOwner = ownerName(id).map(n -> n.equalsIgnoreCase(target)).orElse(false);
+        // Der Start haengt am Rang des Owners; "trusted" ist die eigene Rolle in dieser Welt.
+        String ownerRank = String.valueOf(ranks.rank(world.owner()));
         VipCommandRules.Context ctx = new VipCommandRules.Context(scopedAdmin, owner, trusted, trustedMayStart,
-            rank, store.count(actor), VipCommandRules.slots(rank, adminSlots), members.size(),
+            rank, ownerRank, store.count(actor), VipCommandRules.slots(rank, adminSlots), members.size(),
             nameTakenByOther(c), targetIsOwner, member);
         String reason = VipCommandRules.decide(c, ctx, world);
         if (!reason.isEmpty()) return VipWebQueue.Outcome.denied(reason);
@@ -125,8 +128,18 @@ public final class VipWebCommands implements VipWebQueue.Applier {
                 store.setMemberRole(id, targetId, role);
             }
             case "delete" -> {
+                // Erst den laufenden Server stoppen: sonst bliebe eine geloeschte Welt online.
+                if (("running".equals(world.status()) || "starting".equals(world.status())) && world.slot() != null) {
+                    VipHostClient.Result stopped = host.stop(world.slot());
+                    if (stopped == null || stopped.outcome() == VipHostClient.Outcome.ERROR)
+                        return VipWebQueue.Outcome.failed("host_unavailable");
+                }
+                // Audit vor dem Loeschen, damit ein fehlgeschlagener Audit-Eintrag die Welt stehen laesst.
+                if (scopedAdmin) {
+                    try { store.audit(id, "delete", actor, "", world.owner(), ownerName(id).orElse(""), ""); }
+                    catch (SQLException e) { return VipWebQueue.Outcome.failed("audit_failed"); }
+                }
                 store.delete(id);
-                if (scopedAdmin) store.audit(id, "delete", actor, "", world.owner(), ownerName(id).orElse(""), "");
             }
             default -> { return VipWebQueue.Outcome.denied("unknown_action"); }
         }

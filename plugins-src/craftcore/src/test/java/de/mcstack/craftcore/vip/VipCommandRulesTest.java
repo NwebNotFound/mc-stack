@@ -24,7 +24,14 @@ class VipCommandRulesTest {
     private static VipCommandRules.Context ctx(boolean admin, boolean owner, boolean trusted, int owned, int slots,
                                                int members, boolean taken, boolean targetOwner, boolean member) {
         return new VipCommandRules.Context(admin, owner, trusted, true, admin ? "admin" : "vip",
-            owned, slots, members, taken, targetOwner, member);
+            admin ? "admin" : "vip", owned, slots, members, taken, targetOwner, member);
+    }
+
+    /** Der Start haengt am Rang des Owners, nicht an dem des Startenden. */
+    private static VipCommandRules.Context start(boolean admin, boolean owner, boolean trusted, boolean trustedMayStart,
+                                                 String actorRank, String ownerRank) {
+        return new VipCommandRules.Context(admin, owner, trusted, trustedMayStart, actorRank, ownerRank,
+            0, 1, 1, false, false, false);
     }
 
     @Test void createNeedsAFreeSlot() {
@@ -41,7 +48,7 @@ class VipCommandRulesTest {
             new VipCommand("r", "1", 1_793_500_000_000L, "create", null, "Kirschtal", "lava", null, null, null, null, false),
             ctx(false, false, false, 0, 1, 0, false, false, false), null));
         assertEquals("no_rank", VipCommandRules.decide(c, new VipCommandRules.Context(false, false, false, true,
-            "builder", 0, 0, 0, false, false, false), null));
+            "builder", "", 0, 0, 0, false, false, false), null));
     }
 
     @Test void renameAndDeleteAreOwnerOrAdminOnly() {
@@ -62,12 +69,16 @@ class VipCommandRulesTest {
     }
 
     @Test void trustedMayStartOnlyWithTheOwnerRank() {
-        assertEquals("", VipCommandRules.decide(cmd("start"), ctx(false, false, true, 0, 1, 0, false, false, true), WORLD));
-        assertEquals("not_trusted", VipCommandRules.decide(cmd("start"), ctx(false, false, false, 0, 1, 0, false, false, true), WORLD));
-        VipCommandRules.Context noRank = new VipCommandRules.Context(false, false, true, true, "builder", 0, 0, 0, false, false, true);
-        assertEquals("no_rank", VipCommandRules.decide(cmd("start"), noRank, WORLD));
-        VipCommandRules.Context noTrust = new VipCommandRules.Context(false, false, true, false, "vip", 0, 1, 0, false, false, true);
-        assertEquals("not_trusted", VipCommandRules.decide(cmd("start"), noTrust, WORLD));
+        // Vertrautes Mitglied ohne eigenen Rang: der Owner traegt den Rang, der Start ist erlaubt.
+        assertEquals("", VipCommandRules.decide(cmd("start"), start(false, false, true, true, "", "vip"), WORLD));
+        // Einfaches Mitglied darf nicht starten.
+        assertEquals("not_trusted", VipCommandRules.decide(cmd("start"), start(false, false, false, true, "vip", "vip"), WORLD));
+        // Owner ohne Rang darf nicht starten.
+        assertEquals("no_rank", VipCommandRules.decide(cmd("start"), start(false, true, false, true, "", ""), WORLD));
+        // trusted-may-start aus: auch ein vertrautes Mitglied nicht.
+        assertEquals("not_trusted", VipCommandRules.decide(cmd("start"), start(false, false, true, false, "vip", "vip"), WORLD));
+        // Admins starten unabhaengig vom Owner-Rang.
+        assertEquals("", VipCommandRules.decide(cmd("start"), start(true, false, false, true, "admin", ""), WORLD));
     }
 
     @Test void settingsVisibilityTrustAndMembers() {
@@ -81,7 +92,7 @@ class VipCommandRulesTest {
         assertEquals("is_owner", VipCommandRules.decide(cmd("uninvite"), ctx(false, true, false, 0, 1, 3, false, true, true), WORLD));
         VipCommand badRole = new VipCommand("r", "1", 1_793_500_000_000L, "trust", "w-1", "Gast", null, null, "owner", null, null, false);
         assertEquals("invalid_role", VipCommandRules.decide(badRole,
-            new VipCommandRules.Context(false, true, false, true, "vip", 0, 1, 3, false, false, true), WORLD));
+            new VipCommandRules.Context(false, true, false, true, "vip", "vip", 0, 1, 3, false, false, true), WORLD));
     }
 
     @Test void settingsAreStrictForBrowserInput() throws Exception {
