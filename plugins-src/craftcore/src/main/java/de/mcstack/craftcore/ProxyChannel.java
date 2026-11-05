@@ -12,6 +12,22 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class ProxyChannel {
   private ProxyChannel() {}
 
+  /**
+   * Told before every switch, so state that would fight it (a pending VIP auto-connect) can step aside.
+   * Returns true when this listener sent its own connect a moment ago; Velocity drops a second request while one is
+   * still in flight, so the switch is then sent once more after 3 s (bug 4, 05.11.2026).
+   */
+  public interface SwitchListener { boolean beforeSwitch(Player player, String server); }
+  private static final java.util.List<SwitchListener> LISTENERS = new java.util.concurrent.CopyOnWriteArrayList<>();
+  public static void onSwitch(SwitchListener listener) { LISTENERS.add(listener); }
+  static boolean notifySwitch(Player player, String server) {
+    boolean recent = false;
+    for (SwitchListener l : LISTENERS) {
+      try { recent |= l.beforeSwitch(player, server); } catch (RuntimeException ignored) {}
+    }
+    return recent;
+  }
+
   /** Safe to call from several modules: an already registered channel is not registered twice. */
   public static void register(JavaPlugin plugin) {
     register(plugin, SpawnRoute.CHANNEL);
@@ -31,7 +47,11 @@ public final class ProxyChannel {
    */
   public static boolean send(JavaPlugin plugin, Player player, String server) {
     try {
-      return send(plugin, player, SpawnRoute.connect(server));
+      boolean recent = notifySwitch(player, server);
+      byte[] payload = SpawnRoute.connect(server);
+      boolean ok = send(plugin, player, payload);
+      if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline()) send(plugin, player, payload); }, 60L);
+      return ok;
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
       return false;

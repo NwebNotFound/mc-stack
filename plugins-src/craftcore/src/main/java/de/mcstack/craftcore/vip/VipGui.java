@@ -74,6 +74,10 @@ public final class VipGui implements Listener {
     private final Map<UUID, String> waiting = new ConcurrentHashMap<>();
     /** Players that already left this server, so a connect retry does not bounce them again. */
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
+    /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
+    private final Map<UUID, Integer> generation = new ConcurrentHashMap<>();
+    private final Map<UUID, String> sentSlot = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> sentAt = new ConcurrentHashMap<>();
 
     public VipGui(JavaPlugin plugin, VipStore.ConnectionSource source, VipStartCoordinator coordinator,
                   VipStartBars bars, VipConfig.Values config, Connector connector,
@@ -91,6 +95,24 @@ public final class VipGui implements Listener {
     public void start() {
         Bukkit.getPluginManager().registerEvents(this, plugin);
         Bukkit.getScheduler().runTaskTimer(plugin, bars::tick, 20L, 20L);
+        de.mcstack.craftcore.ProxyChannel.onSwitch(this::beforeSwitch);
+    }
+
+    /**
+     * Another server was chosen (portal, menu, NPC, /lobby) while a VIP start is queued: leave the queue with a chat
+     * line and drop the pending auto-connects, so they cannot pull the player away or block the switch.
+     */
+    boolean beforeSwitch(Player player, String server) {
+        UUID id = player.getUniqueId();
+        if (server != null && server.equals(sentSlot.get(id))) return false; // our own VIP connect
+        String world = waiting.remove(id);
+        boolean hadConnect = sentSlot.remove(id) != null;
+        if (world == null && !hadConnect) return false;
+        generation.merge(id, 1, Integer::sum);
+        if (world != null) { coordinator.leave(world, id); bars.clear(id); }
+        message(player, VipSwitch.leftQueueText(server));
+        Long at = sentAt.remove(id);
+        return VipSwitch.recent(at, System.currentTimeMillis());
     }
 
     // ---------------------------------------------------------------- screens
@@ -401,11 +423,13 @@ public final class VipGui implements Listener {
 
     private void waitFor(Player player, VipStore.Entry entry) {
         UUID id = player.getUniqueId();
+        int gen = generation.getOrDefault(id, 0);
         waiting.put(id, entry.id());
         bars.wait(player, entry.id());
         message(player, "Deine Welt startet ... du wirst automatisch verbunden.");
         CompletableFuture<VipStartCoordinator.Outcome> future = coordinator.join(entry.id(), id);
         future.whenComplete((outcome, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (generation.getOrDefault(id, 0) != gen) return; // the player chose another server meanwhile
             waiting.remove(id);
             bars.clear(id);
             if (outcome == null || !outcome.ok()) {
@@ -416,7 +440,7 @@ public final class VipGui implements Listener {
                 return;
             }
             message(player, VipStartProgress.ready(outcome.slot()).message());
-            retryConnect(player, outcome.slot());
+            retryConnect(player, outcome.slot(), gen);
         }));
     }
 
@@ -424,12 +448,15 @@ public final class VipGui implements Listener {
      * Velocity may not accept the slot the moment the host reports ready, so the connect is
      * sent up to three times. A player who already left this server is not sent again.
      */
-    private void retryConnect(Player player, String slot) {
+    private void retryConnect(Player player, String slot, int gen) {
         UUID id = player.getUniqueId();
+        sentSlot.put(id, slot);
         for (int attempt = 0; attempt < VipConnectRetry.ATTEMPTS; attempt++) {
             int current = attempt;
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 if (!VipConnectRetry.maySend(current, player.isOnline(), !transferred.contains(id))) return;
+                if (generation.getOrDefault(id, 0) != gen) return;
+                sentAt.put(id, System.currentTimeMillis());
                 connector.connect(player, slot);
             }, VipConnectRetry.delayTicks(current));
         }
@@ -535,6 +562,8 @@ public final class VipGui implements Listener {
         String world = waiting.remove(id);
         if (world != null) coordinator.leave(world, id);
         bars.clear(id);
+        sentSlot.remove(id);
+        sentAt.remove(id);
     }
 
     @EventHandler
