@@ -58,18 +58,19 @@ After the presence and player stats tables exist, an administrator may run `scri
 
 Build both `plugins-src/craftcore` and `plugins-src/server-status-velocity` with Java 25.
 After the required backup, deploy CraftCore to lobby/survival and the usual templates.
-CraftCore creates `proxy_switch_requests` using the existing craftcore database account.
 Also copy the rebuilt server-status-velocity jar to the Velocity plugin directory (replace the previous MCStack Status jar),
 then restart Velocity in the same maintenance window. A proxy restart disconnects players.
-The existing `CRAFTCORE_DB_PASSWORD` environment variable is sufficient; no proxy configuration change is required.
-Do not deploy only CraftCore: the fallback needs the new proxy consumer.
+Deploy both jars: switches use the dedicated `craftcore:switch` listener registered by the proxy plugin.
+The backend registers its outgoing channel and ensures it is present on the player connection before sending.
 
-The proxy polls every 500 ms and executes a pending request after a four-second grace period via its own connection API.
-It rejects requests older than 15 seconds, requests from earlier proxy logins, and requests whose source backend no longer matches.
-Choices are published synchronously as append-only rows. The proxy holds no row lock while dispatching and rechecks the latest published choice immediately before connecting.
-Backends without database write access retain the plugin-message path and clickable `/server` fallback.
-Test the Survival portal, NPC/menu joins, a newer destination replacing an older one, and disconnect/reconnect within five seconds.
-Successful fallback switches log `Wechsel per Queue` in Velocity. Check both backend and proxy logs for queue permission errors.
+Only messages from the player's current backend are accepted. Client-origin messages are consumed and rejected.
+Revision acceptance and nonblocking connection submission share one critical section; there is no delayed database queue.
+Portal, switch and quit handlers perform no queue database operations. Any old queue table is left untouched and no longer used.
+The existing asynchronous status refresh still uses the database independently of switching.
+Test portal, NPC/menu joins, latest-choice ordering and disconnect/reconnect within five seconds.
+Test switching with the database unavailable; existing database-dependent VIP features still need the database.
+Chat verification and the clickable `/server` fallback remain available if a switch fails.
+
 ## Wartungs-Tasks: Backup und Dev-Reset (fuer Homelab Deployer)
 
 Nach dem Vorfall vom 05.11. (beide Nachhol-Laeufe um 11:36 gleichzeitig, `craftcore-db` noch aus) gilt fuer `backup.ps1` und `dev-reset.ps1`:

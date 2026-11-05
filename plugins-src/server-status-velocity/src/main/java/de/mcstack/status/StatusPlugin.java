@@ -2,11 +2,10 @@ package de.mcstack.status;
 
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
-import com.velocitypowered.api.event.connection.LoginEvent;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
+import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
-import java.util.UUID;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.proxy.ProxyServer;
@@ -21,51 +20,46 @@ public final class StatusPlugin {
   private final ProxyServer proxy;
   private final Logger logger;
   private volatile String mode="wartung";
-  @Inject public StatusPlugin(ProxyServer proxy, Logger logger) { this.proxy=proxy; this.logger=logger; }
+  @FunctionalInterface interface ConnectionSource { Connection open() throws SQLException; }
+  private final ConnectionSource database;
+  @Inject public StatusPlugin(ProxyServer proxy, Logger logger) {
+    this(proxy, logger, () -> DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000", "craftcore", System.getenv("CRAFTCORE_DB_PASSWORD")));
+  }
+  StatusPlugin(ProxyServer proxy, Logger logger, ConnectionSource database) { this.proxy=proxy; this.logger=logger; this.database=database; }
   @Subscribe public void initialize(ProxyInitializeEvent event) {
     proxy.getScheduler().buildTask(this,this::refresh).repeat(5,TimeUnit.SECONDS).schedule();
-    proxy.getScheduler().buildTask(this,this::switches).repeat(500,TimeUnit.MILLISECONDS).schedule();
+    proxy.getChannelRegistrar().register(SWITCH_CHANNEL);
   }
-  private Connection db() throws SQLException {
-    return DriverManager.getConnection("jdbc:mariadb://craftcore-db:3306/craftcore?connectTimeout=3000&socketTimeout=5000","craftcore",System.getenv("CRAFTCORE_DB_PASSWORD"));
-  }
-  private final Map<UUID, Long> sessions = new ConcurrentHashMap<>();
-  @Subscribe public void login(LoginEvent event) { sessions.put(event.getPlayer().getUniqueId(), System.currentTimeMillis()); }
-  @Subscribe public void disconnect(DisconnectEvent event) { sessions.remove(event.getPlayer().getUniqueId()); }
-  private volatile boolean switchWarned;
-  /** Fallback for backend switches whose plugin message never reached the proxy (see SwitchDecision). */
-  private synchronized void switches() {
-    long now=System.currentTimeMillis();
-    try(Connection c=db()) {
+  static final MinecraftChannelIdentifier SWITCH_CHANNEL = MinecraftChannelIdentifier.from("craftcore:switch");
+  private final SwitchRouter switches = new SwitchRouter();
+  @Subscribe public void disconnect(DisconnectEvent event) { switches.forget(event.getPlayer().getUniqueId(), event.getPlayer()); }
 
-      try(PreparedStatement x=c.prepareStatement("UPDATE proxy_switch_requests SET done_at=?,result='expired' WHERE done_at IS NULL AND created_at<=?")) { x.setLong(1,now); x.setLong(2,now-SwitchDecision.MAX_AGE_MS); x.executeUpdate(); }
-      try(PreparedStatement q=c.prepareStatement("SELECT id,player,server,created_at,source FROM proxy_switch_requests WHERE done_at IS NULL AND created_at<=? ORDER BY id LIMIT 50")) {
-        q.setLong(1,now-SwitchDecision.GRACE_MS);
-        try(ResultSet r=q.executeQuery(); PreparedStatement done=c.prepareStatement("UPDATE proxy_switch_requests SET done_at=?,result=? WHERE id=? AND done_at IS NULL")) {
-          while(r.next()) {
-            long id=r.getLong(1); String target=r.getString(3);
-            var player=proxy.getPlayer(java.util.UUID.fromString(r.getString(2)));
-            var server=proxy.getServer(target);
-            String current=player.flatMap(p->p.getCurrentServer()).map(s->s.getServerInfo().getName()).orElse(null);
-            SwitchDecision.Action action=SwitchDecision.decide(r.getLong(4),now,player.isPresent(),current,target,server.isPresent());
-            if (!SwitchDecision.belongsToSession(r.getLong(4), sessions.get(UUID.fromString(r.getString(2))), r.getString(5), current)) action=SwitchDecision.Action.EXPIRED;
-            if(action==SwitchDecision.Action.WAIT) continue;
-            if (!SwitchDispatch.latest(c, id, r.getString(2))) action=SwitchDecision.Action.EXPIRED;
-            if(action==SwitchDecision.Action.CONNECT) {
-              player.get().createConnectionRequest(server.get()).fireAndForget();
-              logger.info("Wechsel per Queue: {} -> {}",player.get().getUsername(),target);
-            }
-            done.setLong(1,now); done.setString(2,action.name().toLowerCase()); done.setLong(3,id); done.executeUpdate();
-          }
-        }
-      }
-      switchWarned=false;
-    } catch(Exception e) { if(!switchWarned) { logger.warn("Wechsel-Queue nicht lesbar: {}",e.getMessage()); switchWarned=true; } }
+  @Subscribe public void switchMessage(PluginMessageEvent event) {
+    if (!event.getIdentifier().equals(SWITCH_CHANNEL)) return;
+    // Never forward this channel to clients or other backends; client-origin messages cannot switch anyone.
+    event.setResult(PluginMessageEvent.ForwardResult.handled());
+    if (!(event.getSource() instanceof ServerConnection backend)) return;
+    var player = backend.getPlayer();
+    if (event.getTarget() != player) return;
+    try {
+      SwitchRequest request = SwitchRequest.decode(event.getData());
+      var destination = proxy.getServer(request.target());
+      switches.dispatch(player.getUniqueId(), player, backend, request.revision(),
+          () -> player.isActive() && player.getCurrentServer().orElse(null) == backend,
+          () -> {
+            if (destination.isEmpty()) { logger.warn("Unbekanntes Proxy-Ziel: {}", request.target()); return; }
+            player.createConnectionRequest(destination.get()).connect().thenAccept(result -> {
+              if (!result.isSuccessful()) logger.warn("Proxy-Wechsel nach {} fehlgeschlagen: {}", request.target(), result.getStatus());
+            });
+          });
+    } catch (java.io.IOException | IllegalArgumentException e) {
+      logger.warn("Ungueltige CraftCore-Wechselnachricht");
+    }
   }
-  private void refresh() {
+  void refresh() {
     try {
       Class.forName("org.mariadb.jdbc.Driver");
-      try(Connection c=db();
+      try(Connection c=database.open();
           Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT mode FROM server_status WHERE id=1")) {
         if(!r.next()) throw new SQLException("Status fehlt");
         String value=r.getString(1); if(!List.of("dev","online","wartung").contains(value)) throw new SQLException("Status ungueltig"); mode=value;

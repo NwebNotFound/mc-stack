@@ -7,7 +7,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 /**
  * Single place that talks to Velocity. Registers the plugin message channels once per plugin and
- * always sends on {@link SpawnRoute#CHANNEL}, the name the proxy actually reads.
+ * uses the dedicated proxy listener for switches; the byte-array overload retains the legacy channel.
  */
 public final class ProxyChannel {
   private ProxyChannel() {}
@@ -32,6 +32,7 @@ public final class ProxyChannel {
   /** Safe to call from several modules: an already registered channel is not registered twice. */
   public static void register(JavaPlugin plugin) {
     register(plugin, SpawnRoute.CHANNEL);
+    register(plugin, SpawnRoute.DIRECT_CHANNEL);
   }
 
   private static void register(JavaPlugin plugin, String channel) {
@@ -49,8 +50,6 @@ public final class ProxyChannel {
   public static synchronized boolean send(JavaPlugin plugin, Player player, String server) {
     try {
       long token = INTENT.begin(player.getUniqueId());
-      // Second path: the proxy plugin executes this if the plugin message below does not move the player in time.
-      if (plugin instanceof CraftCore core && core.queueReady()) ProxySwitchQueue.publish(core, player.getUniqueId(), server, System.getenv().getOrDefault("CRAFTCORE_SERVER", "Server").toLowerCase(java.util.Locale.ROOT), token);
       return sendFor(plugin, player, server, token);
     } catch (IOException e) {
       plugin.getLogger().warning("Proxy-Wechsel nach " + server + " fehlgeschlagen: " + e.getMessage());
@@ -66,10 +65,10 @@ public final class ProxyChannel {
   /** One switch under {@code token}; the delayed resend only fires while that token is still the player's latest choice. */
   private static boolean sendFor(JavaPlugin plugin, Player player, String server, long token) throws IOException {
     boolean recent = notifySwitch(player, server);
-    byte[] payload = SpawnRoute.connect(server);
-    boolean ok = send(plugin, player, payload);
+    byte[] payload = SpawnRoute.direct(server, token);
+    boolean ok = sendMessage(plugin, player, SpawnRoute.DIRECT_CHANNEL, payload);
     java.util.UUID id = player.getUniqueId();
-    if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline() && Bukkit.getPlayer(id) == player && INTENT.current(id, token)) send(plugin, player, payload); }, 60L);
+    if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline() && Bukkit.getPlayer(id) == player && INTENT.current(id, token)) sendMessage(plugin, player, SpawnRoute.DIRECT_CHANNEL, payload); }, 60L);
     return ok;
   }
 
@@ -101,9 +100,9 @@ public final class ProxyChannel {
       if (still == null || !still.isOnline()) return; // switched away: fine
       if (still != session) return;                    // reconnected: a new session never gets the old destination
       if (!INTENT.current(id, token)) return;          // a newer choice (another portal, /lobby, VIP) wins
-      boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL);
+      boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.DIRECT_CHANNEL);
       plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Versuch "
-          + attempt + ", Kanal " + SpawnRoute.CHANNEL + " registriert: " + registered + ", alle Kanaele: " + new java.util.TreeSet<>(still.getListeningPluginChannels()) + ")");
+          + attempt + ", Kanal " + SpawnRoute.DIRECT_CHANNEL + " registriert: " + registered + ", alle Kanaele: " + new java.util.TreeSet<>(still.getListeningPluginChannels()) + ")");
       if (attempt == 1) {
         boolean resent;
         try { resent = sendFor(plugin, still, server, token); } catch (IOException e) { resent = false; }
@@ -126,12 +125,16 @@ public final class ProxyChannel {
 
   /** @return false when Bukkit refused the message, e.g. an unregistered channel. */
   public static synchronized boolean send(JavaPlugin plugin, Player player, byte[] payload) {
+    return sendMessage(plugin, player, SpawnRoute.CHANNEL, payload);
+  }
+
+  private static boolean sendMessage(JavaPlugin plugin, Player player, String channel, byte[] payload) {
     try {
       register(plugin);
-      ChannelFix.Outcome fix = ChannelFix.ensure(player, player.getListeningPluginChannels(), SpawnRoute.CHANNEL);
-      if (fix == ChannelFix.Outcome.ADDED) plugin.getLogger().info("Kanal " + SpawnRoute.CHANNEL + " fuer " + player.getName() + " nachregistriert (Proxy-Register fehlte)");
-      else if (fix == ChannelFix.Outcome.UNSUPPORTED) plugin.getLogger().warning("Kanal " + SpawnRoute.CHANNEL + " fehlt fuer " + player.getName() + " und laesst sich nicht nachregistrieren");
-      player.sendPluginMessage(plugin, SpawnRoute.CHANNEL, payload);
+      ChannelFix.Outcome fix = ChannelFix.ensure(player, player.getListeningPluginChannels(), channel);
+      if (fix == ChannelFix.Outcome.ADDED) plugin.getLogger().info("Kanal " + channel + " fuer " + player.getName() + " nachregistriert (Proxy-Register fehlte)");
+      else if (fix == ChannelFix.Outcome.UNSUPPORTED) plugin.getLogger().warning("Kanal " + channel + " fehlt fuer " + player.getName() + " und laesst sich nicht nachregistrieren");
+      player.sendPluginMessage(plugin, channel, payload);
       return true;
     } catch (RuntimeException e) {
       plugin.getLogger().warning("Proxy-Nachricht fehlgeschlagen: " + e.getClass().getSimpleName()

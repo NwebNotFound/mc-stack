@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SpawnRouteTest {
+  @Test void dedicatedChannelMatchesProxyWireFixture() throws Exception {
+    assertEquals("00000000000000070008737572766976616c", java.util.HexFormat.of().formatHex(SpawnRoute.direct("survival", 7)));
+    assertEquals("craftcore:switch", SpawnRoute.DIRECT_CHANNEL);
+  }
   @Test void connectUsesVelocityBungeeProtocol() throws Exception {
     DataInputStream in = new DataInputStream(new ByteArrayInputStream(SpawnRoute.connectMessage()));
     assertEquals("Connect", in.readUTF());
