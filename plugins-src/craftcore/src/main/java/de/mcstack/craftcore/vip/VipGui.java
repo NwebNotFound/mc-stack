@@ -151,6 +151,7 @@ public final class VipGui implements Listener {
                     addons.isEmpty() ? "Keine Addons aktiv" : "Aktiv: " + String.join(", ", addons),
                     "Pro Welt waehlbar, maximal " + config.addonMax()), "addons", id),
                 new Button("Umbenennen", Material.NAME_TAG, List.of("Neuen Namen im Chat eingeben"), "rename", id),
+                new Button("Loeschen", Material.LAVA_BUCKET, List.of("Nur gestoppte Welten", "Zur Bestaetigung den Weltnamen eintippen"), "delete", id),
                 new Button("Zurueck", Material.ARROW, List.of("Zurueck zum Menue"), "hub", ""));
             return new Loaded(buttons, null);
         }, loaded -> {
@@ -220,10 +221,24 @@ public final class VipGui implements Listener {
             VipStore.Entry entry = store.findById(id).orElse(null);
             if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
             if (!mayStart(player, entry)) { message(player, "Du darfst diese Welt nicht starten."); return; }
-            if ("running".equals(entry.status()) && entry.slot() != null) { connect(player, entry.slot()); return; }
-            if ("starting".equals(entry.status()) && entry.slot() != null) { waitFor(player, entry); return; }
-            store.status(id, "starting", null);
-            waitFor(player, entry);
+            VipStartDecision.Decision d = VipStartDecision.decide(entry.status(), entry.slot(), entry.id(), host.slots());
+            switch (d.step()) {
+                case HOST_DOWN -> message(player, "VIP-Host nicht erreichbar, bitte spaeter erneut versuchen.");
+                case CONNECT -> {
+                    if (d.staleRow()) store.status(id, "running", d.slot());
+                    message(player, "Die Welt laeuft schon, du wirst verbunden ...");
+                    connect(player, d.slot());
+                }
+                case WAIT -> {
+                    if (d.staleRow()) store.status(id, "starting", d.slot());
+                    waitFor(player, entry);
+                }
+                case START -> {
+                    if (d.staleRow()) store.idleStopped(id);
+                    store.status(id, "starting", null);
+                    waitFor(player, entry);
+                }
+            }
         }, error -> failed(player, "VIP-Start", error));
     }
 
@@ -247,6 +262,24 @@ public final class VipGui implements Listener {
                 case UNCHANGED -> message(player, "Starte die Welt zuerst.");
             }
         }, error -> failed(player, "VIP-Beitritt", error));
+    }
+
+    /** Soft delete (status 'deleted'); only the exact typed name confirms it. World files are left to the host. */
+    public void deleteWorld(Player player, String id, String typed) {
+        async(() -> {
+            VipStore.Entry entry = store.findById(id).orElse(null);
+            if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
+            if (!mayManage(player, entry)) { message(player, "Du darfst diese Welt nicht verwalten."); return; }
+            switch (VipRules.deleteCheck(entry.name(), typed, entry.status())) {
+                case NAME_MISMATCH -> message(player, "Name stimmt nicht, die Welt wurde nicht geloescht.");
+                case RUNNING -> message(player, "Stoppe die Welt zuerst, dann kannst du sie loeschen.");
+                case OK -> {
+                    if (!store.markDeleted(id)) { message(player, "Loeschen fehlgeschlagen, die Welt laeuft wieder oder wurde schon geloescht."); return; }
+                    message(player, "VIP-Welt \"" + entry.name() + "\" wurde geloescht.");
+                    Bukkit.getScheduler().runTask(plugin, () -> openHub(player));
+                }
+            }
+        }, error -> failed(player, "Loeschen", error));
     }
 
     public void stopWorld(Player player, String id) {
@@ -433,6 +466,7 @@ public final class VipGui implements Listener {
             case "addons" -> openAddons(player, button.arg());
             case "invite" -> ask(player, "Spielername zum Einladen", name -> invite(player, button.arg(), name));
             case "rename" -> ask(player, "Neuer Weltname", name -> renameWorld(player, button.arg(), name));
+            case "delete" -> ask(player, "Zum Loeschen den Weltnamen genau eintippen", typed -> deleteWorld(player, button.arg(), typed));
             case "addon" -> {
                 String[] parts = button.arg().split(":", 2);
                 if (parts.length == 2) toggleAddon(player, parts[0], parts[1]);

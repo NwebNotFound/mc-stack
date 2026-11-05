@@ -31,7 +31,7 @@ class VipStoreTest {
                 Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
                 Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
                 Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
-                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2));
+                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

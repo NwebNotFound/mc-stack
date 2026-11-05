@@ -17,6 +17,7 @@ public final class VipStore {
     static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=?";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
     static final String INSERT_RUN = "INSERT INTO vip_world_runs (world_id,slot,started_at) VALUES (?,?,?)";
+    static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL WHERE id=? AND status IN ('stopped','error')";
     static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=?";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
@@ -165,6 +166,10 @@ public final class VipStore {
         } catch(SQLException e) { c.rollback(); throw e; } }
     }
     public void stopped(String id) throws SQLException { stop(id,STOP_RUNS); }
+    /** Soft delete of a stopped world; false when it is running, starting or already deleted. */
+    public boolean markDeleted(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(MARK_DELETED)) { s.setString(1,id); return s.executeUpdate()==1; }
+    }
     public void idleStopped(String id) throws SQLException { stop(id,STOP_IDLE_RUNS); }
     private void stop(String id, String sql) throws SQLException {
         long now=clock.millis();

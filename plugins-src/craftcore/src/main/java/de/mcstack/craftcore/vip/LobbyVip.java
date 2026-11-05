@@ -146,7 +146,7 @@ public final class LobbyVip implements CommandExecutor {
         public void connect(Player player, String slot) { send(player, slot); }
         public void lobby(Player player) { send(player, "lobby"); }
         private void send(Player player, String server) {
-            ProxyChannel.send(plugin, player, server);
+            ProxyChannel.sendOrTell(plugin, player, server);
         }
     }
 

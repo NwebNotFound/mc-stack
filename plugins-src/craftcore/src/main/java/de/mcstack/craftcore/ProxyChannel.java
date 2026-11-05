@@ -43,6 +43,17 @@ public final class ProxyChannel {
     }
   }
 
+  /** Like {@link #send(JavaPlugin, Player, String)}, but tells the player in chat when the switch could not be sent. */
+  public static boolean sendOrTell(JavaPlugin plugin, Player player, String server) {
+    if (send(plugin, player, server)) return true;
+    player.sendMessage(failureText(server));
+    return false;
+  }
+
+  static String failureText(String server) {
+    return "Serverwechsel nach " + server + " fehlgeschlagen. Bitte erneut versuchen oder /lobby nutzen.";
+  }
+
   /** @return false when Bukkit refused the message, e.g. an unregistered channel. */
   public static boolean send(JavaPlugin plugin, Player player, byte[] payload) {
     try {

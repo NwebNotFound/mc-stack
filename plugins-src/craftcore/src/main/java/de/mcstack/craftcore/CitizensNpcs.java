@@ -116,7 +116,7 @@ final class CitizensNpcs implements Listener {
     for(var entry:npcs.entrySet()) if(entry.getValue().equals(npc)) {
       var def=definitions.get(entry.getKey());
       switch(def.action()) {
-        case SERVER -> ProxyChannel.send(core, player, def.actionArg());
+        case SERVER -> ProxyChannel.sendOrTell(core, player, def.actionArg());
         case MENU -> {
           var lobbyPvp=core.lobbyPvp();
           switch(NpcDefinitions.menuAction(def.actionArg(),lobbyPvp!=null)) {

@@ -107,6 +107,28 @@ public final class CraftCore extends JavaPlugin implements Listener {
       rankDisplays=new RankDisplays(this,server); rankDisplays.start(); return;
     }
     if(password==null || password.isBlank()) { getLogger().severe("CRAFTCORE_DB_PASSWORD fehlt"); getServer().getPluginManager().disablePlugin(this); return; }
+    // A database that is still down at boot no longer disables the plugin: wait for it and start once it answers.
+    StartupGate gate=new StartupGate(this::databaseAnswers, this::startModules);
+    if(gate.attempt()) return;
+    getLogger().warning("Datenbank nicht erreichbar; CraftCore startet automatisch, sobald sie antwortet (Versuch alle 10 s)");
+    Listener waiting=new Listener() {
+      @org.bukkit.event.EventHandler public void join(org.bukkit.event.player.PlayerJoinEvent e) { e.getPlayer().sendMessage(NOT_READY); }
+    };
+    getServer().getPluginManager().registerEvents(waiting,this);
+    int[] task={-1};
+    task[0]=getServer().getScheduler().runTaskTimerAsynchronously(this,()->{
+      if(!databaseAnswers()) return;
+      getServer().getScheduler().cancelTask(task[0]);
+      getServer().getScheduler().runTask(this,()->{ org.bukkit.event.HandlerList.unregisterAll(waiting); gate.attempt(); });
+    },200L,200L).getTaskId();
+  }
+  static final String NOT_READY="§cCraftCore wartet noch auf die Datenbank. Teleports, VIP-Welten und Server-Wechsel gehen in einer Minute wieder.";
+  private volatile boolean modulesReady;
+  private boolean databaseAnswers() {
+    try { Class.forName("org.mariadb.jdbc.Driver"); try(Connection c=connection(); Statement s=c.createStatement()) { s.execute("SELECT 1"); return true; } }
+    catch(Exception e) { return false; }
+  }
+  private void startModules() {
     try {
       Class.forName("org.mariadb.jdbc.Driver");
       try(Connection c=connection(); Statement s=c.createStatement()) {
@@ -171,6 +193,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       getServer().getPluginManager().registerEvents(this,this);
       getServer().getScheduler().runTaskTimer(this,()->Bukkit.getOnlinePlayers().forEach(this::sidebar),20L,100L);
       getServer().getScheduler().runTaskTimer(this,()->DeliveryNotices.poll(this),100L,100L);
+      modulesReady=true;
       getLogger().info("CraftCore bereit: gemeinsame MariaDB und Vault-Economy registriert");
     } catch(Exception e) { getLogger().severe("CraftCore Start fehlgeschlagen: "+e); getServer().getPluginManager().disablePlugin(this); }
   }
@@ -312,6 +335,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
   }
   @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args) {
     if(lobbyRoute!=null && SpawnRoute.isLobbyCommand(command.getName())) return lobbyRoute.run(sender,command.getName());
+    if(economyEnabled && !modulesReady && !server.startsWith("vipworld-")) { sender.sendMessage(NOT_READY); return true; }
     if(!ServerProfile.commandAllowed(economyEnabled,command.getName())) { sender.sendMessage("Dieser Befehl ist auf dem PvP-Server deaktiviert."); return true; }
     if(command.getName().equals("rank")) return !moduleAvailable(rankDisplays,sender::sendMessage) || rankDisplays.command(sender,args);
     if(command.getName().equals("cc")) {
