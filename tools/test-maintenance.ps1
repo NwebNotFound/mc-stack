@@ -78,11 +78,20 @@ $good = Join-Path $root 'backups/daily-ok'
 New-Item -ItemType Directory -Path $good | Out-Null; Set-Content "$good/COMPLETE.txt" 'ok'
 Check ((Set-BackupFailed $good 'x') -eq $good -and (Test-Path $good)) 'a COMPLETE backup is never marked failed'
 
+Write-Host 'retention only reports'
+$old = Join-Path $root 'backups/daily-20261020-045000-000'
+New-Item -ItemType Directory -Path $old | Out-Null; Set-Content "$old/COMPLETE.txt" 'ok'
+(Get-Item $old).CreationTime = (Get-Date).AddDays(-10)
+$cands = @(Get-RetentionCandidates (Join-Path $root 'backups') 7)
+Check ($cands.Count -eq 1 -and $cands[0] -like '*daily-20261020-045000-000') 'old COMPLETE backup is a candidate'
+Check (Test-Path $old) 'and is not deleted'
+Check (-not (Select-String -Path "$root/backup.ps1" -Pattern 'Remove-Item' -Quiet)) 'backup.ps1 contains no Remove-Item'
+
 Write-Host 'backup.ps1 with the DB down (the 05.11. 11:36 case)'
 $global:DbStates = @('exited')
 $msg = ''; try { & "$root/backup.ps1" -ReadyAttempts 2 } catch { $msg = $_.Exception.Message }
 Check ($msg -like 'Nicht bereit*') "backup throws a clear error ($msg)"
-Check (@(Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { $_.Name -notlike '*FAILED*' }).Count -eq 0) 'no half backup that looks valid'
+Check (@(Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { $_.Name -notlike '*FAILED*' -and -not (Test-Path (Join-Path $_.FullName 'COMPLETE.txt')) }).Count -eq 0) 'no half backup that looks valid'
 Check (-not ($global:DockerCalls | Where-Object { $_ -like 'compose stop*' })) 'servers were not stopped'
 $blog = Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log' | Select-Object -First 1
 $bl = @(Get-Content -LiteralPath $blog.FullName | ForEach-Object { $_ | ConvertFrom-Json })

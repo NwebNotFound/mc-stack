@@ -81,3 +81,11 @@ function Set-BackupFailed([string]$Backup, [string]$Reason) {
   Write-MaintLog 'backup' 'error' "als fehlgeschlagen markiert: $target"
   return $target
 }
+
+# Complete daily backups older than $Days days. Only reported; deleting them needs Nils' explicit OK (rule 5).
+function Get-RetentionCandidates([string]$BackupRoot, [int]$Days = 7) {
+  if (-not (Test-Path -LiteralPath $BackupRoot)) { return @() }
+  @(Get-ChildItem -LiteralPath $BackupRoot -Directory -Filter 'daily-*' |
+    Where-Object { $_.Name -notlike '*-FAILED*' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'COMPLETE.txt')) -and $_.CreationTime -lt (Get-Date).AddDays(-$Days) } |
+    ForEach-Object { $_.FullName })
+}

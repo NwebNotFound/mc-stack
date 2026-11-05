@@ -35,13 +35,8 @@ try {
   if($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $dump).Length -lt 100){throw "MariaDB-Dump fehlgeschlagen (exit $LASTEXITCODE, $((Get-Item -LiteralPath $dump).Length) Bytes)."}
   Write-MaintLog 'dump' 'info' "craftcore.sql $((Get-Item -LiteralPath $dump).Length) Bytes"
   Set-Content -LiteralPath (Join-Path $backup 'COMPLETE.txt') -Value "Backup abgeschlossen: $(Get-Date -Format o)" -Encoding ASCII
-  $backupRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'backups')).Path.TrimEnd('\') + '\'
-  foreach($old in @(Get-ChildItem -LiteralPath $backupRoot -Directory -Filter 'daily-*' | Where-Object { -not $PreserveBackups -and $_.Name -notlike '*-FAILED*' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'COMPLETE.txt')) -and $_.CreationTime -lt (Get-Date).AddDays(-7) })) {
-    $target=(Resolve-Path -LiteralPath $old.FullName).Path
-    if(-not $target.StartsWith($backupRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'Ungueltiger Backup-Aufbewahrungspfad.'}
-    Remove-Item -LiteralPath $target -Recurse -Force
-    Write-MaintLog 'retention' 'info' "altes vollstaendiges Backup entfernt: $target"
-  }
+  # PROJECT.md rule 5: no automatic deletion. Old complete backups are only reported (Gatekeeper #137).
+  foreach($old in @(Get-RetentionCandidates (Join-Path $PSScriptRoot 'backups') 7)) { Write-MaintLog 'retention' 'warn' "aelter als 7 Tage, nur mit Nils' OK von Hand entfernen: $old" }
   $complete=$true
   Write-Host "Backup: $backup"
 } catch {

@@ -60,6 +60,7 @@ Nach dem Vorfall vom 05.11. (beide Nachhol-Laeufe um 11:36 gleichzeitig, `craftc
 - **Log:** jeder Lauf schreibt JSON-Zeilen (Start, Schritte, Exit-Code, Fehler) nach `logs/maintenance/<backup|dev-reset>-<yyyy-MM>.log`, eine Datei pro Monat. Es wird nichts automatisch geloescht; alte Monate nur mit Nils' OK von Hand entfernen.
 - **Bereitschaft:** vor jeder Aktion prueft das Skript Docker, `craftcore-db` healthy und `SELECT 1` (Standard 12 Versuche × 10 s, `-ReadyAttempts`). Danach klarer Fehler im Log, Exit 1, es wird nichts gestoppt.
 - **Unvollstaendige Backups:** gueltig ist nur ein Ordner mit `COMPLETE.txt`. Ein abgebrochener Lauf bekommt `FAILED.txt` mit dem Grund und wird zu `daily-…-FAILED` umbenannt (nichts geloescht; die 7-Tage-Aufbewahrung fasst `-FAILED` nicht an).
+- **Aufbewahrung:** `backup.ps1` loescht keine alten Backups mehr (PROJECT.md Regel 5). Vollstaendige Backups aelter als 7 Tage stehen als `retention`-Warnung im Log; entfernt werden sie nur von Hand mit Nils' OK. `-PreserveBackups` bleibt als Schalter erhalten, hat aber keine Wirkung mehr.
 - **Sperre:** beide nutzen `backups/.maintenance.lock` (exklusiver Datei-Handle, auch ueber Sitzungen hinweg). `dev-reset.ps1` wartet bis zu 30 min (`-LockWaitSeconds`), bis ein laufendes Backup fertig ist; `backup.ps1` bricht sofort ab, wenn die Sperre belegt ist.
 
 Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig von der Benutzeranmeldung ausfuehren"):
