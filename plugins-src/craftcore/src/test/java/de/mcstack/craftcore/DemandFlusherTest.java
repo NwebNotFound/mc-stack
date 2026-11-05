@@ -4,8 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -13,87 +17,110 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class DemandFlusherTest {
-  static void sum(Map<String, Long> into, Map<String, Long> batch) { batch.forEach((k, v) -> into.merge(k, v, Long::sum)); }
+  static Map<String, Long> sum(List<DemandFlusher.Batch> batches) {
+    Map<String, Long> out = new ConcurrentHashMap<>();
+    for (DemandFlusher.Batch b : batches) b.delta().forEach((k, v) -> out.merge(k, v, Long::sum));
+    return out;
+  }
 
-  /** Gatekeeper round 2: a flush blocked past the shutdown wait and then failing must not lose its batch. */
-  @Test void blockedFlushFailingAfterTheStopTimeoutIsSpilled() throws Exception {
+  /** Round 3: stop must return with the blocked in-flight batch already on disk, so the process may exit. */
+  @Test void stopTimeoutJournalsTheInFlightBatchBeforeReturning() throws Exception {
     DemandLedger ledger = new DemandLedger();
     CountDownLatch inWrite = new CountDownLatch(1), release = new CountDownLatch(1);
-    Map<String, Long> written = new ConcurrentHashMap<>(), spilled = new ConcurrentHashMap<>();
-    DemandFlusher f = new DemandFlusher(ledger, batch -> {
+    List<DemandFlusher.Batch> journal = new CopyOnWriteArrayList<>();
+    DemandFlusher f = new DemandFlusher(ledger, b -> {
       inWrite.countDown();
-      if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("test hung");
+      release.await(10, TimeUnit.SECONDS);
       throw new java.sql.SQLException("db gone");
-    }, batch -> sum(spilled, batch), msg -> {});
+    }, journal::addAll, msg -> {});
     ledger.add(Map.of("STONE", 7L));
     Thread worker = new Thread(f::flush);
+    worker.setDaemon(true);
     worker.start();
     assertTrue(inWrite.await(5, TimeUnit.SECONDS));
-    ledger.add(Map.of("COAL", 2L)); // accepted while the flush is blocked
-    f.stop(100);                     // gives up waiting
-    release.countDown();             // the blocked write now fails
+    ledger.add(Map.of("COAL", 2L));
+    f.stop(100);
+    // The worker is still blocked here; a process exit now would kill it. Everything must already be journaled.
+    assertTrue(worker.isAlive());
+    assertEquals(Map.of("STONE", 7L, "COAL", 2L), sum(journal));
+    release.countDown();
     worker.join(5000);
-    assertFalse(worker.isAlive());
-    assertEquals(Map.of("STONE", 7L, "COAL", 2L), spilled, "every accepted delta ends up in the spill");
+    assertEquals(Map.of("STONE", 7L, "COAL", 2L), sum(journal), "a late failure adds nothing twice");
     assertTrue(ledger.isEmpty());
-    assertTrue(written.isEmpty());
   }
 
-  @Test void stopWaitsForAnInFlightFlushThenWritesTheRest() throws Exception {
+  /** The blocked write commits after stop journaled it: replay skips the batch id, so nothing is counted twice. */
+  @Test void lateCommitPlusReplayCountsOnce() throws Exception {
+    String url = "jdbc:h2:mem:flush_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1";
+    try (Connection c = DriverManager.getConnection(url)) { SupplyStore.migrate(c); }
+    DemandFlusher.Writer db = b -> { try (Connection c = DriverManager.getConnection(url)) { SupplyStore.addDemand(c, b.id(), b.delta(), Map.of(), 0); } };
     DemandLedger ledger = new DemandLedger();
     CountDownLatch inWrite = new CountDownLatch(1), release = new CountDownLatch(1);
-    List<Map<String, Long>> writes = new CopyOnWriteArrayList<>();
-    Map<String, Long> spilled = new ConcurrentHashMap<>();
-    DemandFlusher f = new DemandFlusher(ledger, batch -> {
-      if (writes.isEmpty()) { inWrite.countDown(); release.await(10, TimeUnit.SECONDS); }
-      writes.add(batch);
-    }, batch -> sum(spilled, batch), msg -> {});
-    ledger.add(Map.of("STONE", 1L));
+    List<DemandFlusher.Batch> journal = new CopyOnWriteArrayList<>();
+    DemandFlusher f = new DemandFlusher(ledger, b -> { inWrite.countDown(); release.await(10, TimeUnit.SECONDS); db.write(b); }, journal::addAll, msg -> {});
+    ledger.add(Map.of("STONE", 5L));
     Thread worker = new Thread(f::flush);
     worker.start();
     assertTrue(inWrite.await(5, TimeUnit.SECONDS));
-    ledger.add(Map.of("COAL", 3L));
-    Thread stopper = new Thread(() -> f.stop(5000));
-    stopper.start();
-    Thread.sleep(100);
-    assertTrue(stopper.isAlive(), "stop waits for the lock owner instead of clearing its state");
-    release.countDown();
-    worker.join(5000); stopper.join(5000);
-    assertEquals(List.of(Map.of("STONE", 1L), Map.of("COAL", 3L)), writes);
-    assertTrue(spilled.isEmpty());
-    assertFalse(f.flush(), "no flush after shutdown");
-  }
-
-  @Test void stopSpillsWhatTheDatabaseRefusesTwice() {
-    DemandLedger ledger = new DemandLedger();
-    Map<String, Long> spilled = new ConcurrentHashMap<>();
-    int[] calls = {0};
-    DemandFlusher f = new DemandFlusher(ledger, batch -> { calls[0]++; throw new java.sql.SQLException("down"); }, batch -> sum(spilled, batch), msg -> {});
-    ledger.add(Map.of("RAW_IRON", 5L, "IRON_INGOT", -5L));
     f.stop(100);
-    assertEquals(2, calls[0]);
-    assertEquals(Map.of("RAW_IRON", 5L, "IRON_INGOT", -5L), spilled);
+    release.countDown();
+    worker.join(5000);
+    for (DemandFlusher.Batch b : journal) db.write(b); // next start replays the journal
+    try (Connection c = DriverManager.getConnection(url)) {
+      assertEquals(5, SupplyStore.load(c).get("STONE").demand(), 1e-9);
+    }
   }
 
-  @Test void failedPeriodicFlushKeepsTheBatchForTheNextOne() {
+  @Test void failedFlushRetriesTheSameBatchId() {
     DemandLedger ledger = new DemandLedger();
-    int[] calls = {0};
-    Map<String, Long> ok = new ConcurrentHashMap<>();
-    DemandFlusher f = new DemandFlusher(ledger, batch -> { if (calls[0]++ == 0) throw new java.sql.SQLException("blip"); sum(ok, batch); }, batch -> fail("no spill"), msg -> {});
+    List<String> ids = new ArrayList<>();
+    DemandFlusher f = new DemandFlusher(ledger, b -> { ids.add(b.id()); if (ids.size() == 1) throw new java.sql.SQLException("ack lost"); }, b -> fail("no journal"), msg -> {});
     ledger.add(Map.of("SAND", 4L));
     f.flush();
     ledger.add(Map.of("SAND", 1L));
     f.flush();
-    assertEquals(Map.of("SAND", 5L), ok);
+    f.flush();
+    assertEquals(3, ids.size());
+    assertEquals(ids.get(0), ids.get(1), "unknown outcome: retry with the same id, never under a new one");
+    assertNotEquals(ids.get(1), ids.get(2));
   }
 
-  @Test void spillFileMergesAndReplaysOnce() throws Exception {
-    File dir = Files.createTempDirectory("spill").toFile();
-    DemandSpill spill = new DemandSpill(new File(dir, "scarcity-demand-spill.yml"));
-    spill.save(Map.of("STONE", 3L));
-    spill.save(Map.of("STONE", 2L, "COAL", -1L));
-    assertEquals(Map.of("STONE", 5L, "COAL", -1L), spill.takeAll());
-    assertTrue(spill.takeAll().isEmpty(), "replayed once, then moved aside");
-    assertTrue(new File(dir, "scarcity-demand-spill.yml.replayed").exists(), "kept for inspection, not deleted");
+  @Test void stopWritesPendingAndJournalsWhatTheDbRefuses() {
+    DemandLedger ledger = new DemandLedger();
+    int[] calls = {0};
+    List<DemandFlusher.Batch> journal = new CopyOnWriteArrayList<>();
+    DemandFlusher f = new DemandFlusher(ledger, b -> { calls[0]++; throw new java.sql.SQLException("down"); }, journal::addAll, msg -> {});
+    ledger.add(Map.of("RAW_IRON", 5L, "IRON_INGOT", -5L));
+    f.stop(100);
+    assertEquals(2, calls[0]);
+    assertEquals(Map.of("RAW_IRON", 5L, "IRON_INGOT", -5L), sum(journal));
+    assertFalse(f.flush(), "no flush after shutdown");
+  }
+
+  @Test void journalNeverReplacesOrDeletesAndRenamesOnlyAfterApply() throws Exception {
+    File dir = Files.createTempDirectory("journal").toFile();
+    DemandSpill spill = new DemandSpill(dir);
+    DemandFlusher.Batch a = DemandFlusher.batch(Map.of("STONE", 3L)), b = DemandFlusher.batch(Map.of("COAL", -1L));
+    spill.save(List.of(a));
+    Thread.sleep(2);
+    spill.save(List.of(b));
+    assertEquals(2, dir.listFiles((d, n) -> n.endsWith(".yml")).length, "every save is a new file");
+    assertThrows(IllegalStateException.class, () -> spill.replay(x -> { throw new IllegalStateException("db down"); }));
+    assertEquals(2, dir.listFiles((d, n) -> n.endsWith(".yml")).length, "nothing moved aside before a commit");
+    List<DemandFlusher.Batch> applied = new ArrayList<>();
+    assertEquals(2, spill.replay(applied::add));
+    assertEquals(Map.of("STONE", 3L, "COAL", -1L), sum(applied));
+    assertEquals(0, dir.listFiles((d, n) -> n.endsWith(".yml")).length);
+    assertEquals(2, dir.listFiles((d, n) -> n.endsWith(".applied")).length, "kept, not deleted");
+    assertEquals(0, spill.replay(x -> fail("already applied")));
+  }
+
+  @Test void batchIdIsAppliedOnlyOnce() throws Exception {
+    try (Connection c = DriverManager.getConnection("jdbc:h2:mem:once_" + UUID.randomUUID() + ";MODE=MySQL")) {
+      SupplyStore.migrate(c);
+      assertTrue(SupplyStore.addDemand(c, "b1", Map.of("STONE", 4L), Map.of(), 0));
+      assertFalse(SupplyStore.addDemand(c, "b1", Map.of("STONE", 4L), Map.of(), 0));
+      assertEquals(4, SupplyStore.load(c).get("STONE").demand(), 1e-9);
+    }
   }
 }

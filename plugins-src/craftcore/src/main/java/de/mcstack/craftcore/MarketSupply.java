@@ -37,7 +37,7 @@ final class MarketSupply implements Listener {
 
   private MarketSupply(CraftCore core) {
     this.core = core;
-    this.spill = new DemandSpill(new java.io.File(core.getDataFolder(), "scarcity-demand-spill.yml"));
+    this.spill = new DemandSpill(new java.io.File(core.getDataFolder(), "scarcity-demand-journal"));
     this.flusher = new DemandFlusher(ledger, this::write, spill::save, msg -> core.getLogger().warning(msg));
   }
 
@@ -48,8 +48,11 @@ final class MarketSupply implements Listener {
     active = settings;
     MarketSupply supply = new MarketSupply(core);
     running = supply;
-    // Demand that could not reach the database at the last shutdown goes into the next flush.
-    supply.ledger.add(supply.spill.takeAll());
+    // Demand journaled at the last shutdown is applied now, idempotently by batch id, before the file is moved aside.
+    try {
+      int replayed = supply.spill.replay(supply::write);
+      if (replayed > 0) core.getLogger().info("Craft-Nachfrage: " + replayed + " gesicherte Batches nachgetragen");
+    } catch (Exception e) { core.getLogger().warning("Craft-Nachfrage: Journal bleibt fuer den naechsten Start liegen: " + e.getMessage()); }
     Bukkit.getPluginManager().registerEvents(supply, core);
     long period = Math.max(20L, core.getConfig().getLong("market.scarcity.period-ticks", 1200L));
     long flush = Math.max(20L, core.getConfig().getLong("market.scarcity.demand-flush-ticks", 100L));
@@ -124,7 +127,8 @@ final class MarketSupply implements Listener {
   /* ---------- demand ---------- */
 
   /** Writes one batch. {@link DemandFlusher} owns retries, restore and spill. */
-  private void write(Map<String, Long> batch) throws Exception {
+  private void write(DemandFlusher.Batch b) throws Exception {
+    Map<String, Long> batch = b.delta();
     if (batch.isEmpty()) return;
     {
       long now = System.currentTimeMillis();
@@ -134,7 +138,7 @@ final class MarketSupply implements Listener {
         Double base = Market.instance == null ? null : Market.instance.basePrice(item);
         halves.put(item, CurvePrice.halfLifeHours(base == null ? 10 : base, factors));
       }
-      Map<String, SupplyStore.Sample> loaded = core.tx(c -> { SupplyStore.addDemand(c, batch, halves, now); return SupplyStore.load(c); });
+      Map<String, SupplyStore.Sample> loaded = core.tx(c -> { SupplyStore.addDemand(c, b.id(), batch, halves, now); return SupplyStore.load(c); });
       publish(loaded);
     }
   }

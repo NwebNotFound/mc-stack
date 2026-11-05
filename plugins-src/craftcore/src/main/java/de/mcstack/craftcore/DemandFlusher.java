@@ -1,60 +1,67 @@
 package de.mcstack.craftcore;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 /**
- * Coordinates the periodic demand flush with shutdown so accepted demand is never lost.
+ * Coordinates the periodic demand flush with shutdown so accepted demand is never lost or counted twice.
  * <ul>
- *   <li>One lock: only its holder drains and writes. Nobody clears another thread's state.</li>
- *   <li>A failed write puts the batch back into the ledger.</li>
- *   <li>{@link #stop} waits for an in-flight flush. If that flush is still blocked when the wait ends, it hands the
- *       leftovers to the spill and the in-flight flush spills its own batch itself if it later fails.</li>
- *   <li>The spill (a file in the plugin folder) is replayed into the ledger on the next start.</li>
+ *   <li>Every drained batch gets an id. The writer applies a batch id at most once (idempotency row in the same
+ *       transaction), so writing the same batch again after an unknown outcome is safe.</li>
+ *   <li>One lock: only its holder drains and writes; nobody clears another thread's state.</li>
+ *   <li>The batch being written is published as {@code inFlight}. If {@link #stop} times out waiting for it, stop
+ *       journals that batch together with the ledger to disk <em>before</em> returning, so the process may exit at
+ *       once. If the blocked write commits later anyway, the replay skips the id.</li>
  * </ul>
  */
 final class DemandFlusher {
-  interface Writer { void write(Map<String, Long> batch) throws Exception; }
-  interface Spill { void save(Map<String, Long> batch) throws Exception; }
+  record Batch(String id, Map<String, Long> delta) {}
+  interface Writer { void write(Batch batch) throws Exception; }
+  interface Journal { void save(List<Batch> batches) throws Exception; }
 
   private final DemandLedger ledger;
   private final Writer writer;
-  private final Spill spill;
+  private final Journal journal;
   private final Consumer<String> warn;
   private final ReentrantLock lock = new ReentrantLock();
   private volatile boolean stopping;
+  private volatile Batch inFlight;
+  /** A batch whose write failed. Retried with the same id, because a failed commit ack can still mean it landed. */
+  private volatile Batch retry;
 
-  DemandFlusher(DemandLedger ledger, Writer writer, Spill spill, Consumer<String> warn) {
-    this.ledger = ledger; this.writer = writer; this.spill = spill; this.warn = warn;
+  DemandFlusher(DemandLedger ledger, Writer writer, Journal journal, Consumer<String> warn) {
+    this.ledger = ledger; this.writer = writer; this.journal = journal; this.warn = warn;
   }
+
+  static Batch batch(Map<String, Long> delta) { return new Batch(UUID.randomUUID().toString(), Map.copyOf(delta)); }
 
   /** Periodic flush. Skips when another flush runs or shutdown has begun. */
   boolean flush() {
-    if (stopping || ledger.isEmpty() || !lock.tryLock()) return false;
+    if (stopping || (retry == null && ledger.isEmpty()) || !lock.tryLock()) return false;
     try {
-      writeOnce();
+      Batch b = retry;
+      if (b == null) {
+        Map<String, Long> drained = ledger.drain();
+        if (drained.isEmpty()) return true;
+        b = batch(drained);
+      }
+      inFlight = b;
+      try { writer.write(b); retry = null; }
+      catch (Exception e) { retry = b; warn.accept("Craft-Nachfrage: " + e.getMessage()); }
+      finally { inFlight = null; }
       return true;
     } finally { lock.unlock(); }
   }
 
-  private void writeOnce() {
-    Map<String, Long> batch = ledger.drain();
-    if (batch.isEmpty()) return;
-    try {
-      writer.write(batch);
-    } catch (Exception e) {
-      ledger.restore(batch);
-      warn.accept("Craft-Nachfrage: " + e.getMessage());
-      // Shutdown already gave up waiting for us: nobody drains the ledger any more, so keep the batch on disk.
-      if (stopping) spillAll();
-    }
-  }
-
   /**
-   * Orderly shutdown. Waits up to {@code waitMs} for an in-flight flush, then writes what is pending (two attempts)
-   * and spills anything that still could not be written.
+   * Orderly shutdown. Waits up to {@code waitMs} for an in-flight flush. With the lock it writes what is pending
+   * (two attempts) and journals the rest; without it, it journals the ledger plus the in-flight batch.
+   * Returns only after everything accepted is either committed or on disk.
    */
   void stop(long waitMs) {
     stopping = true;
@@ -62,24 +69,38 @@ final class DemandFlusher {
     try { owned = lock.tryLock(waitMs, TimeUnit.MILLISECONDS); }
     catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     if (!owned) {
-      warn.accept("Craft-Nachfrage: laufender Flush beim Stopp blockiert, Rest wird gesichert");
-      spillAll();
+      warn.accept("Craft-Nachfrage: laufender Flush beim Stopp blockiert, wird auf Platte gesichert");
+      List<Batch> rest = new ArrayList<>();
+      Batch pending = inFlight, failed = retry;
+      if (pending != null) rest.add(pending);
+      if (failed != null && failed != pending) rest.add(failed);
+      Map<String, Long> left = ledger.drain();
+      if (!left.isEmpty()) rest.add(batch(left));
+      save(rest);
       return;
     }
     try {
-      for (int attempt = 0; attempt < 2 && !ledger.isEmpty(); attempt++) {
-        Map<String, Long> batch = ledger.drain();
-        try { writer.write(batch); }
-        catch (Exception e) { ledger.restore(batch); warn.accept("Craft-Nachfrage beim Stopp: " + e.getMessage()); }
+      List<Batch> todo = new ArrayList<>();
+      if (retry != null) todo.add(retry);
+      Map<String, Long> drained = ledger.drain();
+      if (!drained.isEmpty()) todo.add(batch(drained));
+      List<Batch> unsaved = new ArrayList<>();
+      for (Batch b : todo) {
+        boolean ok = false;
+        for (int attempt = 1; attempt <= 2 && !ok; attempt++) {
+          try { writer.write(b); ok = true; }
+          catch (Exception e) { warn.accept("Craft-Nachfrage beim Stopp (" + attempt + "/2): " + e.getMessage()); }
+        }
+        if (!ok) unsaved.add(b);
       }
-      spillAll();
+      retry = null;
+      save(unsaved);
     } finally { lock.unlock(); }
   }
 
-  private void spillAll() {
-    Map<String, Long> rest = ledger.drain();
-    if (rest.isEmpty()) return;
-    try { spill.save(rest); }
-    catch (Exception e) { warn.accept("Craft-Nachfrage verloren (" + rest.size() + " Items): " + e.getMessage()); }
+  private void save(List<Batch> batches) {
+    if (batches.isEmpty()) return;
+    try { journal.save(batches); }
+    catch (Exception e) { warn.accept("Craft-Nachfrage verloren (" + batches.size() + " Batches): " + e.getMessage()); }
   }
 }

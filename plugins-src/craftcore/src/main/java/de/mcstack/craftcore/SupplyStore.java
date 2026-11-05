@@ -19,6 +19,7 @@ final class SupplyStore {
   static void migrate(Connection c) throws SQLException {
     try (Statement s = c.createStatement()) {
       s.execute("CREATE TABLE IF NOT EXISTS market_supply_holder (holder VARCHAR(80) NOT NULL, item VARCHAR(64) NOT NULL, qty BIGINT NOT NULL, seen BIGINT NOT NULL, PRIMARY KEY(holder, item))");
+      s.execute("CREATE TABLE IF NOT EXISTS market_demand_batches (batch_id VARCHAR(40) PRIMARY KEY, applied BIGINT NOT NULL)");
       s.execute("CREATE TABLE IF NOT EXISTS market_supply_holder_version (holder VARCHAR(80) PRIMARY KEY, captured BIGINT NOT NULL)");
       s.execute("CREATE TABLE IF NOT EXISTS market_supply (item VARCHAR(64) PRIMARY KEY, raw_qty BIGINT NOT NULL, smoothed DOUBLE NOT NULL, updated BIGINT NOT NULL, demand DOUBLE NOT NULL DEFAULT 0, demand_updated BIGINT NOT NULL DEFAULT 0)");
     }
@@ -29,7 +30,20 @@ final class SupplyStore {
    * ({@code demand = demand * 2^(-dt/H) + delta}), so two writers on the same item can never overwrite each other.
    */
   static void addDemand(Connection c, Map<String, Long> delta, Map<String, Double> halfLifeHours, long now) throws SQLException {
-    if (delta == null || delta.isEmpty()) return;
+    addDemand(c, java.util.UUID.randomUUID().toString(), delta, halfLifeHours, now);
+  }
+
+  /**
+   * Applies one batch at most once: the batch id is recorded in the same transaction, a repeated id is skipped.
+   * Returns false when the batch had already been applied.
+   */
+  static boolean addDemand(Connection c, String batchId, Map<String, Long> delta, Map<String, Double> halfLifeHours, long now) throws SQLException {
+    if (delta == null || delta.isEmpty()) return true;
+    try (PreparedStatement mark = c.prepareStatement("INSERT IGNORE INTO market_demand_batches(batch_id, applied) VALUES(?,?)")) {
+      mark.setString(1, batchId);
+      mark.setLong(2, now);
+      if (mark.executeUpdate() == 0) return false;
+    }
     String sql = "INSERT INTO market_supply(item, raw_qty, smoothed, updated, demand, demand_updated) VALUES(?,0,-1,?,?,?) "
       + "ON DUPLICATE KEY UPDATE demand = demand * POWER(0.5, GREATEST(0, VALUES(demand_updated) - demand_updated) / ?) + VALUES(demand), "
       + "demand_updated = GREATEST(demand_updated, VALUES(demand_updated))";
@@ -46,6 +60,7 @@ final class SupplyStore {
       }
       ps.executeBatch();
     }
+    return true;
   }
 
   /**
