@@ -26,6 +26,7 @@ function global:docker {
       if ($global:DbStates.Count -gt 1) { $global:DbStates = $global:DbStates[1..($global:DbStates.Count - 1)] }
       return $state
     }
+    if ($global:DockerStderr -and ($a -join ' ') -like '*rcon-cli*') { Write-Error 'warning: stderr noise'; return }
     if (($a -join ' ') -like '*mariadb*') { return '1' }
     return ''
   }
@@ -111,6 +112,57 @@ Check ($msg -like 'Nicht bereit*') "dev-reset got the lock after the backup, the
 $dlog = Get-ChildItem "$root/logs/maintenance" -Filter 'dev-reset-*.log' | Select-Object -First 1
 $dl = @(Get-Content -LiteralPath $dlog.FullName | ForEach-Object { $_ | ConvertFrom-Json })
 Check (@($dl | Where-Object { $_.step -eq 'lock' -and $_.level -eq 'warn' }).Count -ge 1 -and @($dl | Where-Object { $_.step -eq 'end' -and $_.level -eq 'error' }).Count -eq 1) 'dev-reset log: waited for the lock, ended with the error'
+
+Write-Host 'online backup (default: nothing stopped)'
+foreach ($srv in 'lobby','survival') { New-Item -ItemType Directory -Force -Path "$root/data/$srv/world" | Out-Null; Set-Content "$root/data/$srv/world/level.dat" 'x'; Set-Content "$root/data/$srv/world/session.lock" 'lock' }
+$global:DbStates = @('healthy')
+$global:MaintDumpOverride = { param($path) Set-Content -LiteralPath $path -Value ('-- dump ' + ('x' * 200)) }
+function Reset-Calls { $global:DockerCalls.Clear() }
+Reset-Calls
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+Check ($msg -eq '') "online backup succeeds ($msg)"
+$calls = @($global:DockerCalls)
+function Idx($pattern) { for ($i = 0; $i -lt $calls.Count; $i++) { if ($calls[$i] -like $pattern) { return $i } }; return -1 }
+foreach ($srv in 'lobby','survival') {
+  $off = Idx "compose exec -T $srv rcon-cli save-off"; $flush = Idx "compose exec -T $srv rcon-cli save-all flush"; $on = Idx "compose exec -T $srv rcon-cli save-on"
+  Check ($off -ge 0 -and $flush -gt $off -and $on -gt $flush) "${srv}: save-off -> save-all flush -> save-on"
+}
+Check ((Idx 'compose exec -T lobby rcon-cli save-on') -lt (Idx 'compose exec -T survival rcon-cli save-off')) 'lobby saves again before survival pauses'
+Check ((Idx 'compose stop*') -lt 0 -and (Idx 'compose up*') -lt 0) 'no container stop or start in the default path'
+$latest = Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { Test-Path (Join-Path $_.FullName 'COMPLETE.txt') } | Sort-Object Name | Select-Object -Last 1
+Check ($latest -and (Test-Path "$($latest.FullName)/lobby/world/level.dat") -and -not (Test-Path "$($latest.FullName)/lobby/world/session.lock")) 'worlds copied, session.lock skipped, COMPLETE written'
+$ol = @(Get-Content -LiteralPath (Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log').FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run -eq ($_.run) })
+$steps = @($ol | Select-Object -Last 12 | ForEach-Object { $_.step + ':' + $_.msg })
+$iOff = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -like 'save:lobby: save-off*' })
+$iCopy = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -like 'worlds:lobby:*' })
+$iOn = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -eq 'save:lobby: save-on' })
+Check ($iOff -ge 0 -and $iCopy -gt $iOff -and $iOn -gt $iCopy) 'log order: save-off, copy, save-on'
+
+Write-Host 'online backup: copy failure still turns saving back on'
+Reset-Calls
+$global:MaintCopyFailFor = 'survival'
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$global:MaintCopyFailFor = $null
+$calls = @($global:DockerCalls)
+Check ($msg -like 'Kopieren fehlgeschlagen*') "copy failure is reported ($msg)"
+Check ((Idx 'compose exec -T survival rcon-cli save-off') -ge 0 -and (Idx 'compose exec -T survival rcon-cli save-on') -gt (Idx 'compose exec -T survival rcon-cli save-off')) 'survival: save-on after the failed copy (finally)'
+Check ((Idx 'compose stop*') -lt 0) 'still no container stop'
+Check (@(Get-ChildItem "$root/backups" -Directory -Filter '*-FAILED').Count -ge 2) 'the failed run is marked FAILED'
+
+Write-Host 'online backup: stderr from docker (exit 0) does not abort'
+Reset-Calls
+$global:DockerStderr = $true
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$global:DockerStderr = $false
+Check ($msg -eq '') "docker stderr with exit 0 does not fail the backup ($msg)"
+
+Write-Host '-StopServers keeps the old behaviour'
+Reset-Calls
+$msg = ''; try { & "$root/backup.ps1" -StopServers -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$calls = @($global:DockerCalls)
+Check ($msg -eq '' -and (Idx 'compose stop lobby survival') -ge 0 -and (Idx 'compose up -d --no-deps lobby survival') -gt (Idx 'compose stop lobby survival')) "-StopServers stops and starts the servers ($msg)"
+Check ((Idx '*rcon-cli save-off*') -lt 0) '-StopServers does not use save-off'
+$global:MaintDumpOverride = $null
 
 Remove-Item Function:\docker
 Write-Host ''
