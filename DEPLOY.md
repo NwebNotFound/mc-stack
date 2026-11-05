@@ -33,6 +33,22 @@ Apply `scripts/v-player-stats.sql` as a MariaDB administrator after the existing
 
 The database user helpers require `MARIADB_ADMIN_USER`, `MARIADB_ADMIN_PASSWORD`, and the respective `CRAFTCORE_PVP_DB_PASSWORD` or `CRAFTCORE_VIP_DB_PASSWORD` in `.env`. They send credentials and SQL over stdin, create a private temporary option file inside the database container, and remove it afterwards. Run `python tools/check-db-credentials.py` to check scripts, compose files and CI workflows for common command-line credential patterns; `python tools/test_check_db_credentials.py` runs the scanner's regression tests.
 
+### creepy_ro: Admin-Setup und Recovery
+
+Nach dem ersten CraftCore-Start (Tabellen/Views muessen existieren) und bei fehlenden Leserechten explizit im Stack-Checkout ausfuehren:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\creepy-ro-grants.ps1
+```
+
+Voraussetzungen: vorhandenes Konto `'creepy_ro'@'%'`, laufender `craftcore-db` und `MARIADB_ADMIN_USER` / `MARIADB_ADMIN_PASSWORD` in `.env`. Der Admin braucht SELECT mit GRANT OPTION auf den acht Objekten in `scripts/creepy-ro-grants.sql`; das CraftCore-Laufzeitkonto bekommt keine zusaetzlichen Rechte. Der Helper nutzt denselben privaten Optionsdatei-/stdin-Pfad wie die DB-User-Helper, benoetigt aber kein Passwort des Lesekontos.
+
+Der Schritt ist manuell und idempotent; er laeuft weder beim Plugin-Start noch automatisch beim Deploy. Er fuegt ausschliesslich die acht SELECT-Grants hinzu, legt keinen User an, aendert keine Passwoerter, Daten oder bestehenden weiteren Rechte. Fehlende Konten/Objekte oder unzureichende Admin-Rechte fuehren zu einem Fehler. GRANT ist nicht transaktional: nach einem Teilfehler Voraussetzung beheben und denselben Schritt erneut ausfuehren. Kein FLUSH PRIVILEGES, Neustart oder Jar-/Image-/Konfigurationswechsel erforderlich.
+
+Danach als `creepy_ro` mit sicherer Optionsdatei fuer jedes der acht Objekte `SELECT * FROM craftcore.<Objekt> LIMIT 0;` pruefen (keine Nutzdaten werden ausgegeben). Weitere Leserechte aus anderen Migrationen bleiben unveraendert.
+
+Helper ohne Docker-/DB-Zugriff testen: `powershell -NoProfile -File tools\test-creepy-ro-grants.ps1` (isolierte Fixtures, gemocktes Docker).
+
 ### One-off presence backfill
 
 After the presence and player stats tables exist, an administrator may run `scripts/backfill-player-presence.sql` once using a secure option file or the existing database helper. It inserts missing lobby and survival rows from `player_playtime_world`; existing presence rows, including online state and last seen, are preserved on repeat runs. New rows are offline. Their `last_seen` is NULL (unknown). The script first permits NULL in the existing `last_seen` column. This script is manual and is not run at startup or deploy.
