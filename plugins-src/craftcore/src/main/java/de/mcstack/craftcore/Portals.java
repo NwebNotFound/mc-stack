@@ -106,9 +106,8 @@ final class Portals implements Listener, org.bukkit.command.TabExecutor {
     if (!admit(last, p.getUniqueId(), System.currentTimeMillis(), r.cooldownMillis())) return false;
     try {
       if (r.message() != null && !r.message().isBlank()) p.sendMessage(String.format(Locale.ROOT, r.message(), r.target()));
-      if (!ProxyChannel.send(core, p, r.target())) {
+      if (!ProxyChannel.sendVerified(core, p, r.target())) {
         // Before, a refused proxy message left the player standing in the portal without a word.
-        p.sendMessage(ProxyChannel.failureText(r.target()));
         last.remove(p.getUniqueId());
         return false;
       }

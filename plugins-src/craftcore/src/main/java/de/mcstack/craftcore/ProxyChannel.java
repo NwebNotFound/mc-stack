@@ -70,6 +70,29 @@ public final class ProxyChannel {
     return false;
   }
 
+  /**
+   * Like {@link #sendOrTell}, and 5 s later checks that the proxy actually moved the player. Velocity drops a
+   * Connect silently in several cases (a cancelled pre-connect, a request already in flight), and Paper drops a
+   * message on a channel the connection has not registered; the player then stood in the portal without a word
+   * (05.11.2026, Survival portal). Now they get a chat line with the /server fallback, and the log says so.
+   */
+  public static boolean sendVerified(JavaPlugin plugin, Player player, String server) {
+    if (!sendOrTell(plugin, player, server)) return false;
+    java.util.UUID id = player.getUniqueId();
+    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+      Player still = Bukkit.getPlayer(id);
+      if (still == null || !still.isOnline()) return; // switched away: fine
+      plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Kanal "
+          + SpawnRoute.CHANNEL + " registriert: " + still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL) + ")");
+      still.sendMessage(notMovedText(server));
+    }, 100L);
+    return true;
+  }
+
+  static String notMovedText(String server) {
+    return "Der Wechsel nach " + server + " kam beim Proxy nicht an. Versuch es nochmal oder tippe /server " + server + ".";
+  }
+
   static String failureText(String server) {
     return "Serverwechsel nach " + server + " fehlgeschlagen. Bitte erneut versuchen oder /lobby nutzen.";
   }
