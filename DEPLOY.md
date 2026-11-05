@@ -55,6 +55,8 @@ After the presence and player stats tables exist, an administrator may run `scri
 
 ## Wartungs-Tasks: Backup und Dev-Reset (fuer Homelab Deployer)
 
+**Online-Backup (Standard):** `backup.ps1` stoppt nichts mehr. Pro Server: optional Chat-Hinweis, RCON `save-off`, `save-all flush`, Welten kopieren (ohne `session.lock`), `save-on`; `save-on` laeuft auch bei einem Fehler (finally). Der DB-Dump bleibt `--single-transaction`. `-StopServers` ist das alte Verhalten (Stop, Kopie, Start), `-LeaveStopped` (Deploys) setzt es automatisch, `-NoWarning` laesst den Chat-Hinweis weg. **Nach dem Deploy den Task `MCStack-Backup` auf 00:00 stellen** (Homelab Deployer).
+
 Nach dem Vorfall vom 05.11. (beide Nachhol-Laeufe um 11:36 gleichzeitig, `craftcore-db` noch aus) gilt fuer `backup.ps1` und `dev-reset.ps1`:
 
 - **Log:** jeder Lauf schreibt JSON-Zeilen (Start, Schritte, Exit-Code, Fehler) nach `logs/maintenance/<backup|dev-reset>-<yyyy-MM>.log`, eine Datei pro Monat. Es wird nichts automatisch geloescht; alte Monate nur mit Nils' OK von Hand entfernen.
@@ -67,7 +69,7 @@ Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig vo
 
 | Task | Zeit | Aktion | Einstellungen |
 |---|---|---|---|
-| `MCStack-Backup` | 04:50 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\backup.ps1` | "Task so schnell wie moeglich nach verpasstem Start ausfuehren" an; "Verzoegerung" 5 min; "Wenn bereits ausgefuehrt: neue Instanz nicht starten"; Abbruch nach 2 h |
+| `MCStack-Backup` | **00:00** (online, ohne Downtime) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\backup.ps1` | "Task so schnell wie moeglich nach verpasstem Start ausfuehren" an; "Verzoegerung" 5 min; "Wenn bereits ausgefuehrt: neue Instanz nicht starten"; Abbruch nach 2 h |
 | `MCStack-Dev-Reset` | 05:10 (20 min Abstand) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\dev-reset.ps1` | verpasster Start an, Verzoegerung 10 min; neue Instanz nicht starten; Abbruch nach 1 h |
 
 Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben aktivieren"). Kein AtStartup-Task. Die Scheduler-Aenderungen gehoeren nicht in diesen PR und werden vom Homelab Deployer umgesetzt.

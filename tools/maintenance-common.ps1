@@ -95,3 +95,21 @@ function Get-DevResetCandidates([string]$BackupDir, [int]$Keep = 7) {
   if (-not (Test-Path -LiteralPath $BackupDir)) { return @() }
   @(Get-ChildItem -LiteralPath $BackupDir -Filter 'survival-dev-reset-*.zip' -File | Sort-Object Name -Descending | Select-Object -Skip $Keep | ForEach-Object { $_.FullName })
 }
+
+# One RCON command on a running Minecraft service (rcon-cli in the itzg image). -Optional only logs a failure.
+function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional) {
+  $out = & docker compose exec -T $Server rcon-cli $Command 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $msg = "RCON $Server '$Command' fehlgeschlagen: $(($out | Out-String).Trim())"
+    if ($Optional) { Write-MaintLog 'rcon' 'warn' $msg; return }
+    throw $msg
+  }
+}
+
+# Copies one world folder; session.lock is skipped (held by the running server, not needed for a restore).
+function Copy-MaintWorld([string]$World, [string]$Dest) {
+  if ($global:MaintCopyFailFor -and $World -like "*$($global:MaintCopyFailFor)*") { throw "Kopieren fehlgeschlagen: $World" }  # test seam
+  $target = Join-Path $Dest (Split-Path $World -Leaf)
+  New-Item -ItemType Directory -Force -Path $target | Out-Null
+  Get-ChildItem -LiteralPath $World -Force | Where-Object { $_.Name -ne 'session.lock' } | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force }
+}
