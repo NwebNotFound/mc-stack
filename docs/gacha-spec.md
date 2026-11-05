@@ -248,7 +248,7 @@ The per-tier average `W` behind those numbers is what the pool editor must actua
 
 Display: badge per item, tier chip, `EV` per pull and per 10 both in WP, balance bar with the five zones and the warnings named inline (`EV_TOO_HIGH`, `SSR_PLUS_TOO_COMMON`, `VALUE_CONCENTRATION`), the SSR+/SSR "1 in N" lines, and the concentration table of the top five EV contributors. All of it is a balancing aid; the editor never sells, never converts to CP and never changes the published version. Only the plugin publishing the whole immutable version changes live pools; preview is not authoritative.
 
-**Test pulls, default (*default, Nils may change*):** the editor's "Testziehung" runs server-side: the plugin draws from the *draft* version with the production engine (same validation, `SecureRandom`, odds) and returns the cards, but debits no CP, writes no `gacha_draws`, `gacha_instances` or deliveries, and creates no item; only an audit row in `gacha_admin_changes`. The reveal is shown in the editor. This needs no isolated world and is the only test mode in v1.
+**Test pulls, default (*default, Nils may change*):** the editor's "Testziehung" runs server-side: the plugin draws from the *draft* version with the same draw function the pull engine uses later (same validation, `SecureRandom`, odds; built in §8.1 step 1) and returns the cards, but debits no CP, writes no `gacha_draws`, `gacha_instances` or deliveries, and creates no item; only an audit row in `gacha_admin_changes`. The reveal is shown in the editor. This needs no isolated world and is the only test mode in v1.
 
 Later option, disabled by default: `Im Spiel testen (an mich)` creates a separately audited, admin-only, rate-limited **test-mode** request. The plugin rechecks the admin, applies the same validation, and offers an ephemeral, visibly tagged test item only in an isolated non-economic test context: no CP, no real reward/delivery, trading, storage, dropping, market, other-player transfer, or permanent world changes. No test item may persist into production inventory. If that isolation and safe cleanup cannot be proven, keep the button disabled and provide tooltip preview only; do not silently gift items. Publication is a separate explicit action. Ability cooldown/test effects cannot alter real claims or resource economy.
 
@@ -400,8 +400,8 @@ Future deploys require approved backup, review/CI, standard CraftCore procedure 
 
 The satchel editor comes first. Each step is its own PR (or small group of PRs from §8) and stays behind a disabled feature flag until the whole chain works.
 
-1. **Satchel and item editor** (§5, §8 items 1 schema + 6): additive schema incl. `gacha_groups`, the website editors (item editor, Beutel editor with groups and hand-picked items, value score and EV), the admin queue through Creepy with the Discord admin role, plugin-side validation and versioned publish, and server-side test pulls. No player can pull yet.
-2. **Pull engine** (§8 item 1): seven tiers, `SecureRandom` two-stage draw, idempotent transaction, serials, legacy-claim preservation, `/gacha` GUI behind the flag.
+1. **Satchel and item editor** (§5, §8 items 1 schema + 6): additive schema incl. `gacha_groups`, the website editors (item editor, Beutel editor with groups and hand-picked items, value score and EV), the admin queue through Creepy with the Discord admin role, plugin-side validation and versioned publish, the **draw function** (pure two-stage `SecureRandom` sampler over a validated pool version, §3, no DB writes) and server-side test pulls that call it. No player can pull yet.
+2. **Pull engine** (§8 item 1): reuses the step-1 draw function unchanged and adds the idempotent pull transaction (debit, `gacha_requests`/`gacha_draws`, outbox), serials, legacy-claim preservation, `/gacha` GUI behind the flag.
 3. **Delivery hardening** (§8 item 2).
 4. **Ability wave 1** (§8 item 7), one handler per PR.
 5. **Creepy bridge for player pulls** (§8 item 3).
