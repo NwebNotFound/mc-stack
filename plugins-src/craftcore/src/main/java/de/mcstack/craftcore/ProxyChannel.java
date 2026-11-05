@@ -67,7 +67,7 @@ public final class ProxyChannel {
     byte[] payload = SpawnRoute.connect(server);
     boolean ok = send(plugin, player, payload);
     java.util.UUID id = player.getUniqueId();
-    if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline() && INTENT.current(id, token)) send(plugin, player, payload); }, 60L);
+    if (ok && recent) Bukkit.getScheduler().runTaskLater(plugin, () -> { if (player.isOnline() && Bukkit.getPlayer(id) == player && INTENT.current(id, token)) send(plugin, player, payload); }, 60L);
     return ok;
   }
 
@@ -87,15 +87,17 @@ public final class ProxyChannel {
   public static boolean sendVerified(JavaPlugin plugin, Player player, String server) {
     if (!sendOrTell(plugin, player, server)) return false;
     // send() just began a new intent; verify only that one.
-    verifyLater(plugin, player.getUniqueId(), server, 1, INTENT.latestFor(player.getUniqueId()));
+    verifyLater(plugin, player, server, 1, INTENT.latestFor(player.getUniqueId()));
     return true;
   }
 
   /** Attempt 1 still here after 5 s: send once more from a plain scheduler tick, then tell the player and log. */
-  private static void verifyLater(JavaPlugin plugin, java.util.UUID id, String server, int attempt, long token) {
+  private static void verifyLater(JavaPlugin plugin, Player session, String server, int attempt, long token) {
+    java.util.UUID id = session.getUniqueId();
     Bukkit.getScheduler().runTaskLater(plugin, () -> {
       Player still = Bukkit.getPlayer(id);
       if (still == null || !still.isOnline()) return; // switched away: fine
+      if (still != session) return;                    // reconnected: a new session never gets the old destination
       if (!INTENT.current(id, token)) return;          // a newer choice (another portal, /lobby, VIP) wins
       boolean registered = still.getListeningPluginChannels().contains(SpawnRoute.CHANNEL);
       plugin.getLogger().warning("Proxy hat den Wechsel von " + still.getName() + " nach " + server + " nicht ausgefuehrt (Versuch "
@@ -103,7 +105,7 @@ public final class ProxyChannel {
       if (attempt == 1) {
         boolean resent;
         try { resent = sendFor(plugin, still, server, token); } catch (IOException e) { resent = false; }
-        if (resent) { verifyLater(plugin, id, server, 2, token); return; }
+        if (resent) { verifyLater(plugin, session, server, 2, token); return; }
       }
       still.sendMessage(notMovedText(server));
       // A click sends the command from the client, so Velocity runs its own /server, which works (Nils, 05.11.).

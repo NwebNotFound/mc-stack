@@ -139,5 +139,9 @@ final class LobbyRoute implements Listener {
   }
 
   @EventHandler
-  public void quit(PlayerQuitEvent event) { cancel(event.getPlayer()); }
+  public void quit(PlayerQuitEvent event) {
+    cancel(event.getPlayer());
+    // A pending switch belongs to this session only; a reconnect must never receive an old destination (#136).
+    ProxyChannel.INTENT.forget(event.getPlayer().getUniqueId());
+  }
 }

@@ -25,4 +25,13 @@ class SwitchIntentTest {
     intent.forget(a);
     assertFalse(intent.current(a, ta));
   }
+  @Test void disconnectAndReconnectWithinFiveSecondsDropsTheOldDestination() {
+    SwitchIntent intent = new SwitchIntent();
+    UUID nils = UUID.randomUUID();
+    long survival = intent.begin(nils);   // portal to survival, 5 s check scheduled
+    intent.forget(nils);                  // quit (LobbyRoute.quit)
+    // reconnects to the same backend and does nothing else: the old timer fires now
+    assertFalse(intent.current(nils, survival), "the new session never receives the old switch");
+    assertEquals(0L, intent.latestFor(nils));
+  }
 }
