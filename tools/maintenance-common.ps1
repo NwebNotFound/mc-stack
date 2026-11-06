@@ -115,14 +115,34 @@ function Get-DevResetCandidates([string]$BackupDir, [int]$Keep = 7) {
 }
 
 # One RCON command on a running Minecraft service (rcon-cli in the itzg image). -Optional only logs a failure.
-function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional) {
+# -AllProfiles: the optional servers (pvp, vipworld-1..3) live in compose profiles; without them compose does not
+# resolve those services.
+function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional, [switch]$AllProfiles) {
   $ErrorActionPreference = 'Continue'  # PS 5.1: stderr via 2>&1 would throw under 'Stop'; only the exit code decides
-  $out = & docker compose exec -T $Server rcon-cli $Command 2>&1
+  $profiles = @(); if ($AllProfiles) { $profiles = @(Get-MaintOptionalProfiles) }
+  $out = & docker compose @profiles exec -T $Server rcon-cli $Command 2>&1
   if ($LASTEXITCODE -ne 0) {
     $msg = "RCON $Server '$Command' fehlgeschlagen: $(($out | Out-String).Trim())"
     if ($Optional) { Write-MaintLog 'rcon' 'warn' $msg; return }
     throw $msg
   }
+}
+
+function Get-MaintOptionalProfiles { @('--profile', 'pvp', '--profile', 'vip', '--profile', 'vip3') }
+
+# Compose services that have a running container right now (best effort: empty on any error).
+function Get-MaintRunningServices {
+  $ErrorActionPreference = 'Continue'
+  $profiles = Get-MaintOptionalProfiles
+  $out = & docker compose @profiles ps --status running --services 2>$null
+  if ($LASTEXITCODE -ne 0) { return @() }
+  @($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+# World folders of one server data dir: world, world_*, or anything with a level.dat.
+function Get-MaintWorlds([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return @() }
+  @(Get-ChildItem -LiteralPath $Dir -Directory | Where-Object { $_.Name -match '^world($|_)' -or (Test-Path -LiteralPath (Join-Path $_.FullName 'level.dat')) })
 }
 
 # Copies one world folder; session.lock is skipped (held by the running server, not needed for a restore).

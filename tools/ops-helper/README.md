@@ -261,7 +261,9 @@ place to change and the gate flag can then be dropped.
 ## Backup handling (important caveat)
 
 T2 requires a **recent backup**, it never creates one: the newest
-`backups/daily-.../` directory with a `COMPLETE.txt` marker must be younger than
+`backups/daily-.../` directory with a `COMPLETE.txt` marker **and both database
+dumps** (`craftcore.sql`, `luckperms.sql`; a backup without the LuckPerms dump
+cannot restore ranks or bought VIP permissions) must be younger than
 `tiers.T2.backup_max_age_hours` (default **12 h**, configurable in
 `config/ops-allowlist.json`). Missing → `no_recent_backup`; too old →
 `stale_backup`, and the message says to run `backup.ps1` on the host. The

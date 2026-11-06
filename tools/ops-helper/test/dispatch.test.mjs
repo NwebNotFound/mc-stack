@@ -13,11 +13,19 @@ function ensureFreshMtime(path, when) {
   utimesSync(path, when, when);
 }
 
+/** A restorable backup: COMPLETE.txt plus both database dumps (issue #145). */
+function writeCompleteBackup(dir) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(`${dir}/craftcore.sql`, "dump");
+  writeFileSync(`${dir}/luckperms.sql`, "dump");
+  writeFileSync(`${dir}/COMPLETE.txt`, "ok");
+}
+
 /** Create a complete backup fixture and return its directory. */
 function backupFixture() {
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   return backups;
 }
 
@@ -189,7 +197,7 @@ test("ops_restart_game (T2) restarts and reports a missing announcement honestly
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   // Real clock: the backup fixture was just created, so it is genuinely fresh.
   const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
@@ -216,7 +224,7 @@ test("ops_restart_game (T2) demands the no-announcement acknowledgement", async 
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
   const out = await handleOp("ops_restart_game", { service: "lobby", confirm: true, delay_seconds: 60 }, deps);
@@ -236,7 +244,7 @@ test("ops_restart_game (T2) refuses without a recent backup and never restarts",
 
   // A backup older than tiers.T2.backup_max_age_hours is refused too.
   mkdirSync(`${backups}/daily-20260101-000000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20260101-000000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20260101-000000`);
   const aged = new Date(Date.now() - 13 * 3600 * 1000);
   ensureFreshMtime(`${backups}/daily-20260101-000000`, aged);
   const staleDeps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
@@ -436,7 +444,7 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -472,7 +480,7 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -513,7 +521,7 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -549,7 +557,7 @@ test("ops_rollback_plugin refuses tampered, unhashed or out-of-tree jars and ign
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -607,7 +615,7 @@ test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo",
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261102-010101`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261102-010101/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261102-010101`);
   writeFileSync(`${backups}/daily-20261102-010101/craftcore.sql`, "dump");
   repoAllow.paths.backups = backups;
   const deps = makeDeps({ allow: repoAllow });
@@ -617,6 +625,7 @@ test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo",
   assert.equal(list.result.count, 1);
   assert.equal(list.result.backups[0].complete, true);
   assert.equal(list.result.last_complete, "daily-20261102-010101");
+  assert.equal(list.result.backups[0].has_luckperms_dump, true);
 
   const disk = await handleOp("ops_disk", {}, deps);
   assert.equal(disk.ok, true);
@@ -733,7 +742,7 @@ function freshBackupAllow() {
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   return repoAllow;
 }
@@ -830,4 +839,18 @@ test("a backup that starts during the T2 delay is waited for before the restart"
   assert.equal(stuck.runner.find((argv) => argv[1] === "restart"), undefined, "no restart during a backup");
   assert.equal(stuck.state.t2Busy(), null);
   rmSync(marker);
+});
+
+test("a COMPLETE backup without the LuckPerms dump does not satisfy the T2 backup gate", async () => {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeFileSync(`${backups}/daily-20261103-120000/craftcore.sql`, "dump");
+  repoAllow.paths.backups = backups;
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.code, "no_recent_backup");
+  assert.match(out.message, /luckperms\.sql/);
+  assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined);
 });
