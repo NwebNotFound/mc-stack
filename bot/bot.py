@@ -923,15 +923,16 @@ class Bot(discord.Client):
     async def post_chat(self, channel, name, server, text):
         hook = await self.get_webhook(channel)
         text = text[:1900]
+        safe = discord.utils.escape_markdown(text)[:1990]  # kein Markdown/Masked-Link aus dem MC-Chat (#151)
         if hook:
             try:
-                await hook.send(text, username=name, avatar_url=f"https://mc-heads.net/avatar/{name}/64", allowed_mentions=discord.AllowedMentions.none())
+                await hook.send(safe, username=name, avatar_url=f"https://mc-heads.net/avatar/{name}/64", allowed_mentions=discord.AllowedMentions.none())
                 return
             except discord.NotFound:
                 self.webhook = None
             except discord.HTTPException:
                 log.exception("Webhook-Senden fehlgeschlagen")
-        await channel.send(f"**{discord.utils.escape_markdown(name)}** ({server}): {discord.utils.escape_markdown(text)}", allowed_mentions=discord.AllowedMentions.none())
+        await channel.send(f"**{discord.utils.escape_markdown(name)}** ({server}): {safe}"[:2000], allowed_mentions=discord.AllowedMentions.none())
 
     def event_line(self, kind, name, detail=""):
         n = f"**{discord.utils.escape_markdown(name)}**"
