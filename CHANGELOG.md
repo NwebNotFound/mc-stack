@@ -2,11 +2,15 @@
 
 ## Für Spieler
 
+### 01.11.2026
+
 - Auf der Website siehst du jetzt überall echte Spielerköpfe: in der Spielerliste, im Profil und oben in deiner Konto-Anzeige.
 - Im Profil heißen Kills jetzt „Spieler-Kills“, gezählt werden nur Kills an anderen Spielern.
 - Im Inventar auf der Website haben Rüstung und Offhand jetzt eigene, richtige Slots.
 - Deine Bestellungen zeigen jetzt deutsche Itemnamen, zum Beispiel „Fass“ statt „barrel“.
 - Deine Tode stehen jetzt in zwei Listen: „Getötet von“ für Mobs und „Todesursachen“ für alles andere.
+
+### 31.10.2026
 
 - Neu im Discord: `/leaderboard pvp` zeigt die PvP-Bestenliste mit Siegen, Niederlagen, Unentschieden, Winrate (ab 5 Matches) und Lieblings-Kit.
 - In der Lobby stehen jetzt NPCs. Schau sie aus der Nähe an, dann siehst du, was sie machen; per Klick bringen sie dich zum Beispiel auf einen anderen Server oder öffnen ein Menü.
