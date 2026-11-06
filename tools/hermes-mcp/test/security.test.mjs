@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BruteForceGuard, ipMatches, isTrustedProxy, normalizeIp, resolveClientIp } from "../dist/security.js";
+import { BruteForceGuard, gatewayOf, ipMatches, isTrustedProxy, normalizeIp, opsHostAllowed, opsPeerAllowed, resolveClientIp } from "../dist/security.js";
 
 test("normalizeIp strips the IPv4-mapped prefix", () => {
   assert.equal(normalizeIp("::ffff:10.0.0.5"), "10.0.0.5");
@@ -70,4 +70,47 @@ test("BruteForceGuard forgets failures outside the window", () => {
   guard.failure("ip", t0);
   guard.failure("ip", t0 + 120_000); // 2 min later: window expired, counter restarts at 1
   assert.equal(guard.check("ip", t0 + 120_001), null);
+});
+
+const LOCALS = [
+  { address: "127.0.0.1", cidr: "127.0.0.1/8", family: "IPv4", internal: true },
+  { address: "172.20.0.3", cidr: "172.20.0.3/16", family: "IPv4", internal: false }, // mcp
+  { address: "172.21.0.2", cidr: "172.21.0.2/24", family: "IPv4", internal: false }, // ops
+];
+
+test("gatewayOf returns the first host address of an IPv4 subnet", () => {
+  assert.equal(gatewayOf("172.20.0.3/16"), "172.20.0.1");
+  assert.equal(gatewayOf("172.21.0.130/25"), "172.21.0.129");
+  assert.equal(gatewayOf("10.0.0.1/32"), null);
+  assert.equal(gatewayOf("fd00::1/64"), null);
+});
+
+test("ops listener refuses sibling containers but allows the host port mapping", () => {
+  // cloudflared-mcp (or any container on `mcp`) -> refused
+  assert.equal(opsPeerAllowed("172.20.0.7", LOCALS), false);
+  assert.equal(opsPeerAllowed("::ffff:172.21.0.9", LOCALS), false);
+  // the bridge gateway (Docker's userland proxy for 127.0.0.1:8767) -> allowed
+  assert.equal(opsPeerAllowed("172.20.0.1", LOCALS), true);
+  assert.equal(opsPeerAllowed("::ffff:172.21.0.1", LOCALS), true);
+  // loopback and addresses outside every attached subnet (Docker Desktop proxy) -> allowed
+  assert.equal(opsPeerAllowed("127.0.0.1", LOCALS), true);
+  assert.equal(opsPeerAllowed("::1", LOCALS), true);
+  assert.equal(opsPeerAllowed("192.168.65.1", LOCALS), true);
+  assert.equal(opsPeerAllowed("", LOCALS), false);
+});
+
+test("an explicit ops peer allowlist replaces the built-in rule", () => {
+  assert.equal(opsPeerAllowed("192.168.65.1", LOCALS, ["172.20.0.1"]), false);
+  assert.equal(opsPeerAllowed("172.20.0.1", LOCALS, ["172.20.0.1"]), true);
+  assert.equal(opsPeerAllowed("127.0.0.1", LOCALS, ["172.20.0.1"]), true, "loopback always");
+});
+
+test("ops listener only accepts loopback Host headers", () => {
+  const allowed = ["localhost", "127.0.0.1", "::1"];
+  assert.equal(opsHostAllowed("127.0.0.1:8767", allowed), true);
+  assert.equal(opsHostAllowed("localhost", allowed), true);
+  assert.equal(opsHostAllowed("[::1]:8767", allowed), true);
+  assert.equal(opsHostAllowed("mcp.nwebnotfound.dev", allowed), false);
+  assert.equal(opsHostAllowed("hermes-mcp:8767", allowed), false);
+  assert.equal(opsHostAllowed(undefined, allowed), false);
 });
