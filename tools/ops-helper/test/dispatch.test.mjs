@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
 import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, FakeJobClient, makeDeps, tmpDir } from "./helpers.mjs";
@@ -339,9 +339,27 @@ test("ops_build_plugin verifies the artifact hash itself and does not deploy", a
   assert.deepEqual(out.result.tests, { tests: 441, failures: 0, errors: 0, skipped: 13 });
   assert.equal(out.result.deployed, false);
   assert.equal(out.result.dirty, null, "a builder that could not inspect the tree reports null, not false");
-  assert.ok(existsSync(out.result.artifact_path), "the artifact must stay in the artifact volume");
-  const state = JSON.parse(readFileSync(`${dir}/artifacts/state/last-build.json`, "utf8"));
+  assert.ok(existsSync(out.result.artifact_path), "the verified artifact is kept");
+  assert.ok(out.result.artifact_path.startsWith(`${dir}/jars/craftcore-`), "kept in the helper-only data dir, not in the shared volume");
+  assert.equal(readFileSync(out.result.artifact_path).equals(jarBytes), true);
+  const state = JSON.parse(readFileSync(`${dir}/state/last-build.json`, "utf8"));
   assert.equal(state.sha256, sha);
+  assert.equal(existsSync(`${dir}/artifacts/state/last-build.json`), false, "no state in the builder-writable volume");
+
+  // A path outside <artifacts>/artifacts (e.g. a planted symlink or ../) is refused.
+  const outside = `${dir}/elsewhere.jar`;
+  writeFileSync(outside, jarBytes);
+  for (const path of [outside, `${dir}/artifacts/artifacts/../../elsewhere.jar`]) {
+    const escJobs = new FakeJobClient({ result: builderResult({ artifact: { path, sha256: sha, size_bytes: jarBytes.length } }) });
+    const esc = await handleOp("ops_build_plugin", {}, makeDeps({ jobs: escJobs, dataDir: dir }));
+    assert.equal(esc.ok, false);
+    assert.equal(esc.code, "artifact_path_not_allowed", path);
+  }
+  const link = `${dir}/artifacts/artifacts/link.jar`;
+  symlinkSync(outside, link);
+  const linkJobs = new FakeJobClient({ result: builderResult({ artifact: { path: link, sha256: sha, size_bytes: jarBytes.length } }) });
+  const linked = await handleOp("ops_build_plugin", {}, makeDeps({ jobs: linkJobs, dataDir: dir }));
+  assert.equal(linked.code, "artifact_path_not_allowed", "a symlink out of the artifact dir is refused");
 
   // A tampered artefact (hash does not match the file) is refused, not deployed.
   const badJobs = new FakeJobClient({
@@ -380,16 +398,25 @@ test("ops_deploy_plugin refuses without a build, without the arm switch and with
   const again = await handleOp("ops_deploy_plugin", params("a".repeat(64)), noBuildDeps);
   assert.equal(again.code, "cooldown_active");
 
-  const jar = `${dir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${dir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "jar");
   const sha = createHash("sha256").update("jar").digest("hex");
-  mkdirSync(`${dir}/artifacts/state`, { recursive: true });
-  writeFileSync(`${dir}/artifacts/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const mismatchDeps = mk();
   const mismatch = await handleOp("ops_deploy_plugin", params("b".repeat(64)), mismatchDeps);
   assert.equal(mismatch.code, "artifact_mismatch");
+
+  // A last-build record that points into the builder-writable volume is refused.
+  const sharedJar = `${dir}/artifacts/artifacts/craftcore-x.jar`;
+  mkdirSync(`${dir}/artifacts/artifacts`, { recursive: true });
+  writeFileSync(sharedJar, "jar");
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: sharedJar }));
+  const sharedOut = await handleOp("ops_deploy_plugin", params(sha), mk());
+  assert.equal(sharedOut.code, "artifact_missing");
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const noBackupDeps = mk();
   const noBackup = await handleOp("ops_deploy_plugin", params(sha), noBackupDeps);
@@ -418,12 +445,12 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
 
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
-  const jar = `${deps.cfg.artifactsDir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "new-jar-bytes");
   const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
-  writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, true, out.message);
@@ -432,9 +459,11 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   assert.equal(out.result.steps.length, 2);
   assert.equal(out.result.steps.every((step) => step.healthy === true), true);
   assert.equal(deps.sleeps.filter((ms) => ms === 60_000).length, 2, "lead time + one delay between the services");
-  const rollback = JSON.parse(readFileSync(`${deps.cfg.artifactsDir}/state/last-deploy.json`, "utf8"));
+  const rollback = JSON.parse(readFileSync(`${dir}/state/last-deploy.json`, "utf8"));
   assert.ok(existsSync(rollback.previous.lobby.jar), "the previous jar must be kept for the rollback");
+  assert.ok(rollback.previous.lobby.jar.startsWith(`${dir}/rollback/`), "rollback jars live in the helper-only data dir");
   assert.equal(readFileSync(rollback.previous.lobby.jar, "utf8"), "old-lobby-jar");
+  assert.equal(rollback.previous.lobby.sha256, createHash("sha256").update("old-lobby-jar").digest("hex"));
 });
 
 test("ops_deploy_plugin rolls back automatically when a service does not come up healthy", async () => {
@@ -463,12 +492,12 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   });
 
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true }, runner, now: advancingClock() });
-  const jar = `${deps.cfg.artifactsDir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "new-jar-bytes");
   const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
-  writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, false);
@@ -491,19 +520,20 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
   repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
 
-  const keptLobby = `${deps.cfg.artifactsDir}/rollback/lobby-craftcore-old.jar`;
-  const keptSurvival = `${deps.cfg.artifactsDir}/rollback/survival-craftcore-old.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/rollback`, { recursive: true });
+  const keptLobby = `${dir}/rollback/lobby-craftcore-old.jar`;
+  const keptSurvival = `${dir}/rollback/survival-craftcore-old.jar`;
+  mkdirSync(`${dir}/rollback`, { recursive: true });
   writeFileSync(keptLobby, "old-lobby-jar");
   writeFileSync(keptSurvival, "old-survival-jar");
   writeFileSync(`${pluginLobby}/craftcore.jar`, "broken-jar");
   writeFileSync(`${pluginSurvival}/craftcore.jar`, "broken-jar");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
+  const h = (text) => createHash("sha256").update(text).digest("hex");
+  mkdirSync(`${dir}/state`, { recursive: true });
   writeFileSync(
-    `${deps.cfg.artifactsDir}/state/last-deploy.json`,
+    `${dir}/state/last-deploy.json`,
     JSON.stringify({
       artifact_sha256: "c".repeat(64),
-      previous: { lobby: { sha256: "a".repeat(64), jar: keptLobby }, survival: { sha256: "b".repeat(64), jar: keptSurvival } },
+      previous: { lobby: { sha256: h("old-lobby-jar"), jar: keptLobby }, survival: { sha256: h("old-survival-jar"), jar: keptSurvival } },
     }),
   );
 
@@ -512,6 +542,65 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
   assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "old-lobby-jar");
   assert.equal(readFileSync(`${pluginSurvival}/craftcore.jar`, "utf8"), "old-survival-jar");
   assert.equal(out.result.steps.length, 2);
+});
+
+test("ops_rollback_plugin refuses tampered, unhashed or out-of-tree jars and ignores the shared volume", async () => {
+  const repoAllow = enabledAllowlist();
+  repoAllow.paths.repo = REPO_ROOT;
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  repoAllow.paths.backups = backups;
+  const pluginLobby = tmpDir("ops-helper-lobby-");
+  const pluginSurvival = tmpDir("ops-helper-survival-");
+  repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
+  const h = (text) => createHash("sha256").update(text).digest("hex");
+
+  const scenario = async (setup) => {
+    const dir = tmpDir();
+    const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
+    writeFileSync(`${pluginLobby}/craftcore.jar`, "current-jar");
+    writeFileSync(`${pluginSurvival}/craftcore.jar`, "current-jar");
+    mkdirSync(`${dir}/rollback`, { recursive: true });
+    mkdirSync(`${dir}/state`, { recursive: true });
+    setup(dir);
+    return { deps, out: await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps) };
+  };
+
+  // 1. the builder rewrote the OLD (shared-volume) state file: it is not read any more
+  const shared = await scenario((dir) => {
+    const evil = `${dir}/artifacts/evil.jar`;
+    mkdirSync(`${dir}/artifacts/state`, { recursive: true });
+    writeFileSync(evil, "evil");
+    writeFileSync(`${dir}/artifacts/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("evil"), jar: evil } } }));
+  });
+  assert.equal(shared.out.code, "no_rollback_available");
+
+  // 2. the jar was swapped after it was recorded
+  const swapped = await scenario((dir) => {
+    writeFileSync(`${dir}/rollback/lobby.jar`, "evil");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("old"), jar: `${dir}/rollback/lobby.jar` } } }));
+  });
+  assert.equal(swapped.out.code, "rollback_jar_untrusted");
+
+  // 3. a jar outside the helper's rollback directory, even with a matching hash
+  const outside = await scenario((dir) => {
+    writeFileSync(`${dir}/evil.jar`, "evil");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("evil"), jar: `${dir}/rollback/../evil.jar` } } }));
+  });
+  assert.equal(outside.out.code, "rollback_jar_untrusted");
+
+  // 4. no recorded hash at all
+  const unhashed = await scenario((dir) => {
+    writeFileSync(`${dir}/rollback/lobby.jar`, "old");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: "zz", jar: `${dir}/rollback/lobby.jar` } } }));
+  });
+  assert.equal(unhashed.out.code, "rollback_jar_untrusted");
+
+  for (const { deps } of [shared, swapped, outside, unhashed]) {
+    assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined, "nothing is restarted");
+  }
+  assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "current-jar", "nothing is installed");
 });
 
 test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo", async () => {
