@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assumptions.*;
 class RconPurchaseTest {
  static final String BUYER="00000000-0000-0000-0000-000000000001", SELLER="00000000-0000-0000-0000-000000000002", POOR="00000000-0000-0000-0000-000000000003", ID="00000000-0000-0000-0000-000000000004";
  static RconPurchase.Request req(String kind,String buyer,int qty,long max,String key){return new RconPurchase.Request(kind,buyer,ID,qty,max,key);}
- static String buy(Connection c,RconPurchase.Request r)throws Exception{return RconPurchase.buy(c,r,1,(item,amount)->"rest"+amount,500);}
+ static String buy(Connection c,RconPurchase.Request r)throws Exception{return RconPurchase.buy(c,r,1,RconItemPreparation.prepare(RconItemPreparation.load(c,r),r.qty(),(item,amount)->"rest"+amount),500);}
  static long val(Connection c,String sql)throws Exception{try(Statement s=c.createStatement();ResultSet r=s.executeQuery(sql)){assertTrue(r.next());return r.getLong(1);}}
  void exercise(Connection c,boolean temporary)throws Exception {
   String t=temporary?"TEMPORARY ":"";
@@ -28,6 +28,17 @@ class RconPurchaseTest {
   }
   c.setAutoCommit(false);
   for(String kind:new String[]{"shop","ah"}) {
+   var race=req(kind,BUYER,4,40,kind+"race");
+   var prepared=RconItemPreparation.prepare(RconItemPreparation.load(c,race),race.qty(),(item,amount)->"rest"+amount);
+   String table=kind.equals("shop")?"shop_journal":"ah_journal";
+   try(Statement s=c.createStatement()){s.executeUpdate("UPDATE "+table+" SET item='edited' WHERE id='"+ID+"'");} c.commit();
+   assertThrows(SQLException.class,()->RconPurchase.buy(c,race,1,prepared,500)); c.rollback();
+   try(PreparedStatement s=c.prepareStatement("SELECT COUNT(*) FROM rcon_purchases WHERE idem_key=?")) {
+    s.setBytes(1,(kind+"race").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    try(ResultSet r=s.executeQuery()){assertTrue(r.next());assertEquals(0,r.getInt(1));}
+   }
+   assertEquals(kind.equals("shop")?1000:900,val(c,"SELECT balance FROM accounts WHERE uuid='"+BUYER+"'"));
+   try(Statement s=c.createStatement()){s.executeUpdate("UPDATE "+table+" SET item='item' WHERE id='"+ID+"'");} c.commit();
    assertEquals("ERR NO_FUNDS",buy(c,req(kind,POOR,2,100,kind+"poor")));
    assertEquals("ERR SOLD_OUT",buy(c,req(kind,BUYER,11,1000,kind+"stock")));
    assertEquals("ERR PRICE_CHANGED",buy(c,req(kind,BUYER,2,19,kind+"price")));

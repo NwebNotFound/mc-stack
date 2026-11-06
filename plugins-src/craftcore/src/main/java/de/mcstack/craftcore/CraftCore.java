@@ -431,9 +431,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
         if(!ShopBuyDispatch.begin(request)) return;
         getServer().getScheduler().runTaskAsynchronously(this,()->{
           String response=null;
-          try { response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
-            ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item)); stack.setAmount(amount); return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
-          },getConfig().getInt("auction.fee-basis-points",500))); }
+          try {
+            // Read without holding purchase locks while waiting for the main thread.
+            RconItemPreparation.Snapshot snapshot=tx(c->RconItemPreparation.load(c,request));
+            RconPurchase.Remaining remaining=RconItemPreparation.prepare(snapshot,request.qty(),(item,amount)->
+              getServer().getScheduler().callSyncMethod(this,()->{
+                ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item));
+                stack.setAmount(amount);
+                return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
+              }).get(5,java.util.concurrent.TimeUnit.SECONDS));
+            response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),remaining,getConfig().getInt("auction.fee-basis-points",500)));
+          }
           catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);}
           finally { ShopBuyDispatch.finish(request, response); }
         });
