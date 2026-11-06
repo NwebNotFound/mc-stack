@@ -26,6 +26,11 @@ final class Challenges implements Listener, CommandExecutor {
   private final Map<UUID,BossBar> bars=new HashMap<>();
   private final Map<UUID,org.bukkit.scheduler.BukkitTask> barTasks=new HashMap<>();
   private ZoneId zone; private int hour;
+  /**
+   * Challenge progress runs here, one write at a time: off the server thread (a slow database or a held craftcore-write
+   * lock stalled the tick, #153) and still in order, so two updates of the same row never race.
+   */
+  private final java.util.concurrent.ExecutorService db=java.util.concurrent.Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"craftcore-challenges");t.setDaemon(true);return t;});
   record Def(String id,String type,String title,int goal,int cp,int points) {}
   record Row(String period,String id,String type,String title,int goal,int progress,int cp,int points,boolean complete) {}
   static final Set<String> TYPES=Set.of("KILL_SHEEP","KILL_ZOMBIE","WALK_NETHER","WALK_NORMAL","MINE_IRON","FISH","TRADE");
@@ -52,7 +57,21 @@ final class Challenges implements Listener, CommandExecutor {
   List<Row> rows(Connection c,UUID id,LocalDate date) throws Exception {
     ensure(c,id,date,false);ensure(c,id,date,true);List<Row> out=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT period_key,challenge_id,type,title,goal,progress,cp,points,completed FROM player_challenges WHERE uuid=? AND period_key IN (?,?) ORDER BY period_key,challenge_id")){q.setString(1,id.toString());q.setString(2,ChallengePeriods.period(date,false));q.setString(3,ChallengePeriods.period(date,true));try(ResultSet r=q.executeQuery()){while(r.next())out.add(new Row(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getInt(5),r.getInt(6),r.getInt(7),r.getInt(8),r.getBoolean(9)));}}return out;
   }
-  void progress(Player p,String type,int amount){if(!survival||amount<=0||p.getGameMode()!=GameMode.SURVIVAL)return;try{List<Row> changed=core.tx(c->{List<Row> result=new ArrayList<>(); for(Row r:rows(c,p.getUniqueId(),ChallengePeriods.day(Instant.now(),zone,hour)))if(!r.complete()&&r.type().equals(type)){int n=(int)Math.min((long)r.goal(),(long)r.progress()+amount);boolean done=n>=r.goal();ChallengeStore.advance(c,p.getUniqueId().toString(),r.period(),r.id(),n,done,r.cp(),r.points());result.add(new Row(r.period(),r.id(),r.type(),r.title(),r.goal(),n,r.cp(),r.points(),done));}return result;});for(Row r:changed){showBar(p,r);if(r.complete())p.sendMessage("[Craft] Aufgabe abgeschlossen: "+r.title()+" (+"+r.cp()+" CP, +"+r.points()+" Season-Punkte)");}}catch(Exception e){core.getLogger().warning("Challenge-Fortschritt: "+e.getMessage());}}
+  void progress(Player p,String type,int amount){
+    if(!survival||amount<=0||p.getGameMode()!=GameMode.SURVIVAL)return;
+    UUID id=p.getUniqueId(); LocalDate day=ChallengePeriods.day(Instant.now(),zone,hour);
+    try { db.execute(()->advance(id,day,type,amount)); }
+    catch(java.util.concurrent.RejectedExecutionException e){core.getLogger().warning("Challenge-Fortschritt: "+e.getMessage());}
+  }
+  /** Database part of {@link #progress}, on the challenge thread; the bar and the chat line go back to the server thread. */
+  private void advance(UUID id,LocalDate day,String type,int amount){
+    List<Row> changed;
+    try{changed=core.tx(c->{List<Row> result=new ArrayList<>(); for(Row r:rows(c,id,day))if(!r.complete()&&r.type().equals(type)){int n=(int)Math.min((long)r.goal(),(long)r.progress()+amount);boolean done=n>=r.goal();ChallengeStore.advance(c,id.toString(),r.period(),r.id(),n,done,r.cp(),r.points());result.add(new Row(r.period(),r.id(),r.type(),r.title(),r.goal(),n,r.cp(),r.points(),done));}return result;});}
+    catch(Exception e){core.getLogger().warning("Challenge-Fortschritt: "+e.getMessage());return;}
+    if(changed.isEmpty())return;
+    try{Bukkit.getScheduler().runTask(core,()->{Player p=Bukkit.getPlayer(id);if(p==null)return;for(Row r:changed){showBar(p,r);if(r.complete())p.sendMessage("[Craft] Aufgabe abgeschlossen: "+r.title()+" (+"+r.cp()+" CP, +"+r.points()+" Season-Punkte)");}});}
+    catch(RuntimeException disabled){/* plugin is disabling: the progress is saved, only the display is skipped */}
+  }
   void showBar(Player p,Row r){UUID id=p.getUniqueId();BossBar bar=bars.computeIfAbsent(id,x->Bukkit.createBossBar("",BarColor.GREEN,BarStyle.SOLID));bar.setTitle(r.title()+" - "+r.progress()+" / "+r.goal());bar.setProgress(Math.min(1.0,(double)r.progress()/r.goal()));bar.addPlayer(p);org.bukkit.scheduler.BukkitTask old=barTasks.remove(id);if(old!=null)old.cancel();barTasks.put(id,Bukkit.getScheduler().runTaskLater(core,()->{bar.removeAll();bars.remove(id);barTasks.remove(id);},100L));}
   public boolean onCommand(CommandSender sender,Command cmd,String label,String[] args){if(!(sender instanceof Player p)){sender.sendMessage("[Craft] Nur im Spiel verfuegbar.");return true;}try{List<Row> rows=core.tx(c->rows(c,p.getUniqueId(),ChallengePeriods.day(Instant.now(),zone,hour)));long points=core.tx(c->{String v=core.one(c,"SELECT points FROM player_season_points WHERE uuid=?",p.getUniqueId().toString());return v==null?0L:Long.parseLong(v);});Holder h=new Holder();Inventory inv=Bukkit.createInventory(h,27,Component.text("Challenges",NamedTextColor.GOLD));h.inventory=inv;int daily=0,weekly=0;for(Row r:rows){int slot=r.period().startsWith("D:")?10+daily++:19+weekly++;ItemStack item=new ItemStack(r.complete()?Material.LIME_DYE:Material.PAPER);ItemMeta m=item.getItemMeta();m.displayName(Component.text((r.period().startsWith("D:")?"Taeglich: ":"Woechentlich: ")+r.title(),NamedTextColor.YELLOW));m.lore(List.of(Component.text("Fortschritt: "+r.progress()+" / "+r.goal(),NamedTextColor.GRAY),Component.text("Belohnung: "+r.cp()+" CP + "+r.points()+" Season-Punkte",NamedTextColor.GREEN),Component.text(r.complete()?"Abgeschlossen":"Offen",NamedTextColor.AQUA)));item.setItemMeta(m);inv.setItem(slot,item);}ItemStack score=new ItemStack(Material.NETHER_STAR);ItemMeta meta=score.getItemMeta();meta.displayName(Component.text("Season-Punkte: "+points,NamedTextColor.GOLD));meta.lore(List.of(Component.text("Reset: "+String.format("%02d:00",hour)+", woechentlich montags ("+zone+")",NamedTextColor.GRAY)));score.setItemMeta(meta);inv.setItem(4,score);p.openInventory(inv);}catch(Exception e){core.getLogger().warning("Challenges GUI: "+e.getMessage());p.sendMessage("[Craft] Challenges derzeit nicht verfuegbar.");}return true;}
   @EventHandler public void click(InventoryClickEvent e){if(e.getView().getTopInventory().getHolder() instanceof Holder)e.setCancelled(true);}
