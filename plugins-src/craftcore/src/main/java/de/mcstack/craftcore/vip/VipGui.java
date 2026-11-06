@@ -77,8 +77,6 @@ public final class VipGui implements Listener {
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
     /** Owners whose /vw create is running, so a macro cannot fire a second one in parallel. */
     private final Set<UUID> creating = ConcurrentHashMap.newKeySet();
-    /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
-    private final Map<UUID, Integer> generation = queue.generation;
     private final Map<UUID, String> sentSlot = queue.sentSlot;
     private final Map<UUID, Long> sentAt = queue.sentAt;
 
@@ -253,7 +251,7 @@ public final class VipGui implements Listener {
                 case CONNECT -> {
                     if (d.staleRow()) store.status(id, "running", d.slot());
                     message(player, "Die Welt laeuft schon, du wirst verbunden ...");
-                    retryConnect(player, d.slot(), generation.getOrDefault(player.getUniqueId(), 0));
+                    retryConnect(player, d.slot(), queue.generation(player.getUniqueId()));
                 }
                 case WAIT -> {
                     if (d.staleRow()) store.status(id, "starting", d.slot());
@@ -277,7 +275,7 @@ public final class VipGui implements Listener {
             switch (decision.kind()) {
                 case RUNNING -> {
                     if (!"running".equals(entry.status()) || !decision.slot().equals(entry.slot())) store.status(id, "running", decision.slot());
-                    retryConnect(player, decision.slot(), generation.getOrDefault(player.getUniqueId(), 0));
+                    retryConnect(player, decision.slot(), queue.generation(player.getUniqueId()));
                 }
                 case STARTING -> {
                     if (!decision.slot().equals(entry.slot())) store.status(id, "starting", decision.slot());
@@ -440,13 +438,13 @@ public final class VipGui implements Listener {
 
     private void waitFor(Player player, VipStore.Entry entry) {
         UUID id = player.getUniqueId();
-        int gen = generation.getOrDefault(id, 0);
+        int gen = queue.generation(id);
         waiting.put(id, entry.id());
         bars.wait(player, entry.id());
         message(player, "Deine Welt startet ... du wirst automatisch verbunden.");
         CompletableFuture<VipStartCoordinator.Outcome> future = coordinator.join(entry.id(), id);
         future.whenComplete((outcome, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-            if (generation.getOrDefault(id, 0) != gen) return; // the player chose another server meanwhile
+            if (!queue.current(id, gen)) return; // the player chose another server meanwhile, or left
             waiting.remove(id);
             bars.clear(id);
             if (outcome == null || !outcome.ok()) {
@@ -492,7 +490,7 @@ public final class VipGui implements Listener {
     }
 
     private boolean stillHere(Player player, UUID id, int gen) {
-        return player.isOnline() && !transferred.contains(id) && generation.getOrDefault(id, 0) == gen;
+        return player.isOnline() && !transferred.contains(id) && queue.current(id, gen);
     }
 
     // ---------------------------------------------------------------- clicks
@@ -595,8 +593,7 @@ public final class VipGui implements Listener {
         String world = waiting.remove(id);
         if (world != null) coordinator.leave(world, id);
         bars.clear(id);
-        sentSlot.remove(id);
-        sentAt.remove(id);
+        queue.forget(id);
     }
 
     @EventHandler

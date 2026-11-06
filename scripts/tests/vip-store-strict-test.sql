@@ -32,4 +32,7 @@ END//
 DELIMITER ;
 CALL vip_store_strict_check();
 DROP PROCEDURE vip_store_strict_check;
+-- MARK_DELETED frees the name for a new world of the same owner
+UPDATE vip_worlds SET status='deleted',slot=NULL,name=CONCAT('#',LEFT(REPLACE(id,'-',''),23)) WHERE id='00000000-0000-0000-0000-000000000002' AND status IN ('stopped','error');
+INSERT INTO vip_worlds (id,owner,name,type,status,created_at) SELECT '00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','renamed','normal','stopped',1793500000000 FROM vip_worlds WHERE owner='00000000-0000-0000-0000-000000000001' AND status<>'deleted' HAVING COUNT(*)<1;
 SELECT 'OK';
