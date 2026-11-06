@@ -21,7 +21,11 @@ public final class VipStore {
     static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=? AND status<>'deleted'";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
     static final String INSERT_RUN = "INSERT INTO vip_world_runs (world_id,slot,started_at) VALUES (?,?,?)";
-    static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL WHERE id=? AND status IN ('stopped','error')";
+    /**
+     * The deleted row gives up its name ('#' plus 23 hex digits of the id, 24 characters, never a valid world name),
+     * so UNIQUE(owner,name) lets the owner reuse the name for a new world.
+     */
+    static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL,name=CONCAT('#',LEFT(REPLACE(id,'-',''),23)) WHERE id=? AND status IN ('stopped','error')";
     static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=? AND status<>'deleted'";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 

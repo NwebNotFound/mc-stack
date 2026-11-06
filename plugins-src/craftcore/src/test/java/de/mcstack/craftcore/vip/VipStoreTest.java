@@ -165,4 +165,25 @@ class VipStoreTest {
             assertFalse(store.create(owner,"three","normal",0));
         }
     }
+
+    @Test void aDeletedWorldGivesItsNameBack() throws Exception {
+        // Issue #158: UNIQUE(owner,name) kept "Insel" taken by the deleted row.
+        try (Connection c=database()) {
+            try (Statement s=c.createStatement()) { s.execute("ALTER TABLE vip_worlds ADD CONSTRAINT owner_name UNIQUE (owner,name)"); }
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID();
+            store.create(owner,"Insel","normal");
+            String first=store.list(owner).get(0).id();
+            assertTrue(store.markDeleted(first));
+            assertTrue(store.create(owner,"Insel","flat",1), "the name is free again");
+            store.create(owner,"Berg","normal");
+            assertTrue(store.markDeleted(store.find(owner,"Insel").orElseThrow().id()));
+            assertTrue(store.markDeleted(store.find(owner,"Berg").orElseThrow().id()), "several deleted rows never collide");
+            try (Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT name FROM vip_worlds WHERE id='"+first+"'")) {
+                assertTrue(r.next()); String name=r.getString(1);
+                assertEquals(24, name.length()); assertFalse(VipNames.validate(name), "a placeholder never clashes with a real name");
+            }
+        }
+    }
 }

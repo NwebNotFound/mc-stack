@@ -20,3 +20,8 @@ GRANT INSERT, DELETE ON craftcore.vip_world_members TO 'craft_vip'@'%';
 GRANT UPDATE (role) ON craftcore.vip_world_members TO 'craft_vip'@'%';
 GRANT SELECT, INSERT, DELETE ON craftcore.vip_world_addons TO 'craft_vip'@'%';
 GRANT UPDATE (name, status, slot, last_started_at) ON craftcore.vip_worlds TO 'craft_vip'@'%';
+
+-- Geloeschte Welten geben ihren Namen frei (VipStore.MARK_DELETED), damit UNIQUE(owner,name) die
+-- Wiederverwendung erlaubt. Bereits geloeschte Zeilen bekommen denselben Platzhalter; idempotent.
+UPDATE craftcore.vip_worlds SET name=CONCAT('#',LEFT(REPLACE(id,'-',''),23))
+  WHERE status='deleted' AND name NOT LIKE '#%';
