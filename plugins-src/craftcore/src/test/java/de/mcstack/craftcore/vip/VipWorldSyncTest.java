@@ -121,10 +121,40 @@ class VipWorldSyncTest {
         assertTrue(limitLookups <= 4, "rank lookups are cached per owner, not repeated every round: " + limitLookups);
     }
 
-    @Test void neverPublishesMoreThanThirtyWorlds() throws Exception {
-        for (int i = 0; i < 40; i++) exec("INSERT INTO vip_worlds VALUES ('bbbbbbbb-bbbb-4ccc-8ddd-" + String.format("%012d", i) + "','" + OWNER + "','W" + i + "','normal','stopped',NULL," + (1000 + i) + ",NULL,'private',NULL,NULL)");
+    @Test void inGameChangeRightAfterASyncIsPublishedNextRoundNotAfterAMinute() throws Exception {
+        VipWorldSync sync = sync();
+        VipStore store = new VipStore(() -> DriverManager.getConnection(url));
+        assertTrue(sync.maybeSend(1_000L));
+        store.visibility(W1, "private");                 // the /vw path in game writes through VipStore
+        store.addMember(W2, UUID.fromString(FRIEND), "member");
+        assertTrue(sync.maybeSend(6_000L), "next 5 s poll round, no minute wait");
+        JsonArray worlds = JsonParser.parseString(posts.get(1)[1]).getAsJsonObject().getAsJsonArray("vip_worlds");
+        assertEquals("private", worlds.get(0).getAsJsonObject().get("visibility").getAsString());
+        assertEquals(1, worlds.get(1).getAsJsonObject().getAsJsonArray("invites").size());
+    }
+
+    @Test void publishesAllWorldsAboveThirtyWithoutTruncation() throws Exception {
+        for (int i = 0; i < 29; i++) exec("INSERT INTO vip_worlds VALUES ('bbbbbbbb-bbbb-4ccc-8ddd-" + String.format("%012d", i) + "','" + OWNER + "','W" + i + "','normal','stopped',NULL," + (1000 + i) + ",NULL,'private',NULL,NULL)");
         assertTrue(sync().maybeSend(1_000L));
-        assertEquals(30, JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds").size());
+        JsonArray worlds = JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds");
+        assertEquals(31, worlds.size(), "2 fixtures + 29: every live world, the newest included");
+        assertEquals("W28", worlds.get(30).getAsJsonObject().get("name").getAsString());
+    }
+
+    @Test void aboveTheContractLimitNothingIsSentInsteadOfACutList() throws Exception {
+        try (Connection c = DriverManager.getConnection(url); PreparedStatement p = c.prepareStatement("INSERT INTO vip_worlds VALUES (?,?,?,'normal','stopped',NULL,?,NULL,'private',NULL,NULL)")) {
+            for (int i = 0; i < VipStore.SYNC_MAX_WORLDS - 2; i++) {
+                p.setString(1, "cccccccc-bbbb-4ccc-8ddd-" + String.format("%012d", i)); p.setString(2, OWNER); p.setString(3, "X" + i); p.setLong(4, 5000 + i); p.addBatch();
+            }
+            p.executeBatch();
+        }
+        VipWorldSync sync = sync();
+        assertTrue(sync.maybeSend(1_000L), "exactly the limit (2 + 498) is still sent");
+        assertEquals(VipStore.SYNC_MAX_WORLDS, JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds").size());
+        exec("INSERT INTO vip_worlds VALUES ('dddddddd-bbbb-4ccc-8ddd-000000000001','" + OWNER + "','Zuviel','normal','stopped',NULL,99999,NULL,'private',NULL,NULL)");
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> sync.maybeSend(6_000L));
+        assertTrue(e.getMessage().contains("sync skipped"));
+        assertEquals(1, posts.size(), "no truncated replace is posted");
     }
 
     @Test void brokenStoredSettingsFallBackToDefaults() throws Exception {

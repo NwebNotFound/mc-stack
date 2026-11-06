@@ -16,8 +16,9 @@ public final class VipStore {
     /** Everything the website panel needs, read in four queries regardless of the number of worlds. */
     public record SyncSnapshot(List<SyncRow> worlds, List<SyncMember> members, Map<String, List<String>> addons,
                                Map<String, Integer> online) {}
-    /** Website limit: at most 30 worlds per sync; oldest first so existing cards stay stable. */
-    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at,w.settings FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT 30";
+    /** Contract limit per sync (docs/vip-api.md, website cleanWorlds). One more row is read to detect overflow. */
+    public static final int SYNC_MAX_WORLDS = 500;
+    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at,w.settings FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT " + (SYNC_MAX_WORLDS + 1);
     static final String SYNC_MEMBERS = "SELECT m.world_id,m.player,p.name,m.role,m.added_at FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=m.player WHERE w.status<>'deleted' ORDER BY m.world_id,m.added_at";
     static final String SYNC_ADDONS = "SELECT a.world_id,a.addon FROM vip_world_addons a JOIN vip_worlds w ON w.id=a.world_id WHERE w.status<>'deleted' ORDER BY a.world_id,a.addon";
     static final String SYNC_ONLINE = "SELECT server,COUNT(*) FROM player_presence WHERE online=TRUE GROUP BY server";

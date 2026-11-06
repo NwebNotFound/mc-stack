@@ -16,7 +16,8 @@ import java.util.function.ToIntFunction;
  * from this list.
  * <p>
  * Runs on the lobby inside the queue poller (async, every 5 s, only with VIP_WEB_QUEUE=1). Each
- * round reads the worlds in four bounded queries and posts only when the list differs from the
+ * round reads the worlds in four queries (at most {@link VipStore#SYNC_MAX_WORLDS} worlds, never
+ * truncated: above that limit the round fails loudly) and posts only when the list differs from the
  * last accepted one, so create, rename, start/stop, settings, members and delete show up within
  * one round, whether they came from the web queue, /vw in game or another server. Every
  * {@link #RESYNC_MILLIS} it posts anyway, to heal a lost or reset website copy. The body is a
@@ -58,6 +59,10 @@ public final class VipWorldSync {
 
     JsonArray worlds(long now) throws Exception {
         VipStore.SyncSnapshot snap = store.syncSnapshot();
+        // The body is a full replace: a cut list would delete the missing worlds on the website.
+        // Above the contract limit nothing is sent; the website keeps its last complete list.
+        if (snap.worlds().size() > VipStore.SYNC_MAX_WORLDS)
+            throw new IllegalStateException("more than " + VipStore.SYNC_MAX_WORLDS + " live VIP worlds, sync skipped");
         Map<String, JsonArray> invites = new HashMap<>();
         for (VipStore.SyncMember m : snap.members()) {
             JsonObject i = new JsonObject();
