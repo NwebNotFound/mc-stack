@@ -408,6 +408,38 @@ export async function handleOp(rawAction: unknown, rawParams: unknown, deps: Act
     };
   }
 
+  // T2 serialisation (issue #144): one T2 action at a time, and none while a
+  // backup / dev-reset holds the maintenance lock. Refused BEFORE the cooldown
+  // starts, so a busy answer can simply be retried later.
+  if (action.tier === "T2") {
+    const holder = deps.state.t2Busy();
+    const maintenance = holder === null ? maintenanceActive(deps) : null;
+    if (holder !== null || maintenance !== null || !deps.state.tryAcquireT2(actionName)) {
+      const code = holder !== null ? "t2_busy" : "maintenance_in_progress";
+      const message =
+        holder !== null
+          ? `another T2 action (${holder}) is running; retry when it has finished`
+          : `a backup or dev-reset is running (${deps.allow.paths.backups}/${MAINTENANCE_MARKER}); retry when it has finished`;
+      const auditId = deps.audit.append({
+        action: actionName,
+        tier: action.tier,
+        impl: action.impl,
+        decision: "deny",
+        code,
+        params: validation.params,
+      });
+      return {
+        ok: false,
+        code,
+        message,
+        result: maintenance ?? undefined,
+        tier: action.tier,
+        impl: action.impl,
+        audit_id: auditId,
+      };
+    }
+  }
+
   // Gates passed: the cooldown starts now, even if the action itself fails, so a
   // broken action cannot be hammered.
   deps.state.recordRun(actionName, started);
@@ -423,6 +455,8 @@ export async function handleOp(rawAction: unknown, rawParams: unknown, deps: Act
       code: isDocker ? (exc as DockerError).code : "internal_error",
       message: redactText(err.message ?? "unknown error").slice(0, 500),
     };
+  } finally {
+    if (action.tier === "T2") deps.state.releaseT2();
   }
 
   const auditId = deps.audit.append({
@@ -1080,6 +1114,67 @@ async function waitForHealthy(deps: ActionDeps, service: string): Promise<{ heal
 }
 
 /**
+ * Maintenance marker (issue #144). backup.ps1 / dev-reset.ps1 take an exclusive
+ * Windows file lock on `backups/.maintenance.lock`; that lock is not visible to
+ * a Linux process through the Docker Desktop bind mount, so while they hold it
+ * they also write `backups/.maintenance.active` and remove it when they release
+ * the lock. A marker older than OPS_MAINTENANCE_STALE_SECONDS (a killed script)
+ * is ignored.
+ */
+export const MAINTENANCE_MARKER = ".maintenance.active";
+
+export function maintenanceActive(deps: Pick<ActionDeps, "allow" | "cfg" | "now">): Record<string, unknown> | null {
+  const path = join(deps.allow.paths.backups, MAINTENANCE_MARKER);
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+  const ageSeconds = Math.max(0, Math.round((deps.now() - mtimeMs) / 1000));
+  const staleAfter = deps.cfg.maintenanceStaleSeconds ?? 14400;
+  if (ageSeconds > staleAfter) {
+    logger.warn("ignoring a stale maintenance marker", { path, age_seconds: ageSeconds });
+    return null;
+  }
+  let info: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) info = parsed as Record<string, unknown>;
+  } catch {
+    // content is informational only
+  }
+  return {
+    maintenance: typeof info.name === "string" ? info.name.slice(0, 40) : "unknown",
+    started: typeof info.started === "string" ? info.started.slice(0, 40) : null,
+    age_seconds: ageSeconds,
+  };
+}
+
+/**
+ * Called right before a T2 step touches a game server (after the delay, which
+ * can be long): wait for a backup that started in the meantime to finish,
+ * bounded by OPS_MAINTENANCE_WAIT_SECONDS, then refuse.
+ */
+async function waitForMaintenanceIdle(deps: ActionDeps): Promise<void> {
+  const waitMs = (deps.cfg.maintenanceWaitSeconds ?? 1800) * 1000;
+  const pollMs = (deps.cfg.maintenancePollSeconds ?? 15) * 1000;
+  const deadline = deps.now() + waitMs;
+  for (;;) {
+    const active = maintenanceActive(deps);
+    if (!active) return;
+    if (deps.now() >= deadline) {
+      throw new DockerError(
+        "maintenance_in_progress",
+        `a backup or dev-reset is still running after ${deps.cfg.maintenanceWaitSeconds ?? 1800}s; nothing was restarted`,
+      );
+    }
+    logger.info("waiting for maintenance to finish before a T2 step", active);
+    await deps.sleep(pollMs);
+  }
+}
+
+/**
  * Restart one compose service by its exact container NAME and return the name.
  * The socket filter allowlists names for `/containers/<name>/restart`, so a
  * restart by id (a 12-hex id is not a name) would be a 403.
@@ -1102,6 +1197,7 @@ async function opRestartGame(params: Record<string, unknown>, deps: ActionDeps):
   }
   const announcement = announcementStatus(service, delay);
   await deps.sleep(delay * 1000);
+  await waitForMaintenanceIdle(deps);
   await deps.docker.restartByName(name, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
   const health = await waitForHealthy(deps, service);
   if (!health.healthy) {
@@ -1168,6 +1264,11 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
   }
 
+  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
+  await deps.sleep(delay * 1000);
+
+  // The previous jars and the deploy record are captured only now, after the
+  // lead time, so they describe what is really installed when the deploy starts.
   const rollbackDir = helperRollbackDir(deps.cfg);
   mkdirSync(rollbackDir, { recursive: true, mode: 0o700 });
   const previous: Record<string, Record<string, unknown>> = {};
@@ -1191,12 +1292,20 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     previous,
   });
 
-  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
-  await deps.sleep(delay * 1000);
-
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
     if (index > 0) await deps.sleep(delay * 1000);
+    try {
+      await waitForMaintenanceIdle(deps);
+    } catch (exc) {
+      const rolled = steps.length > 0 ? await rollbackServices(deps, previous, steps) : [];
+      return {
+        ok: false,
+        code: "maintenance_in_progress",
+        message: redactText((exc as Error).message).slice(0, 300),
+        result: { service, steps, rollback: rolled },
+      };
+    }
     const jar = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
     copyFileSync(artifactPath, jar);
     const written = sha256File(jar);
@@ -1302,6 +1411,7 @@ async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDep
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
     if (index > 0) await deps.sleep(delay * 1000);
+    await waitForMaintenanceIdle(deps);
     // Re-verify right before the copy (the delay above can be long).
     const check = verifiedRollbackJar(deps, previous[service]);
     if (!check.ok) {

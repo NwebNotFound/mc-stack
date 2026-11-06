@@ -65,6 +65,15 @@ export interface OpsConfig {
   filterToken: string;
   /** Private Docker CLI config dir (tmpfs) that carries the filter token. */
   dockerConfigDir: string;
+  /**
+   * A `backups/.maintenance.active` marker (written by backup.ps1/dev-reset.ps1
+   * while they hold the maintenance lock) older than this is treated as stale.
+   */
+  maintenanceStaleSeconds: number;
+  /** How long a T2 action waits for a running backup before a restart. */
+  maintenanceWaitSeconds: number;
+  /** Poll interval while waiting for it. */
+  maintenancePollSeconds: number;
   /** Candidates for running the repo's PowerShell backup script (first hit wins). */
   backupInterpreters: string[];
 }
@@ -127,6 +136,9 @@ export function loadConfig(): OpsConfig {
     buildTimeoutSeconds: num("OPS_BUILD_TIMEOUT_SECONDS", 1800, 60, 7200),
     filterToken: str("OPS_FILTER_TOKEN"),
     dockerConfigDir: str("OPS_DOCKER_CONFIG_DIR", "/tmp/ops-docker-config"),
+    maintenanceStaleSeconds: num("OPS_MAINTENANCE_STALE_SECONDS", 14400, 600, 86400),
+    maintenanceWaitSeconds: num("OPS_MAINTENANCE_WAIT_SECONDS", 1800, 0, 7200),
+    maintenancePollSeconds: num("OPS_MAINTENANCE_POLL_SECONDS", 15, 1, 300),
     backupInterpreters: str("OPS_BACKUP_INTERPRETERS", "pwsh,powershell")
       .split(",")
       .map((v) => v.trim())
