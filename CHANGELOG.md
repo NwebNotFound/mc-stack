@@ -3,6 +3,18 @@
 ## Für Spieler
 
 <!-- Eintrag: `- **Kurztitel** – ein Satz als Unterzeile.` unter einer Überschrift `### TT.MM.JJJJ`, neueste zuerst. Optional Englisch am Zeilenende als HTML-Kommentar mit dem Präfix "en:" und derselben Form (Titel – Unterzeile), siehe die Einträge unten. -->
+### 06.11.2026
+
+- **Neue Startseite** – Die Hauptseite stellt Nils und seine Projekte vor, mit Steckbrief, Projektkarten und den letzten Neuigkeiten. <!-- en: **New home page** – The main page introduces Nils and his projects, with a profile card, project cards and the latest news. -->
+- **VIP-Welten über die Website** – Auf der Website legst du deine VIP-Welten an, startest, benennst und stellst sie ein und lädst Freunde ein; Erfolg meldet die Seite erst, wenn der Server die Aktion bestätigt hat. <!-- en: **VIP worlds from the website** – On the website you create, start, rename and configure your VIP worlds and invite friends; the page only reports success once the server has confirmed the action. -->
+- **Schnellere Website** – Seiten und Bilder werden besser zwischengespeichert, deshalb laden sie beim nächsten Besuch deutlich schneller. <!-- en: **Faster website** – Pages and images are cached better, so they load much faster on your next visit. -->
+- **Eine Navigation für alles** – Hauptseite und Server-Seite teilen sich jetzt dieselbe Navigationsleiste, auch auf dem Handy. <!-- en: **One navigation for everything** – The main site and the server site now share the same navigation bar, on phones too. -->
+- **Backup ohne Unterbrechung** – Das tägliche Backup um 00:00 läuft jetzt im laufenden Betrieb: Der Server wird nicht mehr gestoppt und du fliegst nicht raus. <!-- en: **Backup without downtime** – The daily backup at 00:00 now runs while the server is up: it is no longer stopped and you are not kicked. -->
+
+### 05.11.2026
+
+- **Portale und VIP-Welten wieder zuverlässig** – Das Wechseln zwischen den Servern über Portale und NPCs funktioniert wieder, und Starten und Betreten von VIP-Welten wurde repariert; wenn etwas nicht klappt, bekommst du eine Meldung im Chat. <!-- en: **Portals and VIP worlds work again** – Switching between servers through portals and NPCs works again, starting and entering VIP worlds was repaired, and you get a chat message if something does not work. -->
+
 ### 01.11.2026
 
 - **Echte Spielerköpfe auf der Website** – Auf der Website siehst du jetzt überall echte Spielerköpfe: in der Spielerliste, im Profil und oben in deiner Konto-Anzeige. <!-- en: **Real player heads on the website** – On the website you now see real player heads everywhere: in the player list, in the profile and in your account display at the top. -->
