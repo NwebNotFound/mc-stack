@@ -13,13 +13,16 @@ import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   statfsSync,
   writeFileSync,
 } from "node:fs";
+import { join, sep } from "node:path";
 import type { ActionSpec, Allowlist, Impl, ServiceList } from "./allowlist.js";
 import { actionOf } from "./allowlist.js";
 import type { AuditLog } from "./audit.js";
@@ -55,6 +58,59 @@ const SHA256_RE = /^[a-f0-9]{64}$/;
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * Helper-only locations (issue #143). The artifact volume is shared with
+ * plugin-builder, which runs repo build/test code and is the untrusted
+ * component, so nothing the helper later TRUSTS may live there:
+ *  - deploy/build state  -> <dataDir>/state     (./data/ops-helper, helper only)
+ *  - verified build jars -> <dataDir>/jars
+ *  - rollback jars       -> <dataDir>/rollback
+ */
+export function helperStateDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "state");
+}
+export function helperArtifactsDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "jars");
+}
+export function helperRollbackDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "rollback");
+}
+
+/**
+ * The real path of `path` if it is a regular file whose realpath lies strictly
+ * under the realpath of `root` (symlinks are resolved, so a link pointing out of
+ * the directory is refused); null otherwise.
+ */
+export function confinedFile(path: string, root: string): string | null {
+  if (typeof path !== "string" || path === "" || !path.startsWith("/")) return null;
+  try {
+    const realRoot = realpathSync(root);
+    const real = realpathSync(path);
+    if (!real.startsWith(realRoot + sep)) return null;
+    if (!lstatSync(real).isFile()) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+type JarCheck = { ok: true; path: string; sha256: string } | { ok: false; reason: string };
+
+/**
+ * A rollback jar is only restored when it lies in the helper-only rollback
+ * directory AND still has the sha256 recorded when it was saved.
+ */
+function verifiedRollbackJar(deps: ActionDeps, prev: Record<string, unknown> | undefined): JarCheck {
+  const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
+  const sha = prev && typeof prev.sha256 === "string" ? prev.sha256 : null;
+  if (!kept || !sha) return { ok: false, reason: "no previous jar was recorded" };
+  if (!SHA256_RE.test(sha)) return { ok: false, reason: "the recorded sha256 is malformed" };
+  const real = confinedFile(kept, helperRollbackDir(deps.cfg));
+  if (!real) return { ok: false, reason: "the recorded jar is missing or outside the helper's rollback directory" };
+  if (sha256File(real) !== sha) return { ok: false, reason: "the rollback jar no longer matches its recorded sha256" };
+  return { ok: true, path: real, sha256: sha };
 }
 
 function redactCap(text: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -729,9 +785,20 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       result: { build_id: job.id, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
+  // The path comes from the (untrusted) builder: it must resolve to a regular
+  // file under <artifacts>/artifacts/, never to anything else on the helper.
+  const confined = confinedFile(artifactPath, join(deps.cfg.artifactsDir, "artifacts"));
+  if (!confined) {
+    return {
+      ok: false,
+      code: "artifact_path_not_allowed",
+      message: "the builder reported an artifact path outside the artifact directory",
+      result: { build_id: job.id, ref: job.ref },
+    };
+  }
   // Re-hash in the helper's own process: the artifact volume is shared, so the
   // hash the builder recorded is not trusted on its own.
-  if (sha256File(artifactPath) !== sha) {
+  if (sha256File(confined) !== sha) {
     return {
       ok: false,
       code: "artifact_hash_mismatch",
@@ -739,19 +806,34 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       result: { build_id: job.id, ref: job.ref, artifact, ...dirty },
     };
   }
-  const size = statSync(artifactPath).size;
+  // Keep a helper-only copy: the deploy installs THIS file, which the builder
+  // cannot touch, and re-checks its hash again.
+  const keptDir = helperArtifactsDir(deps.cfg);
+  mkdirSync(keptDir, { recursive: true, mode: 0o700 });
+  const keptPath = join(keptDir, `craftcore-${sha.slice(0, 12)}.jar`);
+  copyFileSync(confined, keptPath);
+  if (sha256File(keptPath) !== sha) {
+    return {
+      ok: false,
+      code: "artifact_hash_mismatch",
+      message: "the artifact changed while it was being copied out of the artifact volume",
+      result: { build_id: job.id, ref: job.ref },
+    };
+  }
+  const size = statSync(keptPath).size;
   const record = {
     build_id: job.id,
     sha256: sha,
     size_bytes: size,
-    artifact_path: artifactPath,
+    artifact_path: keptPath,
+    builder_artifact_path: confined,
     source: spec.source,
     ref: job.ref,
     tests,
     ...dirty,
     at: new Date(deps.now()).toISOString(),
   };
-  writeJson(`${deps.cfg.artifactsDir}/state/last-build.json`, record);
+  writeJson(join(helperStateDir(deps.cfg), "last-build.json"), record);
 
   return {
     ok: true,
@@ -1061,7 +1143,7 @@ function writeJson(path: string, value: unknown): void {
 async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const sha = params.artifact_sha256 as string;
   const delay = params.delay_seconds as number;
-  const last = readJson(`${deps.cfg.artifactsDir}/state/last-build.json`);
+  const last = readJson(join(helperStateDir(deps.cfg), "last-build.json"));
   if (!last || typeof last.sha256 !== "string") {
     return { ok: false, code: "no_build_artifact", message: "no ops_build_plugin artifact recorded yet" };
   }
@@ -1073,9 +1155,12 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
       result: { expected: last.sha256 },
     };
   }
-  const artifactPath = typeof last.artifact_path === "string" ? last.artifact_path : "";
-  if (!artifactPath || !existsSync(artifactPath)) {
+  const artifactPath = confinedFile(typeof last.artifact_path === "string" ? last.artifact_path : "", helperArtifactsDir(deps.cfg));
+  if (!artifactPath) {
     return { ok: false, code: "artifact_missing", message: "the recorded artifact file is gone; rebuild first" };
+  }
+  if (sha256File(artifactPath) !== sha) {
+    return { ok: false, code: "artifact_hash_mismatch", message: "the kept artifact no longer matches artifact_sha256; rebuild first" };
   }
 
   const backup = ensureRecentBackup(deps);
@@ -1083,20 +1168,23 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
   }
 
-  const rollbackDir = `${deps.cfg.artifactsDir}/rollback`;
-  mkdirSync(rollbackDir, { recursive: true, mode: 0o777 });
+  const rollbackDir = helperRollbackDir(deps.cfg);
+  mkdirSync(rollbackDir, { recursive: true, mode: 0o700 });
   const previous: Record<string, Record<string, unknown>> = {};
   for (const service of deps.allow.deploy.order) {
     const jar = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
     const oldSha = existsSync(jar) ? sha256File(jar) : null;
     let kept: string | null = null;
     if (oldSha) {
-      kept = `${rollbackDir}/${service}-craftcore-${oldSha.slice(0, 12)}.jar`;
+      kept = join(rollbackDir, `${service}-craftcore-${oldSha.slice(0, 12)}.jar`);
       copyFileSync(jar, kept);
+      if (sha256File(kept) !== oldSha) {
+        return { ok: false, code: "rollback_copy_failed", message: `could not keep a verified copy of the current ${service} jar` };
+      }
     }
     previous[service] = { sha256: oldSha, jar: kept };
   }
-  writeJson(`${deps.cfg.artifactsDir}/state/last-deploy.json`, {
+  writeJson(join(helperStateDir(deps.cfg), "last-deploy.json"), {
     at: new Date(deps.now()).toISOString(),
     artifact_sha256: sha,
     artifact_path: artifactPath,
@@ -1166,14 +1254,15 @@ async function rollbackServices(
 ): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
   for (const service of [...deps.allow.deploy.order].reverse()) {
-    const prev = previous[service];
-    const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
-    if (!kept || !existsSync(kept)) {
-      out.push({ service, restored: false, reason: "no previous jar was recorded" });
+    const check = verifiedRollbackJar(deps, previous[service]);
+    if (!check.ok) {
+      out.push({ service, restored: false, reason: check.reason });
       continue;
     }
     try {
-      copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
+      const target = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
+      copyFileSync(check.path, target);
+      if (sha256File(target) !== check.sha256) throw new Error("the restored jar does not match its recorded sha256");
       await restartServiceByName(deps, service);
       const health = await waitForHealthy(deps, service);
       out.push({ service, restored: true, healthy: health.healthy, state: health.state });
@@ -1187,11 +1276,23 @@ async function rollbackServices(
 
 async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const delay = params.delay_seconds as number;
-  const record = readJson(`${deps.cfg.artifactsDir}/state/last-deploy.json`);
+  const record = readJson(join(helperStateDir(deps.cfg), "last-deploy.json"));
   if (!record || typeof record.previous !== "object" || record.previous === null) {
     return { ok: false, code: "no_rollback_available", message: "no recorded deploy to roll back" };
   }
   const previous = record.previous as Record<string, Record<string, unknown>>;
+  // Verify every jar BEFORE anything is touched: a rollback that would restore
+  // a tampered or unverifiable jar is refused as a whole.
+  const checks = new Map<string, JarCheck>();
+  for (const service of deps.allow.deploy.order) checks.set(service, verifiedRollbackJar(deps, previous[service]));
+  const bad = [...checks.entries()].filter(([, c]) => !c.ok && c.reason !== "no previous jar was recorded");
+  if (bad.length > 0) {
+    return {
+      ok: false,
+      code: "rollback_jar_untrusted",
+      message: `refusing to roll back: ${bad.map(([svc, c]) => `${svc}: ${(c as { reason: string }).reason}`).join("; ")}`,
+    };
+  }
   const backup = ensureRecentBackup(deps);
   if (!backup.ok) {
     return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
@@ -1201,24 +1302,33 @@ async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDep
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
     if (index > 0) await deps.sleep(delay * 1000);
-    const prev = previous[service];
-    const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
-    if (!kept || !existsSync(kept)) {
-      steps.push({ service, restored: false, reason: "no previous jar was recorded" });
+    // Re-verify right before the copy (the delay above can be long).
+    const check = verifiedRollbackJar(deps, previous[service]);
+    if (!check.ok) {
+      steps.push({ service, restored: false, reason: check.reason });
       continue;
     }
-    copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
+    const target = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
+    copyFileSync(check.path, target);
+    if (sha256File(target) !== check.sha256) {
+      steps.push({ service, restored: false, reason: "the restored jar does not match its recorded sha256" });
+      continue;
+    }
     await restartServiceByName(deps, service);
     const health = await waitForHealthy(deps, service);
     steps.push({ service, restored: true, healthy: health.healthy, state: health.state });
   }
-  const failed = steps.filter((step) => step.restored === true && step.healthy !== true);
+  const failed = steps.filter(
+    (step) =>
+      (step.restored === true && step.healthy !== true) ||
+      (step.restored === false && step.reason !== "no previous jar was recorded"),
+  );
   const result = { rolled_back_from: record.artifact_sha256 ?? null, announcement, delay_seconds: delay, steps };
   if (failed.length > 0) {
     return {
       ok: false,
       code: "health_check_failed",
-      message: `${failed.map((s) => s.service).join(", ")} did not become healthy after the rollback`,
+      message: `${failed.map((s) => s.service).join(", ")} did not come back healthy (or could not be restored) after the rollback`,
       result,
     };
   }

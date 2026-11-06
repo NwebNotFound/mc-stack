@@ -139,8 +139,10 @@ they are already on the host/WSL). With `OPS_ARMED=true` they can:
 They still **cannot**: build a malicious jar through this stack (the build runs
 the repo's own gradle command in a no-network container from a read-only
 checkout — they would have to change the repo, which is the same trust level as
-editing the helper's source), deploy an arbitrary file (only the artifact volume's
-last-build jar can be deployed, and its sha256 is re-hashed in the helper),
+editing the helper's source), deploy an arbitrary file (only the last-build jar
+can be deployed: its builder-reported path must resolve under
+`/artifacts/artifacts/`, it is re-hashed and copied into the helper-only
+`data/ops-helper/jars/`, and that copy is re-hashed again before the deploy),
 restart the database, `hermes-mcp`, `hermes-test` or the helper itself, exec in
 any container, create/stop/kill containers, or touch `.env`/`secrets/`/`data/`.
 
@@ -215,9 +217,22 @@ T2 additionally:
 * **health check** after each restart (poll `docker inspect .State`, up to
   `deploy.health_timeout_seconds`);
 * **deploy**: rolling per service with `delay_seconds` between them, the previous
-  jar kept under `/artifacts/rollback/<service>-craftcore-<sha12>.jar`, jar hash
-  verified after writing, and an automatic rollback of everything already touched
-  when a step fails (`code: health_check_failed_rolled_back`).
+  jar kept (with its sha256) under the helper-only
+  `data/ops-helper/rollback/<service>-craftcore-<sha12>.jar`, jar hash verified
+  after writing, and an automatic rollback of everything already touched when a
+  step fails (`code: health_check_failed_rolled_back`);
+* **rollback** restores a jar only if it lies in `data/ops-helper/rollback/`
+  (realpath, no symlink escape) and still matches its recorded sha256; otherwise
+  the whole rollback is refused (`rollback_jar_untrusted`) before anything is
+  touched.
+
+**Where the state lives.** `last-build.json` and `last-deploy.json` are in
+`data/ops-helper/state/` (`/app/data/ops-helper/state`), which only ops-helper
+mounts. The artifact volume is shared with plugin-builder, which runs repo
+build/test code and is the untrusted component, so nothing the helper later
+trusts is kept there. (Records under `/artifacts/state/` from older versions are
+ignored: run `ops_build_plugin` once after upgrading; a rollback becomes
+available again after the next deploy.)
 
 ### Announcement: there is none (and `acknowledge_no_announce` makes that explicit)
 
