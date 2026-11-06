@@ -24,7 +24,11 @@ public final class VipStore {
     static final String SYNC_ADDONS = "SELECT a.world_id,a.addon FROM vip_world_addons a JOIN vip_worlds w ON w.id=a.world_id WHERE w.status<>'deleted' ORDER BY a.world_id,a.addon";
     static final String SYNC_ONLINE = "SELECT server,COUNT(*) FROM player_presence WHERE online=TRUE GROUP BY server";
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
-    static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) VALUES (?,?,?,?,'stopped',?)";
+    /**
+     * Count and insert in one statement: two concurrent creates can no longer both see a free slot. The locking read
+     * on the owner's rows makes the second insert wait for (or deadlock against) the first instead of passing.
+     */
+    static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) SELECT ?,?,?,?,'stopped',? FROM vip_worlds WHERE owner=? AND status<>'deleted' HAVING COUNT(*)<?";
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
     static final String FIND_WORLD = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE id=? AND status<>'deleted'";
     static final String RENAME_WORLD = "UPDATE vip_worlds SET name=? WHERE id=? AND owner=? AND status<>'deleted'";
@@ -68,10 +72,13 @@ public final class VipStore {
             s.setString(1,owner.toString()); try (ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
         }
     }
-    public void create(UUID owner, String name, String type) throws SQLException {
+    public void create(UUID owner, String name, String type) throws SQLException { create(owner, name, type, Integer.MAX_VALUE); }
+    /** Creates the world only while the owner has fewer than {@code limit} worlds; false when the limit is reached. */
+    public boolean create(UUID owner, String name, String type, int limit) throws SQLException {
         long now=clock.millis();
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(INSERT_WORLD)) {
-            s.setString(1,UUID.randomUUID().toString()); s.setString(2,owner.toString()); s.setString(3,name); s.setString(4,type); s.setLong(5,now); s.executeUpdate();
+            s.setString(1,UUID.randomUUID().toString()); s.setString(2,owner.toString()); s.setString(3,name); s.setString(4,type); s.setLong(5,now);
+            s.setString(6,owner.toString()); s.setInt(7,limit); return s.executeUpdate()==1;
         }
     }
     public List<World> list(UUID owner) throws SQLException {
