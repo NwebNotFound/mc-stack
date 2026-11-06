@@ -137,6 +137,13 @@ public final class PvpMatches implements Listener {
         Session s=players.remove(e.getPlayer().getUniqueId()); if(s==null || s.finishing) return;
         if(s.match!=null) { s.match.disconnect(e.getPlayer().getUniqueId(),System.currentTimeMillis()); finish(s); }
     }
+    /** The player belongs to a match that has begun and is not finishing yet. */
+    public boolean inMatch(UUID id) { Session s=players.get(id); return s!=null && s.match!=null && !s.finishing; }
+    @EventHandler(ignoreCancelled=true) public void teleport(PlayerTeleportEvent e) {
+        Session s=players.get(e.getPlayer().getUniqueId()); if(s==null || s.world==null || e.getTo()==null) return;
+        if(PvpAccess.blocksTeleport(s.world.getName(),s.finishing,worldName(e.getFrom()),worldName(e.getTo()))) { e.setCancelled(true); e.getPlayer().sendMessage("Waehrend eines PvP-Matches nicht moeglich."); }
+    }
+    private static String worldName(Location l) { return l==null || l.getWorld()==null ? null : l.getWorld().getName(); }
     private boolean inRound(Player player) { Session s=players.get(player.getUniqueId()); return s!=null && s.active && !s.finishing; }
     private void sendToBuild(Player player) {
         Runnable teleport=()->{ if(player.isOnline()) player.teleport(build.getSpawnLocation()); };
