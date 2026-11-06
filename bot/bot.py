@@ -85,13 +85,19 @@ def whitelist(action, uuid):
     for host in BACKENDS:
         result = rcon(host, f"linkwhitelist {action} {uuid}")
         if "LINK_OK" not in result:
-            # RCON-Sender ist kein ConsoleCommandSender -> Plugin lehnt ab; Vanilla-Whitelist per Name als Fallback
-            row = sqlite3.connect(DATA / "links.sqlite3").execute("SELECT name FROM links WHERE replace(uuid,'-','')=?", (uuid.replace("-", ""),)).fetchone()
+            # Fallback nur noch, wenn das Plugin fehlt/ablehnt (RCON-Sender wird seit #150 akzeptiert): Vanilla-Whitelist per Name.
+            # "not whitelisted" ist bei remove KEIN Erfolg - der Name kann veraltet sein, die UUID bliebe auf der Whitelist.
+            con = sqlite3.connect(DATA / "links.sqlite3")
+            try:
+                row = con.execute("SELECT name FROM links WHERE replace(uuid,'-','')=?", (uuid.replace("-", ""),)).fetchone()
+            finally:
+                con.close()
             if row and re.fullmatch(r"[A-Za-z0-9_]{1,16}", row[0]):
                 result = rcon(host, f"whitelist {action} {row[0]}")
                 log.info("Whitelist-Fallback %s %s auf %s: %s", action, row[0], host, result)
                 low = result.lower()
-                if any(k in low for k in ("added", "removed", "already", "not whitelisted", "hinzugef", "entfernt")):
+                ok = ("added", "already", "hinzugef") if action == "add" else ("removed", "entfernt")
+                if "not whitelisted" not in low and any(k in low for k in ok):
                     continue
             raise RuntimeError(f"Whitelist-Befehl auf {host} fehlgeschlagen: {result}")
 
@@ -126,6 +132,32 @@ def backup():
 
 
 BANNED_TEXT = "\u26d4 Diese Verkn\u00fcpfung wurde von einem Admin gesperrt. Wenn du denkst, dass das ein Fehler ist, melde dich bei einem Admin."
+
+
+LINK_WINDOW = 86400
+MAX_STARTS_PER_USER = 5   # neue Codes pro Discord-Account und Tag
+MAX_STARTS_PER_PAIR = 3   # davon fuer denselben MC-Account (Erneuern) pro Tag
+LIMIT_TEXT = "\u23f3 Du hast heute schon zu oft einen Code angefordert. Versuch es morgen nochmal oder melde dich bei einem Admin."
+
+
+def init_link_starts(db):
+    """Zaehlt Link-Starts gegen Pending-Squatting (#150): ein fremder Pending-Link blockiert den echten Besitzer."""
+    db.execute("CREATE TABLE IF NOT EXISTS link_starts (discord_id INTEGER NOT NULL, uuid TEXT NOT NULL, created INTEGER NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS link_starts_user ON link_starts (discord_id, created)")
+
+
+def link_start_allowed(db, discord_id, uuid, now=None):
+    since = int(now if now is not None else time.time()) - LINK_WINDOW
+    total = db.execute("SELECT COUNT(*) FROM link_starts WHERE discord_id=? AND created>?", (discord_id, since)).fetchone()[0]
+    pair = db.execute("SELECT COUNT(*) FROM link_starts WHERE discord_id=? AND uuid=? AND created>?", (discord_id, _uuid_key(uuid), since)).fetchone()[0]
+    return total < MAX_STARTS_PER_USER and pair < MAX_STARTS_PER_PAIR
+
+
+def record_link_start(db, discord_id, uuid, now=None):
+    now = int(now if now is not None else time.time())
+    db.execute("DELETE FROM link_starts WHERE created<=?", (now - LINK_WINDOW,))
+    db.execute("INSERT INTO link_starts (discord_id, uuid, created) VALUES (?,?,?)", (discord_id, _uuid_key(uuid), now))
+    db.commit()
 
 
 def init_link_bans(db):
@@ -182,6 +214,7 @@ class Bot(discord.Client):
         self.db = sqlite3.connect(DATA / "links.sqlite3")
         self.db.execute("CREATE TABLE IF NOT EXISTS links (discord_id INTEGER PRIMARY KEY, uuid TEXT UNIQUE NOT NULL, name TEXT NOT NULL, code TEXT, expires INTEGER, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)")
         init_link_bans(self.db)
+        init_link_starts(self.db)
         self.db.commit()
         self.offsets = {}
         self.dm_state = {}
@@ -402,6 +435,8 @@ class Bot(discord.Client):
         async with self.lock:
             if self.link_banned(user.id, uuid):
                 return False, BANNED_TEXT
+            if not link_start_allowed(self.db, user.id, uuid):
+                return False, LIMIT_TEXT  # vor dem Loeschen pruefen: ein offener Code bleibt gueltig
             row = self.db.execute("SELECT discord_id,state FROM links WHERE discord_id=? OR uuid=?", (user.id, uuid)).fetchall()
             for did, state in row:
                 if did == user.id and state == "pending":
@@ -411,6 +446,7 @@ class Bot(discord.Client):
                     return False, "Dein Discord-Account ist schon mit einem Minecraft-Account verknüpft ✅ Falls du wechseln willst, frag kurz einen Admin."
                 else:
                     return False, f"**{discord.utils.escape_markdown(name)}** ist schon mit einem anderen Discord-Account verknüpft. Wenn das nicht stimmt, melde dich bei einem Admin."
+            record_link_start(self.db, user.id, uuid)
             code, expires = f"{secrets.randbelow(100000000):08d}", int(time.time()) + 600
             self.save("INSERT INTO links (discord_id,uuid,name,code,expires,state) VALUES (?,?,?,?,?,'pending')", (user.id, uuid, name, code, expires))
             temp = PENDING / (uuid + ".tmp")

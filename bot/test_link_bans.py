@@ -28,6 +28,7 @@ def new_db():
     db = sqlite3.connect(":memory:")
     db.execute(LINKS)
     bot.init_link_bans(db)
+    bot.init_link_starts(db)
     return db
 
 
@@ -103,6 +104,58 @@ class InviteGateTests(unittest.TestCase):
         self.assertTrue(invites.allowed(b, Mock(id=6)))
         b.role = lambda member, key: False
         self.assertFalse(invites.allowed(b, Mock(id=5)))
+
+
+class WhitelistFallbackTests(unittest.TestCase):
+    """#150: vanilla fallback by (possibly stale) name must not count "not whitelisted" as a removal."""
+    def run_fallback(self, action, reply):
+        def rcon(host, cmd):
+            return "LINK_ERROR" if cmd.startswith("linkwhitelist") else reply
+        with tempfile.TemporaryDirectory() as d, patch.object(bot, "DATA", Path(d)), patch.object(bot, "rcon", side_effect=rcon):
+            con = sqlite3.connect(Path(d) / "links.sqlite3")
+            con.execute(LINKS)
+            con.execute("INSERT INTO links VALUES (1,?,'OldName',NULL,NULL,'removing',0)", (UUID,))
+            con.commit(); con.close()
+            bot.whitelist(action, UUID)
+
+    def test_remove_not_whitelisted_is_failure(self):
+        with self.assertRaises(RuntimeError):
+            self.run_fallback("remove", "Player is not whitelisted")
+
+    def test_remove_and_add_success(self):
+        self.run_fallback("remove", "Removed OldName from the whitelist")
+        self.run_fallback("add", "Player is already whitelisted")
+        with self.assertRaises(RuntimeError):
+            self.run_fallback("add", "Removed OldName from the whitelist")
+
+
+class LinkStartLimitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_renewals_and_starts_are_limited(self):
+        db = new_db()
+        b = fake_bot(db)
+        with tempfile.TemporaryDirectory() as d, patch.object(bot, "PENDING", Path(d)):
+            with patch.object(bot, "mojang", AsyncMock(return_value=(UUID, "Owner"))):
+                for _ in range(bot.MAX_STARTS_PER_PAIR):
+                    ok, _ = await bot.Bot.start_link(b, Mock(id=5), "Owner")
+                    self.assertTrue(ok)
+                ok, text = await bot.Bot.start_link(b, Mock(id=5), "Owner")
+                self.assertFalse(ok); self.assertEqual(text, bot.LIMIT_TEXT)
+                # the still-open code is kept when the limit hits
+                self.assertEqual(db.execute("SELECT state FROM links WHERE discord_id=5").fetchone()[0], "pending")
+            others = [("%032x" % i, f"Name{i}") for i in range(1, 10)]
+            db.execute("DELETE FROM links")
+            results = []
+            for u, n in others:
+                with patch.object(bot, "mojang", AsyncMock(return_value=(u, n))):
+                    results.append((await bot.Bot.start_link(b, Mock(id=6), n))[0])
+            self.assertEqual(results.count(True), bot.MAX_STARTS_PER_USER)
+
+    def test_window_expires(self):
+        db = new_db()
+        for i in range(bot.MAX_STARTS_PER_USER):
+            bot.record_link_start(db, 7, "%032x" % i, now=1000)
+        self.assertFalse(bot.link_start_allowed(db, 7, UUID, now=1001))
+        self.assertTrue(bot.link_start_allowed(db, 7, UUID, now=1000 + bot.LINK_WINDOW + 1))
 
 
 if __name__ == "__main__":
