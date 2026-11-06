@@ -20,6 +20,7 @@ public final class VipWebRunner {
 
     private final JavaPlugin plugin;
     private VipWebQueue queue;
+    private VipWorldSync sync;
     private volatile boolean stopped;
 
     public VipWebRunner(JavaPlugin plugin) { this.plugin = plugin; }
@@ -38,7 +39,13 @@ public final class VipWebRunner {
                 public VipHostClient.Result stop(String slot) { return host.stop(slot); }
             },
             uuid -> rank(uuid), db, config.adminSlots(), config.trustedMayStart());
-        this.queue = new VipWebQueue(new HttpTransport(base, token), new VipAcks(db), commands, line -> plugin.getLogger().info(line));
+        HttpTransport transport = new HttpTransport(base, token);
+        this.queue = new VipWebQueue(transport, new VipAcks(db), commands, line -> plugin.getLogger().info(line));
+        // Same cap as the in-game GUI (VipGui.playerLimit): rank's players, VIP default when unknown.
+        this.sync = new VipWorldSync(store, transport, owner -> {
+            int limit = config.players(rank(owner));
+            return limit > 0 ? limit : config.vipPlayers();
+        });
         plugin.getLogger().info("VIP-Queue: Polling aktiv (" + base + ")");
         schedule();
     }
@@ -68,6 +75,9 @@ public final class VipWebRunner {
         if (stopped) return;
         try { queue.pollOnce(System.currentTimeMillis()); }
         catch (Exception e) { plugin.getLogger().warning("VIP-Queue: " + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage())); }
+        // The panel only shows what this sync publishes; a failed poll must not block it.
+        try { sync.maybeSend(System.currentTimeMillis()); }
+        catch (Exception e) { plugin.getLogger().warning("VIP-Sync: " + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage())); }
         finally { schedule(); }
     }
 
