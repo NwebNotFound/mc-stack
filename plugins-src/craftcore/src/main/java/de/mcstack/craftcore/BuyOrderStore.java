@@ -21,12 +21,8 @@ final class BuyOrderStore {
       q.setString(1,id); q.setString(2,buyer);
       try(ResultSet r=q.executeQuery()){if(!r.next())return false; remaining=r.getInt(1); price=r.getLong(2);}
     }
-    // Sales take the same order row lock. Once any sale has completed the order
-    // must not be withdrawn, even if part of the reserved quantity remains.
-    try (PreparedStatement q=c.prepareStatement("SELECT 1 FROM buy_order_sales WHERE order_id=? LIMIT 1")) {
-      q.setString(1,id);
-      try(ResultSet r=q.executeQuery()){if(r.next())return false;}
-    }
+    // Sales take the same order row lock, so remaining is final here. A partially filled
+    // order can be withdrawn too: only the unfilled rest (remaining * unit_price) is refunded.
     EconomyStore.change(c,buyer,UnitPrice.total(price,remaining));
     try(PreparedStatement q=c.prepareStatement("UPDATE buy_orders SET status='CANCELLED',remaining=0 WHERE id=?")){q.setString(1,id);q.executeUpdate();}
     return true;
