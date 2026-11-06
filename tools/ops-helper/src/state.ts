@@ -15,6 +15,8 @@ export class OpsState {
   private lastRunAt = new Map<string, number>();
   private hits = new Map<string, number[]>();
   private dirty = false;
+  /** Name of the T2 action currently running (in-memory; one process). */
+  private t2Holder: string | null = null;
 
   constructor(
     private readonly file: string,
@@ -74,6 +76,24 @@ export class OpsState {
     list.push(at);
     this.hits.set(key, list);
     return list.length;
+  }
+
+  /**
+   * Process-wide T2 mutex (issue #144): at most ONE T2 action runs at a time,
+   * a second one is refused (not queued). Returns false when it is held.
+   */
+  tryAcquireT2(action: string): boolean {
+    if (this.t2Holder !== null) return false;
+    this.t2Holder = action;
+    return true;
+  }
+
+  releaseT2(): void {
+    this.t2Holder = null;
+  }
+
+  t2Busy(): string | null {
+    return this.t2Holder;
   }
 
   /** Peek without recording (used by tests/diagnostics). */

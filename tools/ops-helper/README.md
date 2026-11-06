@@ -212,6 +212,16 @@ be hammered.
 
 T2 additionally:
 
+* **one at a time** — a process-wide T2 lock: while any T2 action runs (including
+  its `delay_seconds` lead time) every other T2 call is refused with `t2_busy`
+  (not queued, no cooldown started);
+* **never during a backup** — while `backup.ps1` / `dev-reset.ps1` hold the
+  maintenance lock they write `backups/.maintenance.active` (the Windows file
+  lock itself is not visible through the bind mount). A T2 call is refused with
+  `maintenance_in_progress` while it exists, and right before each restart (after
+  the lead time) the helper waits up to `OPS_MAINTENANCE_WAIT_SECONDS` for a
+  backup that started in the meantime, then gives up without restarting. A
+  marker older than `OPS_MAINTENANCE_STALE_SECONDS` (a killed script) is ignored;
 * **no announcement (and it says so)** — see below;
 * **recent backup, never a create** — see below;
 * **health check** after each restart (poll `docker inspect .State`, up to
@@ -535,6 +545,8 @@ deletes the file.
 | `OPS_BUILDER_TIMEOUT_SECONDS` / `OPS_BUILDER_POLL_MS` | `1800` / `1000` | how long to wait for a job answer, and how often to look |
 | `OPS_ACTION_TIMEOUT_SECONDS` / `OPS_BUILD_TIMEOUT_SECONDS` | `120` / `1800` | per-command and per-build timeouts |
 | `OPS_DOCKER_BIN` | `docker` | docker CLI path |
+| `OPS_MAINTENANCE_WAIT_SECONDS` / `OPS_MAINTENANCE_POLL_SECONDS` | `1800` / `15` | how long a T2 step waits for a running backup before it gives up, and how often it looks |
+| `OPS_MAINTENANCE_STALE_SECONDS` | `14400` | a `backups/.maintenance.active` marker older than this is ignored |
 | `OPS_FILTER_TOKEN` | *(empty)* | bearer token for docker-socket-filter (>= 24 chars, same value as the filter's); empty → every docker call is refused with 401 |
 | `OPS_DOCKER_CONFIG_DIR` | `/tmp/ops-docker-config` | private Docker CLI config dir that carries the filter token |
 | `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-filter:2375`; without the filter the helper cannot reach Docker at all |

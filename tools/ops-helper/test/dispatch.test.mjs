@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
 import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, FakeJobClient, makeDeps, tmpDir } from "./helpers.mjs";
@@ -727,4 +727,107 @@ test("a paused action returns action_disabled with its reason and never reaches 
     assert.match(out.message, /paused/, `${name} message must explain itself`);
     assert.equal(deps.runner.calls.length, 0, `${name} must not reach docker`);
   }
+});
+
+function freshBackupAllow() {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  repoAllow.paths.backups = backups;
+  return repoAllow;
+}
+
+const GAME = { service: "survival", confirm: true, delay_seconds: 60, acknowledge_no_announce: true };
+
+test("only one T2 action runs at a time; a second one is refused as t2_busy and the lock is released", async () => {
+  const repoAllow = freshBackupAllow();
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let sleeping = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    sleeping += 1;
+    await gate;
+  };
+
+  const first = handleOp("ops_restart_game", GAME, deps);
+  while (sleeping === 0) await new Promise((r) => setImmediate(r));
+
+  const busy = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps);
+  assert.equal(busy.ok, false);
+  assert.equal(busy.code, "t2_busy");
+  assert.match(busy.message, /ops_restart_game/);
+  // A busy refusal does not start the cooldown of the refused action.
+  assert.equal(deps.state.cooldownRemaining("ops_rollback_plugin", 1800, Date.now()), 0);
+  // T0 keeps working while T2 runs.
+  const status = await handleOp("ops_status", {}, deps);
+  assert.equal(status.ok, true);
+
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.message);
+  assert.equal(deps.state.t2Busy(), null, "the T2 lock is released after the action");
+
+  const after = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps);
+  assert.equal(after.code, "no_rollback_available", "the next T2 action gets past the lock");
+});
+
+test("the T2 lock is released when the action throws", async () => {
+  const repoAllow = freshBackupAllow();
+  const runner = dockerRunner();
+  runner.responses.unshift({ match: (argv) => argv[1] === "restart", reply: { ok: false, code: 1, stderr: "boom" } });
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, runner, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.ok, false);
+  assert.equal(deps.state.t2Busy(), null);
+});
+
+test("T2 is refused while backup.ps1 holds the maintenance marker, a stale marker is ignored", async () => {
+  const repoAllow = freshBackupAllow();
+  const marker = `${repoAllow.paths.backups}/.maintenance.active`;
+  writeFileSync(marker, "﻿" + JSON.stringify({ name: "backup", started: "2026-11-06T03:00:00+01:00", pid: 42 }));
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.code, "maintenance_in_progress");
+  assert.equal(out.result.maintenance, "backup");
+  assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined);
+  assert.equal(deps.state.cooldownRemaining("ops_restart_game", 1800, Date.now()), 0);
+
+  const old = (Date.now() - 6 * 3600 * 1000) / 1000;
+  utimesSync(marker, old, old);
+  const staleDeps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const ok = await handleOp("ops_restart_game", GAME, staleDeps);
+  assert.equal(ok.ok, true, ok.message);
+});
+
+test("a backup that starts during the T2 delay is waited for before the restart", async () => {
+  const repoAllow = freshBackupAllow();
+  const marker = `${repoAllow.paths.backups}/.maintenance.active`;
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  let calls = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    calls += 1;
+    if (calls === 1) writeFileSync(marker, "{}"); // backup starts during the lead time
+    if (calls === 3) rmSync(marker); // ...and finishes two polls later
+  };
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.ok, true, out.message);
+  assert.deepEqual(deps.sleeps, [60_000, 15_000, 15_000], "lead time, then two maintenance polls");
+
+  // ...and if it never finishes within the wait budget, nothing is restarted.
+  const stuck = makeDeps({ allow: repoAllow, cfg: { armed: true, maintenanceWaitSeconds: 0 }, now: () => Date.now() });
+  stuck.sleep = async (ms) => {
+    stuck.sleeps.push(ms);
+    writeFileSync(marker, "{}");
+  };
+  const refused = await handleOp("ops_restart_game", GAME, stuck);
+  assert.equal(refused.code, "maintenance_in_progress");
+  assert.equal(stuck.runner.find((argv) => argv[1] === "restart"), undefined, "no restart during a backup");
+  assert.equal(stuck.state.t2Busy(), null);
+  rmSync(marker);
 });

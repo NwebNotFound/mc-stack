@@ -57,12 +57,17 @@ Check ($lines.Count -ge 8 -and @($lines | Where-Object { $_.step -eq 'ready' -an
 
 Write-Host 'lock'
 $first = Enter-MaintLock $root 0
+$markerPath = Join-Path $root 'backups/.maintenance.active'
+$markerInfo = $null; try { $markerInfo = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch { }
+Check ($null -ne $markerInfo -and $markerInfo.name -eq 'test' -and $markerInfo.pid -eq $PID) 'the lock writes the maintenance marker for ops-helper'
 $msg = ''; try { Enter-MaintLock $root 0 | Out-Null } catch { $msg = $_.Exception.Message }
 Check ($msg -like '*Sperre belegt*') 'a second run fails fast with WaitSeconds 0'
 $global:MaintSleep = { param($s) Exit-MaintLock $first }   # the backup finishes while dev-reset waits
 $second = $null; try { $second = Enter-MaintLock $root 60 } catch { }
 Check ($null -ne $second) 'dev-reset waits for a running backup, then gets the lock'
+Check (Test-Path -LiteralPath $markerPath) 'the marker stays while the second holder has the lock'
 Exit-MaintLock $second
+Check (-not (Test-Path -LiteralPath $markerPath)) 'releasing the lock removes the marker'
 $global:MaintSleep = { param($s) }
 
 Write-Host 'failed backup marker'
@@ -97,6 +102,7 @@ Write-Host 'backup.ps1 with the DB down (the 05.11. 11:36 case)'
 $global:DbStates = @('exited')
 $msg = ''; try { & "$root/backup.ps1" -ReadyAttempts 2 } catch { $msg = $_.Exception.Message }
 Check ($msg -like 'Nicht bereit*') "backup throws a clear error ($msg)"
+Check (-not (Test-Path -LiteralPath (Join-Path $root 'backups/.maintenance.active'))) 'a failed backup leaves no maintenance marker'
 Check (@(Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { $_.Name -notlike '*FAILED*' -and -not (Test-Path (Join-Path $_.FullName 'COMPLETE.txt')) }).Count -eq 0) 'no half backup that looks valid'
 Check (-not ($global:DockerCalls | Where-Object { $_ -like 'compose stop*' })) 'servers were not stopped'
 $blog = Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log' | Select-Object -First 1

@@ -58,6 +58,7 @@ function Enter-MaintLock([string]$Root = $PSScriptRoot, [int]$WaitSeconds = 0, [
   while ($true) {
     try {
       $stream = [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+      Set-MaintMarker $dir
       Write-MaintLog 'lock' 'info' 'Wartungssperre erhalten'
       return $stream
     } catch [IO.IOException] {
@@ -67,7 +68,24 @@ function Enter-MaintLock([string]$Root = $PSScriptRoot, [int]$WaitSeconds = 0, [
     }
   }
 }
-function Exit-MaintLock($Stream) { if ($Stream) { $Stream.Dispose() } }
+function Exit-MaintLock($Stream) {
+  if ($Stream) {
+    # Marker first, while the lock is still held, so a waiting run never loses its own marker.
+    $marker = Join-Path (Split-Path -Parent $Stream.Name) '.maintenance.active'
+    try { if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force } } catch { Write-MaintLog 'lock' 'warn' "Marker nicht entfernt: $($_.Exception.Message)" }
+    $Stream.Dispose()
+  }
+}
+
+# ops-helper runs in a Linux container and cannot see this Windows file lock through the bind mount. While the lock
+# is held, backups/.maintenance.active tells it "maintenance running": it refuses or defers T2 restarts/deploys
+# (issue #144). A marker left behind by a killed run is ignored by ops-helper after 4 h and replaced by the next run.
+function Set-MaintMarker([string]$Dir) {
+  $name = if ($script:MaintRun) { $script:MaintRun -replace '-\d{8}-\d{6}-\d{3}$', '' } else { 'maintenance' }
+  $info = [ordered]@{ name = $name; started = (Get-Date).ToString('o'); pid = $PID } | ConvertTo-Json -Compress
+  try { Set-Content -LiteralPath (Join-Path $Dir '.maintenance.active') -Value $info -Encoding UTF8 }
+  catch { Write-MaintLog 'lock' 'warn' "Marker nicht geschrieben: $($_.Exception.Message)" }
+}
 
 # A backup without COMPLETE.txt never looks valid: write FAILED.txt with the reason and rename the folder to
 # <name>-FAILED. Nothing is deleted.
