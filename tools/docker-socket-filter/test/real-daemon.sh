@@ -23,6 +23,7 @@ NET=hermes-dsf-net
 CANARY="hermes-dsf-canary-$SUFFIX"
 T2CANARY="hermes-dsf-t2canary-$SUFFIX"
 FILTER="hermes-dsf-filter-$SUFFIX"
+FILTER_TOKEN="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
 
 echo "### 1. build $IMAGE"
 docker build -q -t "$IMAGE" "$DIR" || exit 1
@@ -37,18 +38,20 @@ docker run -d --rm --name "$T2CANARY" --network "$NET" alpine sleep 300 >/dev/nu
 echo "### 4. filter holding the REAL socket ($FILTER, self-exits after 240s)"
 docker run -d --rm --name "$FILTER" --network "$NET" \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -e OPS_FILTER_TOKEN="$FILTER_TOKEN" \
   -e OPS_FILTER_RESTART_ALLOW="$CANARY" \
   -e OPS_FILTER_RESTART_ALLOW_T2="$T2CANARY" \
   --entrypoint sh "$IMAGE" -c 'timeout 240 node src/server.mjs' >/dev/null || exit 1
 sleep 2
 
 echo "### 5. probe (raw HTTP from a throwaway client)"
-docker run --rm -i --network "$NET" -e PROBE_HOST="$FILTER" -e CANARY="$CANARY" -e T2CANARY="$T2CANARY" \
+docker run --rm -i --network "$NET" -e PROBE_HOST="$FILTER" -e FILTER_TOKEN="$FILTER_TOKEN" -e CANARY="$CANARY" -e T2CANARY="$T2CANARY" \
   node:22-alpine node --input-type=module - <<'PROBE'
 import net from "node:net";
 const HOST = process.env.PROBE_HOST;
 const CANARY = process.env.CANARY;
 const T2CANARY = process.env.T2CANARY;
+const AUTH = `Authorization: Bearer ${process.env.FILTER_TOKEN}\r\n`;
 const raw = (request) =>
   new Promise((resolve) => {
     const chunks = [];
@@ -62,12 +65,15 @@ const raw = (request) =>
   });
 const status = (t) => { const m = /HTTP\/1\.1 (\d{3})/.exec(t); return m ? Number(m[1]) : 0; };
 const all = (t) => [...t.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => Number(m[1]));
-const get = (t) => `GET ${t} HTTP/1.1\r\nHost: docker\r\n\r\n`;
-const post = (t) => `POST ${t} HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`;
+const get = (t) => `GET ${t} HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`;
+const post = (t) => `POST ${t} HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`;
 const ID = "f".repeat(64);
 
 const cases = [
-  ["allowed HEAD /_ping", "HEAD /_ping HTTP/1.1\r\nHost: docker\r\n\r\n", 200],
+  ["denied without bearer token (401)", `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n\r\n`, 401],
+  ["denied restart without bearer token (401)", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`, 401],
+  ["denied logs without tail", get(`/containers/${CANARY}/logs?stdout=1`), 403],
+  ["allowed HEAD /_ping", `HEAD /_ping HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`, 200],
   ["allowed GET /containers/json", get("/containers/json?all=1"), 200],
   ["allowed GET /containers/json with filters", get("/containers/json?all=1&filters=%7B%22label%22%3A%7B%22com.docker.compose.project%3Dmc-stack%22%3Atrue%7D%7D"), 200],
   ["allowed GET canary inspect", get(`/containers/${CANARY}/json`), 200],
@@ -94,7 +100,7 @@ const cases = [
   ["denied POST kill", post(`/containers/${CANARY}/kill`), 403],
   ["denied POST /containers/prune", post("/containers/prune"), 403],
   ["denied POST /exec/x/start", post("/exec/x/start"), 403],
-  ["denied DELETE container", `DELETE /containers/${CANARY} HTTP/1.1\r\nHost: docker\r\n\r\n`, 403],
+  ["denied DELETE container", `DELETE /containers/${CANARY} HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`, 403],
   ["denied GET ?size=1", get("/containers/json?all=1&size=1"), 403],
   ["denied GET /volumes", get("/volumes"), 403],
   ["denied GET /images/json", get("/images/json"), 403],
@@ -107,11 +113,11 @@ const cases = [
   ["denied encoded traversal", post("/containers/%2e%2e/create"), 403],
   ["denied double slash", get("//containers/json"), 403],
   ["denied ;create suffix", post(`/containers/${CANARY}/restart;create`), 403],
-  ["denied upgrade", "GET /containers/json HTTP/1.1\r\nHost: docker\r\nUpgrade: tcp\r\nConnection: Upgrade\r\n\r\n", 403],
-  ["denied double content-length", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n`, 403],
-  ["denied transfer-encoding", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`, 403],
-  ["denied body on restart", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 4\r\n\r\njunk`, 403],
-  ["denied lowercase method", "get /containers/json HTTP/1.1\r\nHost: docker\r\n\r\n", 403],
+  ["denied upgrade", `GET /containers/json HTTP/1.1\r\nHost: docker\r\n${AUTH}Upgrade: tcp\r\nConnection: Upgrade\r\n\r\n`, 403],
+  ["denied double content-length", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\nContent-Length: 0\r\n\r\n`, 403],
+  ["denied transfer-encoding", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n`, 403],
+  ["denied body on restart", `POST /containers/${CANARY}/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 4\r\n\r\njunk`, 403],
+  ["denied lowercase method", `get /containers/json HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`, 403],
 ];
 
 let failures = 0;
@@ -122,8 +128,8 @@ for (const [label, request, expected] of cases) {
 }
 {
   const pipelined =
-    "GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n\r\n" +
-    "POST /containers/create HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n";
+    `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n` +
+    `POST /containers/create HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`;
   const statuses = all(await raw(pipelined));
   const ok = statuses[0] === 200 && statuses[1] === 403;
   if (!ok) failures += 1;

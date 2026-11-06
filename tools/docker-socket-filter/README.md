@@ -9,8 +9,10 @@ process *is* the privilege boundary, so there is nothing to audit but the code
 below.
 
 ```
-ops-helper              (NO socket: DOCKER_HOST=tcp://docker-socket-filter:2375)
-        │               internal network `mc-stack-ops` (internal: true, no host port)
+ops-helper              (NO socket: DOCKER_HOST=tcp://docker-socket-filter:2375,
+        │                sends Authorization: Bearer $OPS_FILTER_TOKEN)
+        │               internal network `mc-stack-ops-docker` (internal: true, no
+        │               host port; ONLY ops-helper and this filter are members)
         ▼
 docker-socket-filter    (the ONLY socket holder; Node, no dependencies)
         │               read_only, cap_drop ALL, no-new-privileges, no host port
@@ -36,6 +38,24 @@ is even reached — measured against the real daemon), and with `POST=1` the who
 mutable container API, including `create` and `exec`, re-opens. There is no
 per-path, per-container-name setting. Hence this filter.
 
+## Authentication
+
+Every request except `HEAD|GET /_ping` must carry
+`Authorization: Bearer <OPS_FILTER_TOKEN>`. The token is compared in constant
+time (both sides are SHA-256 hashed, then `timingSafeEqual`); a missing or wrong
+token is a `401` and is never forwarded. A duplicated `Authorization` header is a
+`403`. Without a token of at least 24 characters the filter refuses to start.
+`/_ping` is the one exception so the container `HEALTHCHECK` needs no secret; it
+is read-only and returns only the API version.
+
+ops-helper sends the token through the stock Docker CLI: at startup it writes a
+private CLI config (`/tmp/ops-docker-config/config.json`, mode 0600, tmpfs) with
+`HttpHeaders.Authorization` and points `DOCKER_CONFIG` at it.
+
+Defence in depth: the filter also sits on its own network `mc-stack-ops-docker`,
+which only ops-helper shares. hermes-mcp (the tunnel-facing service) is not on
+it, so a compromised hermes-mcp can neither reach the filter nor knows the token.
+
 ## The allowlist (everything else is 403)
 
 | Method | Path | Query | Notes |
@@ -43,7 +63,7 @@ per-path, per-container-name setting. Hence this filter.
 | `HEAD`, `GET` | `/_ping` | *(none)* | documented exception: the Docker CLI's version-negotiation/health probe. Read-only, returns only the API version. |
 | `GET` | `/containers/json` | `all` ∈ {0,1}, `filters` (≤ 2048 chars) | the container list (`docker ps`) |
 | `GET` | `/containers/<ref>/json` | *(none)* | `docker inspect` |
-| `GET` | `/containers/<ref>/logs` | `stdout`, `stderr`, `timestamps` ∈ {0,1}; `tail` ≤ 300; `since`, `until` | `docker logs` |
+| `GET` | `/containers/<ref>/logs` | `tail` **required**, ≤ 300; `stdout`, `stderr`, `timestamps` ∈ {0,1}; `since`, `until` | `docker logs` (without `tail` the daemon would return the whole log, so it is refused) |
 | `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | **only** for an exact name from `OPS_FILTER_RESTART_ALLOW` (T1) or `OPS_FILTER_RESTART_ALLOW_T2` (T2) |
 
 `<ref>` is a container name or id (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).
@@ -62,7 +82,10 @@ the audit line records which list matched (`restarts: "t1" | "t2"`). The T1/T2
 split itself is enforced by ops-helper's own `services.restart_t1` /
 `services.restart_game` lists — a T1 call can therefore never restart a game
 server even though the name is on the filter's second list, and the two lists are
-asserted disjoint. `mc-stack-craftcore-db-1`, `mc-stack-hermes-mcp-1`,
+asserted disjoint. Set `OPS_FILTER_RESTART_ALLOW_T2=none` to take the game
+servers off the filter entirely (an empty value falls back to the default,
+because compose's `${VAR:-default}` cannot pass an empty string through).
+`mc-stack-craftcore-db-1`, `mc-stack-hermes-mcp-1`,
 `mc-stack-hermes-test-1`, `mc-stack-ops-helper-1` and the filter itself are on
 **neither** list.
 
@@ -87,7 +110,7 @@ Rejected at routing time:
 * `%` anywhere in the path (no percent-encoded `/` or `..`), `..` or `.`
   segments, `//`, a trailing `/`, a backslash;
 * unknown or duplicated query keys (`size=1` is refused — see below);
-* `tail > 300`, `t > 30` or a non-integer `t`;
+* a logs request without `tail`, `tail > 300`, `t > 30` or a non-integer `t`;
 * a restart target that is not an exact allowlist name.
 
 The optional API-version prefix is exactly `v1.<digits>`; `/v1.51/v1.51/...` is
@@ -111,8 +134,9 @@ sets `DOCKER_API_VERSION`, which makes the CLI skip version negotiation entirely
 
 * the socket is mounted into this service and nowhere else;
 * `read_only: true`, `cap_drop: ALL`, `no-new-privileges:true`, `tmpfs: /tmp`;
-* **no host port** — it is reachable only from the internal `mc-stack-ops`
-  network (which has no route off the host);
+* **bearer token** on every request except `/_ping` (see Authentication);
+* **no host port** — it is reachable only from the internal `mc-stack-ops-docker`
+  network (members: ops-helper and this filter) (which has no route off the host);
 * the client connection is handled one request at a time; a pipelined second
   request is validated like any other (a smuggled `POST /containers/create`
   after a valid `GET` gets its own `403`);
@@ -129,6 +153,9 @@ sets `DOCKER_API_VERSION`, which makes the CLI skip version negotiation entirely
   holder — but it is not a sandbox. A bug in `src/filter.mjs` is host root.
 * **Whoever can write either restart list can widen the restart set.** That is a
   compose/env change, i.e. the same trust level as editing the repo.
+* **Whoever compromises ops-helper has the filter token** and can do what the
+  filter allows (inspect/logs of any container, restart of the listed names)
+  without ops-helper's own gates. ops-helper is the trusted control plane.
 * **A stolen ops-helper token cannot create or exec.** Through the filter the
   only mutation available is restarting a container whose exact name is on one of
   the two lists.
@@ -142,10 +169,11 @@ sets `DOCKER_API_VERSION`, which makes the CLI skip version negotiation entirely
 | Env | Default | Meaning |
 | --- | --- | --- |
 | `OPS_FILTER_PORT` | `2375` | listen port inside the container |
-| `OPS_FILTER_HOST` | `0.0.0.0` | listen address (only reachable inside `mc-stack-ops`) |
+| `OPS_FILTER_HOST` | `0.0.0.0` | listen address (only reachable inside `mc-stack-ops-docker`) |
+| `OPS_FILTER_TOKEN` | *(none, required)* | shared bearer token with ops-helper, >= 24 chars |
 | `OPS_FILTER_UPSTREAM` | `/var/run/docker.sock` | the real socket |
 | `OPS_FILTER_RESTART_ALLOW` | `mc-stack-bot-1,mc-stack-cloudflared-mcp-1` | exact T1 container names a restart may target |
-| `OPS_FILTER_RESTART_ALLOW_T2` | `mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1` | exact T2 container names a restart may target |
+| `OPS_FILTER_RESTART_ALLOW_T2` | `mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1` | exact T2 container names a restart may target (`none` = no game-server restart) |
 | `OPS_FILTER_MAX_RESPONSE_BYTES` | `8388608` | hard cap on a forwarded response body |
 
 An allowlist entry that is not a plain container-name shape aborts startup (fail
