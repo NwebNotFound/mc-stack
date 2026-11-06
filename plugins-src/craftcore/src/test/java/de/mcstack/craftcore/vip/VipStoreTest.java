@@ -13,11 +13,13 @@ class VipStoreTest {
     private Connection database() throws SQLException {
         Connection c = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         try (Statement s = c.createStatement()) {
-            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status ENUM('stopped','queued','starting','running','stopping','error','deleted'), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT)");
+            s.execute("CREATE TABLE vip_worlds (id VARCHAR(36) PRIMARY KEY, owner VARCHAR(36), name VARCHAR(24), type VARCHAR(16), status ENUM('stopped','queued','starting','running','stopping','error','deleted'), slot VARCHAR(16), created_at BIGINT NOT NULL, last_started_at BIGINT, visibility VARCHAR(16), deleted_at BIGINT, settings VARCHAR(2000))");
+            s.execute("CREATE TABLE vip_world_audit (id BIGINT AUTO_INCREMENT PRIMARY KEY, world_id VARCHAR(36), action VARCHAR(24), admin_uuid VARCHAR(36), admin_name VARCHAR(16), owner_uuid VARCHAR(36), owner_name VARCHAR(16), detail VARCHAR(64), created_at BIGINT)");
             s.execute("CREATE TABLE vip_world_runs (world_id VARCHAR(36), slot VARCHAR(16), started_at BIGINT, stopped_at BIGINT, stop_reason VARCHAR(32))");
             s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role ENUM('member','builder','trusted') NOT NULL, added_at BIGINT)");
             s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT)");
             s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
+            s.execute("CREATE TABLE player_presence (uuid VARCHAR(36), server VARCHAR(64), last_seen TIMESTAMP, online BOOLEAN)");
         }
         return c;
     }
@@ -52,7 +54,11 @@ class VipStoreTest {
                 Map.entry("COUNT_MEMBERS", 1), Map.entry("INSERT_MEMBER", 4), Map.entry("DELETE_MEMBER", 2),
                 Map.entry("SET_MEMBER_ROLE", 3), Map.entry("LIST_ADDONS", 1), Map.entry("DELETE_ADDONS", 1),
                 Map.entry("INSERT_ADDON", 3), Map.entry("SET_STARTED", 3), Map.entry("FIND_PLAYER", 1),
-                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1), Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2));
+                Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1),
+                Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2),
+                Map.entry("SET_SETTINGS", 2), Map.entry("FIND_SETTINGS", 1), Map.entry("SET_VISIBILITY", 2),
+                Map.entry("DELETE_WORLD", 2), Map.entry("INSERT_AUDIT", 8), Map.entry("SYNC_WORLDS", 0),
+                Map.entry("SYNC_MEMBERS", 0), Map.entry("SYNC_ADDONS", 0), Map.entry("SYNC_ONLINE", 0), Map.entry("COUNT_LIVE", 0));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

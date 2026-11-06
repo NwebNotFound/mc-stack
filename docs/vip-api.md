@@ -72,7 +72,7 @@ The website stores the status mc-stack sends. The website does not set `expired`
 
 mc-stack checks again when it runs the item.
 
-1. **Discord link.** The Minecraft UUID is the `mc_links` row for that `discord_id`. No row acks `denied` / `not_linked`. If the item also contains `mc_uuid`, it must equal that UUID or the ack is `denied` / `not_linked`.
+1. **Discord link.** The Minecraft UUID is the website's verified `mc_links` row (D1) for that `discord_id`. The website sends it in each item as `actor_uuid` (`mc_uuid` is accepted as the older name) together with `linked`, which the website computes when it serves the pending list: `true` only if that `mc_links` row is still verified, still has the Discord role and still has the same UUID as at enqueue. mc-stack uses `actor_uuid` only when `linked` is `true`; `linked: false` acks `denied` / `not_linked` even if a local row exists; without `linked` the website UUID is not trusted. MariaDB `discord_links` is only filled by `/cclink` and is not the source: if it has a row for that `discord_id` that differs from `actor_uuid`, the ack is `denied` / `not_linked`. An item without `actor_uuid` and without a `discord_links` row acks `denied` / `not_linked`. A malformed `actor_uuid` with valid `request_id` and `discord_id` acks `denied` / `invalid_player` and is not executed; an item without usable identifiers is skipped. A web `delete` carries the name the user typed as `confirm`; mc-stack compares it with the world's current name, so a rename in between acks `denied` / `invalid_name`.
 2. **Rank.** `create`, and every action the caller takes as owner or admin, requires the caller's linked UUID to be `vip`, `mvp`, or `admin`. Anything else is `denied` / `no_rank`. A trusted member's `start` does not use the caller's rank. mc-stack reads the world owner's rank instead, and that owner must be `vip`, `mvp`, or `admin` or the start is `denied` / `no_rank`. Admins may use and manage worlds.
 3. **Who may do what.**
 
@@ -181,6 +181,14 @@ mc-stack pushes the current worlds to `POST /api/mc-vip-worlds` with the ingest 
         }
       ],
       "addons": ["keep-inventory"],
+      "settings": {
+        "gamemode": "survival",
+        "difficulty": "normal",
+        "pvp": true,
+        "keepInventory": false,
+        "mobGriefing": true,
+        "doDaylightCycle": true
+      },
       "created_at": 1793500000000,
       "last_started_at": 1793501000000
     }
@@ -200,7 +208,7 @@ mc-stack pushes the current worlds to `POST /api/mc-vip-worlds` with the ingest 
 }
 ```
 
-`visibility` on each world is `friends` or `private`. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
+`vip_worlds` is the complete list of live worlds, at most 500 per sync and at most 1,900,000 bytes as stored JSON (UTF-8; D1 allows 2,000,000 per value). Nothing is ever shortened: above 500 worlds mc-stack skips the sync and logs `VIP-Sync`. A list over the byte limit is rejected whole by the website (400), mc-stack logs `VIP-Sync: … HTTP 400`, and the website keeps its last list. `visibility` on each world is `friends` or `private`. `settings` carries the six plain world rules the panel edits; when the key is absent the website applies the same defaults as this example. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
 
 For each of `vip_worlds` and `vip_admin_log`:
 

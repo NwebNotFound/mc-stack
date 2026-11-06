@@ -71,6 +71,8 @@ services:
       <<: *paper-environment
       MEMORY: 1G
       CRAFTCORE_SERVER: Lobby
+      MC_INGEST_TOKEN: "${MC_INGEST_TOKEN:-}"
+      VIP_WEB_QUEUE: "${VIP_WEB_QUEUE:-0}"
       PVP_HOST_URL: http://host.docker.internal:25599
       PVP_HOST_TOKEN: "${PVP_HOST_TOKEN:-}"
       VIP_HOST_URL: http://host.docker.internal:25599
@@ -237,6 +239,8 @@ services:
       <<: *paper-environment
       MEMORY: 4G
       CRAFTCORE_SERVER: Survival
+      MC_INGEST_TOKEN: "${MC_INGEST_TOKEN:-}"
+      VIP_WEB_QUEUE: "${VIP_WEB_QUEUE:-0}"
       MOTD: MC Stack Survival
       MODE: survival
       FORCE_GAMEMODE: "TRUE"

@@ -9,6 +9,20 @@ public final class VipStore {
     public record World(String id, String name, String status, String slot, String type) {}
     public record Entry(String id, UUID owner, String name, String type, String status, String slot) {}
     public record Member(UUID player, String name, String role) {}
+    /** One world as the website panel needs it (POST /api/mc-vip-worlds). */
+    public record SyncRow(String id, UUID owner, String ownerName, String name, String type, String status,
+                          String slot, String visibility, long createdAt, Long lastStartedAt, String settings) {}
+    public record SyncMember(String worldId, UUID player, String name, String role, long addedAt) {}
+    /** Everything the website panel needs, read in four queries regardless of the number of worlds. */
+    public record SyncSnapshot(List<SyncRow> worlds, List<SyncMember> members, Map<String, List<String>> addons,
+                               Map<String, Integer> online) {}
+    /** Contract limit per sync (docs/vip-api.md, website cleanWorlds). One more row is read to detect overflow. */
+    public static final int SYNC_MAX_WORLDS = 500;
+    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at,w.settings FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT " + (SYNC_MAX_WORLDS + 1);
+    static final String COUNT_LIVE = "SELECT COUNT(*) FROM vip_worlds WHERE status<>'deleted'";
+    static final String SYNC_MEMBERS = "SELECT m.world_id,m.player,p.name,m.role,m.added_at FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=m.player WHERE w.status<>'deleted' ORDER BY m.world_id,m.added_at";
+    static final String SYNC_ADDONS = "SELECT a.world_id,a.addon FROM vip_world_addons a JOIN vip_worlds w ON w.id=a.world_id WHERE w.status<>'deleted' ORDER BY a.world_id,a.addon";
+    static final String SYNC_ONLINE = "SELECT server,COUNT(*) FROM player_presence WHERE online=TRUE GROUP BY server";
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
     /**
      * Count and insert in one statement: two concurrent creates can no longer both see a free slot. The locking read
@@ -41,6 +55,11 @@ public final class VipStore {
     static final String INSERT_ADDON = "INSERT INTO vip_world_addons (world_id,addon,added_at) VALUES (?,?,?)";
     static final String SET_STARTED = "UPDATE vip_worlds SET status='running',slot=?,last_started_at=? WHERE id=? AND status<>'deleted'";
     static final String FIND_PLAYER = "SELECT uuid FROM known_players WHERE name=?";
+    static final String SET_SETTINGS = "UPDATE vip_worlds SET settings=? WHERE id=? AND status<>'deleted'";
+    static final String FIND_SETTINGS = "SELECT settings FROM vip_worlds WHERE id=? AND status<>'deleted'";
+    static final String SET_VISIBILITY = "UPDATE vip_worlds SET visibility=? WHERE id=? AND status<>'deleted'";
+    static final String DELETE_WORLD = "UPDATE vip_worlds SET status='deleted',deleted_at=? WHERE id=? AND status<>'deleted'";
+    static final String INSERT_AUDIT = "INSERT INTO vip_world_audit (world_id,action,admin_uuid,admin_name,owner_uuid,owner_name,detail,created_at) VALUES (?,?,?,?,?,?,?,?)";
     /** Worlds the player was invited to (member of), for the hub and /vw join. */
     static final String LIST_SHARED = "SELECT w.id,w.name,w.status,w.slot,w.type FROM vip_worlds w JOIN vip_world_members m ON m.world_id=w.id WHERE m.player=? AND w.status<>'deleted' ORDER BY w.name";
     /** Invites added after a point in time, with the owner's name, for the cross-server invite notice. */
@@ -100,6 +119,34 @@ public final class VipStore {
         return Optional.empty();
     }
 
+    public int liveWorldCount() throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(COUNT_LIVE); ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
+    }
+    public SyncSnapshot syncSnapshot() throws SQLException {
+        try (Connection c=source.open()) {
+            List<SyncRow> worlds=new ArrayList<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_WORLDS); ResultSet r=s.executeQuery()) {
+                while(r.next()) {
+                    long started=r.getLong(10); Long last=r.wasNull()?null:started;
+                    worlds.add(new SyncRow(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),
+                        r.getString(6),r.getString(7),r.getString(8),r.getLong(9),last,r.getString(11)));
+                }
+            }
+            List<SyncMember> members=new ArrayList<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_MEMBERS); ResultSet r=s.executeQuery()) {
+                while(r.next()) members.add(new SyncMember(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getLong(5)));
+            }
+            Map<String,List<String>> addons=new HashMap<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_ADDONS); ResultSet r=s.executeQuery()) {
+                while(r.next()) addons.computeIfAbsent(r.getString(1),k->new ArrayList<>()).add(r.getString(2));
+            }
+            Map<String,Integer> online=new HashMap<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_ONLINE); ResultSet r=s.executeQuery()) {
+                while(r.next()) online.put(r.getString(1),r.getInt(2));
+            }
+            return new SyncSnapshot(worlds,members,addons,online);
+        }
+    }
     public List<Member> members(String worldId) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_MEMBERS)) {
             s.setString(1,worldId);
@@ -213,6 +260,41 @@ public final class VipStore {
             try (PreparedStatement s=c.prepareStatement(sql)) { s.setLong(1,now); s.setString(2,id); s.executeUpdate(); }
             c.commit();
         } catch(SQLException e) { c.rollback(); throw e; } }
+    }
+    /** Die sechs Regeln als JSON; NULL heisst Vertrags-Defaults. */
+    public void setSettings(String id, VipWorldSettings settings) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_SETTINGS)) {
+            s.setString(1, settings==null ? null : settings.toJson().toString()); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    public VipWorldSettings settings(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_SETTINGS)) {
+            s.setString(1,id);
+            try (ResultSet r=s.executeQuery()) {
+                if (!r.next()) return VipWorldSettings.DEFAULTS;
+                String json=r.getString(1);
+                return json==null ? VipWorldSettings.DEFAULTS : VipWorldSettings.fromJson(com.google.gson.JsonParser.parseString(json));
+            }
+        }
+    }
+    /** Vertrag schreibt friends/private; die Spalte kennt historisch public statt friends. */
+    public void visibility(String id, String visibility) throws SQLException {
+        String stored = "private".equals(visibility) ? "private" : "public";
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_VISIBILITY)) {
+            s.setString(1,stored); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    /** Weiches Loeschen: die Zeile bleibt fuer Verlauf und Audit, das Panel blendet sie aus. */
+    public void delete(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(DELETE_WORLD)) {
+            s.setLong(1,clock.millis()); s.setString(2,id); s.executeUpdate();
+        }
+    }
+    public void audit(String worldId, String action, UUID admin, String adminName, UUID owner, String ownerName, String detail) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(INSERT_AUDIT)) {
+            s.setString(1,worldId); s.setString(2,action); s.setString(3,admin.toString()); s.setString(4,adminName);
+            s.setString(5,owner.toString()); s.setString(6,ownerName); s.setString(7,detail); s.setLong(8,clock.millis()); s.executeUpdate();
+        }
     }
     public static boolean duplicate(SQLException e) { return e.getErrorCode()==1062 || "23505".equals(e.getSQLState()); }
 }
