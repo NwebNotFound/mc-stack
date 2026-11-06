@@ -208,7 +208,7 @@ mc-stack pushes the current worlds to `POST /api/mc-vip-worlds` with the ingest 
 }
 ```
 
-`vip_worlds` is the complete list of live worlds, at most 500 per sync. mc-stack never sends a shortened list: above 500 it skips the sync and logs `VIP-Sync`, and the website keeps its last list. `visibility` on each world is `friends` or `private`. `settings` carries the six plain world rules the panel edits; when the key is absent the website applies the same defaults as this example. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
+`vip_worlds` is the complete list of live worlds, at most 500 per sync and at most 1,900,000 bytes as stored JSON (UTF-8; D1 allows 2,000,000 per value). Nothing is ever shortened: above 500 worlds mc-stack skips the sync and logs `VIP-Sync`. A list over the byte limit is rejected whole by the website (400), mc-stack logs `VIP-Sync: … HTTP 400`, and the website keeps its last list. `visibility` on each world is `friends` or `private`. `settings` carries the six plain world rules the panel edits; when the key is absent the website applies the same defaults as this example. `invites` is the invite list. `role` is `member` or `trusted`. `name` is null when the UUID is not in `known_players`. `last_started_at` is null before the first successful start. `slot` is null when the world is stopped. `players` is the number of `player_presence` rows with `online=true` for that slot, or 0 when `slot` is null.
 
 For each of `vip_worlds` and `vip_admin_log`:
 
