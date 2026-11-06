@@ -655,6 +655,7 @@ function readBackupEntries(dir: string): Array<Record<string, unknown>> {
         created_at: mtime,
         complete: existsSync(`${full}/COMPLETE.txt`),
         has_sql_dump: existsSync(`${full}/craftcore.sql`),
+        has_luckperms_dump: existsSync(`${full}/luckperms.sql`),
       };
     })
     .sort((a, b) => String(b.name).localeCompare(String(a.name)));
@@ -954,9 +955,14 @@ function findFreshBackup(deps: ActionDeps): Record<string, unknown> | null {
 }
 
 /** Newest complete backup with its age, or null when there is none. */
+/**
+ * Newest backup that can actually be restored (issue #145): COMPLETE.txt plus
+ * BOTH database dumps. A backup without the LuckPerms dump cannot restore ranks
+ * or purchased VIP permissions, so it does not satisfy the T2 backup gate.
+ */
 export function newestCompleteBackup(deps: Pick<ActionDeps, "allow" | "now">): Record<string, unknown> | null {
   const entries = readBackupEntries(deps.allow.paths.backups);
-  const fresh = entries.find((entry) => entry.complete === true);
+  const fresh = entries.find((entry) => entry.complete === true && entry.has_sql_dump === true && entry.has_luckperms_dump === true);
   if (!fresh) return null;
   const createdAt = fresh.created_at ? Date.parse(String(fresh.created_at)) : NaN;
   if (!Number.isFinite(createdAt)) return { ...fresh, age_seconds: null, age_hours: null };
@@ -982,7 +988,7 @@ function ensureRecentBackup(deps: ActionDeps): BackupCheck {
     return {
       ok: false,
       code: "no_recent_backup",
-      message: `no complete backup found under ${deps.allow.paths.backups}; run backup.ps1 on the host first (a T2 action needs one younger than ${maxAgeHours}h)`,
+      message: `no complete backup (COMPLETE.txt + craftcore.sql + luckperms.sql) found under ${deps.allow.paths.backups}; run backup.ps1 on the host first (a T2 action needs one younger than ${maxAgeHours}h)`,
       result: { mode: "recent_only", latest: latest ?? null, max_age_hours: maxAgeHours },
     };
   }
