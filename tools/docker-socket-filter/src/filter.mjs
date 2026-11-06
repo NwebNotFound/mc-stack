@@ -27,6 +27,7 @@
  * socket. It is the privilege boundary, so it is small, has no dependencies, no
  * outbound network, and is the only service that mounts the socket.
  */
+import { createHash, timingSafeEqual } from "node:crypto";
 import net from "node:net";
 
 export const CRLF = "\r\n";
@@ -37,6 +38,25 @@ export const MAX_QUERY_BYTES = 4096;
 export const MAX_FILTERS_BYTES = 2048;
 export const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_MAX_LOG_TARGET = 512;
+/** Hard cap on `tail` for the logs route; `tail` itself is mandatory there. */
+export const MAX_LOG_TAIL = 300;
+/** Minimum length of the shared bearer token (OPS_FILTER_TOKEN). */
+export const MIN_TOKEN_LENGTH = 24;
+
+/**
+ * Constant-time bearer check. Both sides are hashed first so the comparison
+ * never leaks the token length and `timingSafeEqual` always sees equal-sized
+ * buffers. Returns false for a missing/garbled header.
+ */
+export function checkBearer(headerValue, token) {
+  if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) return false;
+  if (typeof headerValue !== "string") return false;
+  const m = /^Bearer ([\x21-\x7e]+)$/.exec(headerValue.trim());
+  const presented = m ? m[1] : "";
+  const a = createHash("sha256").update(presented, "utf8").digest();
+  const b = createHash("sha256").update(token, "utf8").digest();
+  return timingSafeEqual(a, b) && m !== null;
+}
 
 /**
  * Restart allowlists. Names are the real compose container names
@@ -76,6 +96,19 @@ export function resolveRestartAllow(cfg = {}) {
   const t1 = cfg.restartAllow ?? DEFAULT_RESTART_ALLOW_T1;
   const t2 = cfg.restartAllowT2 ?? DEFAULT_RESTART_ALLOW_T2;
   return [...new Set([...t1, ...t2])];
+}
+
+/**
+ * Unset/empty -> the built-in default (compose's `${VAR:-default}` cannot pass
+ * an empty value through anyway). The literal `none` -> an empty list, i.e. no
+ * container on that list may be restarted at all.
+ */
+export function parseAllow(raw, fallback) {
+  if (raw !== undefined && raw.trim().toLowerCase() === "none") return [];
+  return (raw === undefined || raw.trim() === "" ? fallback.join(",") : raw)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 /** Container name / id shape accepted in a path segment. */
@@ -141,6 +174,7 @@ export function parseHead(raw) {
     if (name === "transfer-encoding") deny("transfer_encoding");
     if (name === "upgrade") deny("upgrade");
     if (name === "connection" && /upgrade/i.test(value)) deny("connection_upgrade");
+    if (name === "authorization" && headers.has(name)) deny("duplicate_authorization");
     if (!headers.has(name)) headers.set(name, value);
   }
 
@@ -237,11 +271,11 @@ export function classify(method, target, cfg) {
   if (action === "logs") {
     if (method !== "GET") deny("method_not_allowed");
     keysAllowed("container_logs");
+    // `tail` is mandatory: without it the daemon returns the WHOLE log.
     const tail = query.get("tail");
-    if (tail !== undefined) {
-      if (!/^\d{1,4}$/.test(tail)) deny("bad_tail_value");
-      if (Number(tail) > 300) deny("tail_too_large");
-    }
+    if (tail === undefined) deny("tail_required");
+    if (!/^\d{1,4}$/.test(tail)) deny("bad_tail_value");
+    if (Number(tail) > MAX_LOG_TAIL) deny("tail_too_large");
     for (const key of ["stdout", "stderr", "timestamps"]) {
       const value = query.get(key);
       if (value !== undefined && !BOOL01.has(value)) deny(`bad_${key}_value`);
@@ -271,7 +305,7 @@ export function classify(method, target, cfg) {
 }
 
 function statusText(status) {
-  return status === 403 ? "Forbidden" : status === 502 ? "Bad Gateway" : "Error";
+  return status === 401 ? "Unauthorized" : status === 403 ? "Forbidden" : status === 502 ? "Bad Gateway" : "Error";
 }
 
 /** Send a small JSON error and close. */
@@ -408,10 +442,17 @@ function readUpstream(sock, maxBytes) {
 
 /**
  * The filter server. `cfg`:
- *   upstreamSocketPath, restartAllow[], maxResponseBytes, maxHeadBytes,
- *   maxLogTarget, log(entry)
+ *   upstreamSocketPath, token, restartAllow[], restartAllowT2[],
+ *   maxResponseBytes, maxHeadBytes, maxLogTarget, log(entry)
+ *
+ * `token` is REQUIRED (>= MIN_TOKEN_LENGTH chars): every request except the
+ * read-only `/_ping` probe must carry `Authorization: Bearer <token>`, compared
+ * in constant time. A missing/wrong token is a 401 and is never forwarded.
  */
 export function createFilterServer(cfg) {
+  if (typeof cfg.token !== "string" || cfg.token.length < MIN_TOKEN_LENGTH) {
+    throw new Error(`docker-socket-filter: a token of at least ${MIN_TOKEN_LENGTH} characters is required`);
+  }
   const log = cfg.log ?? (() => {});
   const maxHeadBytes = cfg.maxHeadBytes ?? MAX_HEAD_BYTES;
   const maxResponseBytes = cfg.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
@@ -473,6 +514,17 @@ export function createFilterServer(cfg) {
             route = classify(req.method, req.target, cfg);
           } catch (err) {
             reject(err.code ?? "denied", req.target, req.method);
+            return;
+          }
+
+          // Auth after routing so the audit line can name the route; the health
+          // probe `/_ping` (read-only, returns only the API version) is the one
+          // documented exception so the container HEALTHCHECK needs no secret.
+          if (route.route !== "ping" && !checkBearer(req.headers.get("authorization"), cfg.token)) {
+            record({ event: "denied", code: "unauthorized", method: req.method, target: req.target.slice(0, maxLogTarget) });
+            closed = true;
+            sendError(socket, 401, "unauthorized");
+            socket.setTimeout(2000, () => socket.destroy());
             return;
           }
 

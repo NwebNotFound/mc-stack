@@ -11,6 +11,7 @@ import { AuditLog } from "./audit.js";
 import { loadAllowlist, type Allowlist } from "./allowlist.js";
 import { loadConfig, type OpsConfig } from "./config.js";
 import { DockerCli } from "./docker.js";
+import { writeDockerAuthConfig } from "./docker-auth.js";
 import { FileJobClient } from "./jobs.js";
 import { logger } from "./logger.js";
 import { ExecRunner } from "./runner.js";
@@ -21,6 +22,13 @@ function bootstrap(): { cfg: OpsConfig; allow: Allowlist } | null {
   try {
     const cfg = loadConfig();
     const allow = loadAllowlist(cfg.allowlistPath);
+    if (cfg.filterToken) {
+      // Every `docker` child inherits DOCKER_CONFIG and so sends the filter's
+      // bearer token (see docker-auth.ts).
+      process.env.DOCKER_CONFIG = writeDockerAuthConfig(cfg.filterToken, cfg.dockerConfigDir);
+    } else {
+      logger.warn("OPS_FILTER_TOKEN is unset: docker-socket-filter will refuse every docker call (401)");
+    }
     return { cfg, allow };
   } catch (exc) {
     logger.error("refusing to start", { error: (exc as Error).message });

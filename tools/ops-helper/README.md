@@ -20,6 +20,8 @@ hermes-mcp            (compose networks `mcp` + `mc-stack-ops`; read_only,
         ▼
 ops-helper            (NO docker socket: DOCKER_HOST=tcp://docker-socket-filter:2375,
         │              repo mounted read-only, fixed allowlist)
+        │  Bearer OPS_FILTER_TOKEN                  ── network `mc-stack-ops-docker`
+        │              (internal: true; ONLY ops-helper + the filter)
         │  GET ps/inspect/logs + POST restart of the T1/T2 names; create/exec/
         │  start/stop/kill are refused by the filter
         │  build/test  ->  job-<uuid>.json  ->  volume `mc-stack-ops-jobs`
@@ -289,7 +291,11 @@ which a build container runs unlimited or on the host network.
 ops-helper does **not** hold `/var/run/docker.sock`. Its `DOCKER_HOST` points at
 `docker-socket-filter` (a compose service **built from this repo**,
 `tools/docker-socket-filter`), which is the only container with the socket, has
-no host port and lives only in the internal `mc-stack-ops` network.
+no host port and lives only in the internal `mc-stack-ops-docker` network, which
+only ops-helper shares (hermes-mcp is not a member). Every request except
+`/_ping` must carry `Authorization: Bearer $OPS_FILTER_TOKEN`; the helper writes a
+private Docker CLI config (`HttpHeaders`, `/tmp/ops-docker-config`, mode 0600) at
+startup and points `DOCKER_CONFIG` at it, so every `docker` call sends it.
 
 The filter is a ~400-line, dependency-free Node HTTP filter in front of the
 socket. It allowlists **exact method + path + query** and returns `403` for
@@ -300,7 +306,7 @@ everything else:
 | `HEAD`, `GET` | `/_ping` | *(none)* | the CLI's version-negotiation/health probe (documented exception) |
 | `GET` | `/containers/json` | `all`, `filters` | `ops_status` (`docker ps`) |
 | `GET` | `/containers/<ref>/json` | *(none)* | `ops_logs`, `ops_restart_service` (`docker inspect`) |
-| `GET` | `/containers/<ref>/logs` | `stdout`, `stderr`, `tail<=300`, `timestamps`, `since`, `until` | `ops_logs` |
+| `GET` | `/containers/<ref>/logs` | `tail` (required, `<=300`), `stdout`, `stderr`, `timestamps`, `since`, `until` | `ops_logs` |
 | `POST` | `/containers/<name>/restart` | `t` ∈ 0..30 | `ops_restart_service`, `ops_restart_game`, `ops_deploy_plugin` — **only** for an exact name from `OPS_FILTER_RESTART_ALLOW` (T1) or `OPS_FILTER_RESTART_ALLOW_T2` (T2) |
 
 The restart allowlist is split in two on purpose:
@@ -514,6 +520,8 @@ deletes the file.
 | `OPS_BUILDER_TIMEOUT_SECONDS` / `OPS_BUILDER_POLL_MS` | `1800` / `1000` | how long to wait for a job answer, and how often to look |
 | `OPS_ACTION_TIMEOUT_SECONDS` / `OPS_BUILD_TIMEOUT_SECONDS` | `120` / `1800` | per-command and per-build timeouts |
 | `OPS_DOCKER_BIN` | `docker` | docker CLI path |
+| `OPS_FILTER_TOKEN` | *(empty)* | bearer token for docker-socket-filter (>= 24 chars, same value as the filter's); empty → every docker call is refused with 401 |
+| `OPS_DOCKER_CONFIG_DIR` | `/tmp/ops-docker-config` | private Docker CLI config dir that carries the filter token |
 | `DOCKER_HOST` | *(unset in the image)* | set by compose to `tcp://docker-socket-filter:2375`; without the filter the helper cannot reach Docker at all |
 | `DOCKER_API_VERSION` | *(unset in the image)* | set by compose (`1.51`): with an explicit API version the CLI skips `GET /version`, which the filter refuses |
 | `OPS_BACKUP_INTERPRETERS` | `pwsh,powershell` | candidates for running `backup.ps1` |
@@ -587,7 +595,8 @@ Two suites are specific to this PR:
 
 * `test/proxy.test.mjs` parses the compose service blocks and asserts that
   **exactly one** service mounts the Docker socket (the filter), that it has no
-  host port, lives only in the internal `mc-stack-ops` network, is hardened
+  host port, lives only in the internal `mc-stack-ops-docker` network (shared
+  only with ops-helper), shares `OPS_FILTER_TOKEN` with the helper, is hardened
   (`read_only`, `cap_drop: ALL`, `no-new-privileges`), that `ops-helper` mounts
   no socket and talks to it over TCP, that the two restart lists are disjoint and
   contain no forbidden container, and that `plugin-builder` has `network_mode:
@@ -648,7 +657,8 @@ The filter itself has its own suite in `tools/docker-socket-filter/`:
   helper (after you have decided who may hold the ops token).
 * `docker_failed` on every call — the helper cannot reach Docker. Check
   `docker compose logs docker-socket-filter` and that the filter is on the same
-  `mc-stack-ops` network; a `403 Forbidden` message means the filter refused the
+  `mc-stack-ops-docker` network; a `401 Unauthorized` message means
+  `OPS_FILTER_TOKEN` is unset or differs between the two services; a `403 Forbidden` message means the filter refused the
   method/path/query, which is the intended behaviour for anything not in the
   table above. `GET /version` being refused is normal (the helper pins
   `DOCKER_API_VERSION` so the CLI never asks for it).
