@@ -39,6 +39,11 @@ export interface Config {
 
   /** Peers allowed to set X-Forwarded-For (empty: never trust the header). */
   trustedProxies: string[];
+  /**
+   * Compose service names whose resolved addresses are trusted proxies too
+   * (default: none in code; compose sets `cloudflared-mcp`).
+   */
+  trustedProxyHosts: string[];
   /** Consecutive bad tokens before an IP is locked out. */
   lockoutAfter: number;
   /** Longest exponential lockout in seconds (also the first-block length). */
@@ -210,6 +215,7 @@ export function loadConfig(): Config {
     unknownTimeoutSeconds: num("HERMES_MCP_UNKNOWN_TIMEOUT_SECONDS", 7200, 60, 86400),
 
     trustedProxies: list("HERMES_MCP_TRUSTED_PROXIES", []),
+    trustedProxyHosts: list("HERMES_MCP_TRUSTED_PROXY_HOSTS", []).filter((h) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(h)),
     lockoutAfter: num("HERMES_MCP_LOCKOUT_AFTER", 5, 1, 1000),
     lockoutMaxSeconds: num("HERMES_MCP_LOCKOUT_SECONDS", 300, 1, 86400),
 
@@ -239,6 +245,7 @@ export function loadConfig(): Config {
     auth: cfg.tokens.length,
     port: cfg.port,
     trusted_proxies: cfg.trustedProxies.length,
+    trusted_proxy_hosts: cfg.trustedProxyHosts,
     allowed_models: cfg.allowedModels.length,
     max_runs_per_day: cfg.maxRunsPerDay,
     ops_helper: cfg.opsHelperUrl && cfg.opsHelperToken ? "enabled" : "disabled",
