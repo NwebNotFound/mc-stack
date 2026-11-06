@@ -144,6 +144,12 @@ public final class PvpMatches implements Listener {
         if(PvpAccess.blocksTeleport(s.world.getName(),s.finishing,worldName(e.getFrom()),worldName(e.getTo()))) { e.setCancelled(true); e.getPlayer().sendMessage("Waehrend eines PvP-Matches nicht moeglich."); }
     }
     private static String worldName(Location l) { return l==null || l.getWorld()==null ? null : l.getWorld().getName(); }
+    /** Plugin disable or server stop mid-match: mark the open assignments failed so they stop holding the server. */
+    @EventHandler public void disable(org.bukkit.event.server.PluginDisableEvent e) {
+        if(e.getPlugin()!=plugin) return;
+        List<String> open=new ArrayList<>(sessions.keySet());
+        try { store.failOpen(open); } catch(SQLException | RuntimeException ex) { plugin.getLogger().warning("PvP-Zuweisungen beim Stopp: "+ex.getMessage()); }
+    }
     private boolean inRound(Player player) { Session s=players.get(player.getUniqueId()); return s!=null && s.active && !s.finishing; }
     private void sendToBuild(Player player) {
         Runnable teleport=()->{ if(player.isOnline()) player.teleport(build.getSpawnLocation()); };

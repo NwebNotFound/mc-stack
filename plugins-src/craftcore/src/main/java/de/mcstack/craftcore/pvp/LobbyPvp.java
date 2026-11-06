@@ -41,6 +41,9 @@ public final class LobbyPvp implements Listener, TabExecutor {
     private final Map<UUID, String> lastKit = new HashMap<>();
     private final AtomicBoolean buildStarting = new AtomicBoolean();
     private final AtomicBoolean warming = new AtomicBoolean();
+    /** Hold writes run on async tasks in any order; only the newest state may reach the database. */
+    private final java.util.concurrent.atomic.AtomicLong holdVersion = new java.util.concurrent.atomic.AtomicLong();
+    private final Object holdLock = new Object();
     // Accessed only on the server thread, including while a pair is starting.
     private final Set<UUID> matching = new HashSet<>();
     private String activeMatchId;
@@ -86,6 +89,18 @@ public final class LobbyPvp implements Listener, TabExecutor {
         Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 40L, 40L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::checkActiveMatch, 100L, 100L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::remindQueue, 600L, 600L);
+        // Refreshes the hold while players queue (it expires after PvpStore.HOLD_MAX_AGE_MS) and clears a hold left
+        // over from before a lobby restart; the first run is right after startup.
+        Bukkit.getScheduler().runTaskTimer(plugin, this::syncQueueHold, 20L, 1200L);
+    }
+    /** Lobby shutdown: the queue is gone with it, so the hold must not keep the PvP server up. */
+    @EventHandler public void disable(org.bukkit.event.server.PluginDisableEvent event) {
+        if (event.getPlugin() != plugin) return;
+        holdVersion.incrementAndGet();
+        synchronized (holdLock) {
+            try { store.holdForQueue(false); }
+            catch (Exception e) { plugin.getLogger().warning("PvP-Queue-Halteflag beim Stopp: " + e.getClass().getSimpleName()); }
+        }
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length > 0 && args[0].equalsIgnoreCase("debug-assign")) {
@@ -219,9 +234,13 @@ public final class LobbyPvp implements Listener, TabExecutor {
     }
     private void syncQueueHold() {
         boolean occupied = queue.size() > 0 || activeMatchId != null;
+        long version = holdVersion.incrementAndGet();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            try { store.holdForQueue(occupied); }
-            catch (Exception e) { plugin.getLogger().warning("PvP-Queue-Halteflag: " + e.getClass().getSimpleName()); }
+            synchronized (holdLock) {
+                if (version != holdVersion.get()) return; // a newer state is already queued
+                try { store.holdForQueue(occupied); }
+                catch (Exception e) { plugin.getLogger().warning("PvP-Queue-Halteflag: " + e.getClass().getSimpleName()); }
+            }
         });
     }
     private void tick() {
