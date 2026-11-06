@@ -59,7 +59,9 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
   shapes it can recognise: `Bearer …` headers, GitHub PATs (`ghp_…`,
   `github_pat_…`), OpenAI/OpenRouter/Kimi `sk-…` keys, `NAME=value` / `NAME: …`
   assignments whose name looks secret-bearing (`…TOKEN`, `…SECRET`, `…_KEY`,
-  `…PASSWORD`, `…CREDENTIAL`, `…AUTHORIZATION`, `…COOKIE`) and long hex blobs. It
+  `…PASSWORD`, `…CREDENTIAL`, `…AUTHORIZATION`, `…COOKIE`) — the value is
+  redacted up to the end of the line, quotes and backticks included — the MariaDB
+  image's `GENERATED ROOT PASSWORD: …` line, and long hex blobs. It
   is a safety net, not a proof: it normalises known patterns and leaves
   unrecognised secrets alone.
 - `cancel_run` requires `confirm=true`, otherwise `code: confirmation_required`.

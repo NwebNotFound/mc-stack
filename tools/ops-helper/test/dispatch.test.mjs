@@ -854,3 +854,20 @@ test("a COMPLETE backup without the LuckPerms dump does not satisfy the T2 backu
   assert.match(out.message, /luckperms\.sql/);
   assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined);
 });
+
+test("ops_logs never returns the MariaDB generated root password (issue #146)", async () => {
+  const pw = 'Zq"8`k)L;p\'w0rd-tail';
+  const logs = [
+    "2026-11-05T23:00:00.000000000Z 2026-11-05 23:00:00+00:00 [Note] [Entrypoint]: Entrypoint script for MariaDB Server started.",
+    `2026-11-05T23:00:01.000000000Z 2026-11-05 23:00:01+00:00 [Note] [Entrypoint]: GENERATED ROOT PASSWORD: ${pw}`,
+    "2026-11-05T23:00:02.000000000Z 2026-11-05 23:00:02 0 [Note] mariadbd: ready for connections.",
+  ].join("\n");
+  const deps = makeDeps({ runner: dockerRunner({ logs }) });
+  const out = await handleOp("ops_logs", { service: "craftcore-db", tail: 50 }, deps);
+  assert.equal(out.ok, true, out.message);
+  const text = out.result.lines.join("\n");
+  assert.ok(!text.includes("Zq") && !text.includes("w0rd-tail"), text);
+  assert.match(text, /GENERATED ROOT PASSWORD: \[redacted\]/);
+  assert.match(text, /ready for connections/);
+  assert.equal(out.result.redacted, true);
+});
