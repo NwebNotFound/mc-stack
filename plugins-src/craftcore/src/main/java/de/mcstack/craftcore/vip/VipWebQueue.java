@@ -58,6 +58,21 @@ public final class VipWebQueue {
         for (JsonElement element : items) {
             if (!element.isJsonObject()) continue;
             VipCommand.Parsed item = VipCommand.parse(element);
+            if (item.deny()) {
+                // Valid request and Discord IDs, broken content (e.g. malformed actor_uuid): ack
+                // denied once, never execute. An earlier stored ack is resent unchanged.
+                VipCommand command = item.command();
+                try {
+                    Optional<Outcome> done = acks.look(command.discordId(), command.requestId());
+                    Outcome outcome = done.orElse(Outcome.denied(item.error()));
+                    if (done.isEmpty()) acks.save(command.discordId(), command.requestId(), outcome.status(), outcome.reason());
+                    acksOut.add(ack(command, outcome));
+                    answered++;
+                } catch (Exception e) {
+                    log.accept("VIP-Queue: " + command.requestId() + " fehlgeschlagen (" + e.getClass().getSimpleName() + ")");
+                }
+                continue;
+            }
             if (!item.ok()) {
                 // Ohne brauchbare Kennung gibt es nichts zu quittieren; die Zeile bleibt im Log.
                 log.accept("VIP-Queue: Auftrag ohne gültige Kennung übersprungen (" + item.error() + ")");

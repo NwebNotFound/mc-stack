@@ -65,6 +65,10 @@ class VipWebCommandsTest {
         }
     }
 
+    private void exec(String sql) throws SQLException {
+        try (Statement s = db.createStatement()) { s.execute(sql); }
+    }
+
     private void world(UUID owner, String status, String slot) throws SQLException {
         try (PreparedStatement s = db.prepareStatement("INSERT INTO vip_worlds(id,owner,name,type,status,slot,created_at,visibility) VALUES (?,?,?,?,?,?,?,'private')")) {
             s.setString(1, WORLD);
@@ -102,6 +106,76 @@ class VipWebCommandsTest {
     private static VipCommand command(String action, String discordId, String confirm) {
         return new VipCommand("req-" + action, discordId, NOW - 1000, action, WORLD, null, null, null, null,
             confirm, null, false);
+    }
+
+    // Live failure 06.11. (deploy-pr167-evidence): the admin was linked on the website (mc_links)
+    // but MariaDB discord_links had no row, so every web command acked denied/not_linked.
+    private static final UUID WEB_ADMIN = UUID.fromString("66666666-6666-4666-8666-666666666666");
+    private static VipCommand create(String discordId, String actorUuid) {
+        return create(discordId, actorUuid, actorUuid == null ? null : Boolean.TRUE);
+    }
+    private static VipCommand create(String discordId, String actorUuid, Boolean linked) {
+        return new VipCommand("req-create", discordId, NOW - 1000, "create", null, "AdminTest", "normal", null, null,
+            null, null, false, actorUuid, linked);
+    }
+
+    // Review #168: the link is rechecked when the website serves the item (linked).
+    @Test void unlinkedOrRoleLostBeforeDispatchIsNotLinkedEvenWithAMatchingLocalRow() throws Exception {
+        database();
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000004", ADMIN.toString(), Boolean.FALSE));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+        assertEquals(0, new VipStore(() -> DriverManager.getConnection(url)).count(ADMIN));
+    }
+
+    @Test void websiteUuidWithoutTheDispatchCheckIsNotTrusted() throws Exception {
+        database();
+        ranks.put(WEB_ADMIN, "admin");
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000009", WEB_ADMIN.toString(), null));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+    }
+
+    @Test void deleteUsesTheConfirmedNameAgainstTheCurrentWorldName() throws Exception {
+        database();
+        world(OWNER, "stopped", null);
+        exec("UPDATE vip_worlds SET name='Umbenannt' WHERE id='" + WORLD + "'");
+        VipWebQueue.Outcome renamed = commands().apply(command("delete", "100000000000000001", "Kirschtal"));
+        assertEquals("denied", renamed.status());
+        assertEquals("invalid_name", renamed.reason(), "renamed after the user typed the old name");
+        VipWebQueue.Outcome ok = commands().apply(command("delete", "100000000000000001", "Umbenannt"));
+        assertEquals("done", ok.status(), ok.reason());
+    }
+
+    @Test void websiteLinkCreatesWithoutALocalDiscordLinkRow() throws Exception {
+        database();
+        ranks.put(WEB_ADMIN, "admin");
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000009", WEB_ADMIN.toString()));
+        assertEquals("done", out.status(), out.reason());
+        assertEquals(1, new VipStore(() -> DriverManager.getConnection(url)).count(WEB_ADMIN));
+    }
+
+    @Test void withoutAnyLinkTheCommandIsStillNotLinked() throws Exception {
+        database();
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000009", null));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+    }
+
+    @Test void aLocalLinkThatDisagreesWithTheWebsiteIsNotLinked() throws Exception {
+        database();
+        ranks.put(WEB_ADMIN, "admin");
+        // discord 100000000000000004 is locally linked to ADMIN, the website says WEB_ADMIN
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000004", WEB_ADMIN.toString()));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+        assertEquals(0, new VipStore(() -> DriverManager.getConnection(url)).count(WEB_ADMIN));
+    }
+
+    @Test void aMatchingLocalLinkStillWorks() throws Exception {
+        database();
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000004", ADMIN.toString()));
+        assertEquals("done", out.status(), out.reason());
     }
 
     @Test void trustedMemberWithoutRankStartsTheWorld() throws Exception {

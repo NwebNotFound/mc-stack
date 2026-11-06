@@ -39,6 +39,29 @@ class VipWebQueueTest {
             + "\"world_id\":\"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\"}";
     }
 
+    @Test void malformedActorUuidIsAckedDeniedOnceAndNeverApplied() throws Exception {
+        FakeTransport http = new FakeTransport();
+        MemoryAcks acks = new MemoryAcks();
+        List<String> applied = new ArrayList<>();
+        http.body = "{\"items\":[{\"request_id\":\"req-bad\",\"discord_id\":\"100000000000000001\",\"created_at\":" + (NOW - 1000)
+            + ",\"action\":\"create\",\"name\":\"AdminTest\",\"actor_uuid\":\"not-a-uuid\",\"linked\":true}]}";
+        VipWebQueue queue = new VipWebQueue(http, acks, c -> { applied.add(c.requestId()); return VipWebQueue.Outcome.done(); }, line -> { });
+        assertEquals(1, queue.pollOnce(NOW));
+        assertTrue(applied.isEmpty(), "never executed");
+        assertEquals("denied:invalid_player", acks.saved.get("100000000000000001/req-bad"));
+        assertTrue(http.posts.get(0).contains("\"status\":\"denied\"") && http.posts.get(0).contains("\"reason\":\"invalid_player\""), http.posts.get(0));
+        assertEquals(1, queue.pollOnce(NOW + 5000), "a lost ack POST is resent from the store");
+        assertTrue(applied.isEmpty());
+    }
+
+    @Test void itemWithoutUsableIdsIsStillSkippedUnacked() throws Exception {
+        FakeTransport http = new FakeTransport();
+        http.body = "{\"items\":[{\"request_id\":\"bad id\",\"discord_id\":\"1\",\"created_at\":" + (NOW - 1000) + ",\"action\":\"create\"}]}";
+        VipWebQueue queue = new VipWebQueue(http, new MemoryAcks(), c -> VipWebQueue.Outcome.done(), line -> { });
+        assertEquals(0, queue.pollOnce(NOW));
+        assertTrue(http.posts.isEmpty());
+    }
+
     @Test void appliesOnceAndResendsTheStoredAck() throws Exception {
         FakeTransport http = new FakeTransport();
         MemoryAcks acks = new MemoryAcks();
