@@ -219,8 +219,8 @@ async def event_loop(bot):
                                                "WHERE e.event_id > %s AND e.type IN ('CREATED','SOLD') ORDER BY e.event_id LIMIT 20", (last,))
                 ch = bot.get_channel(cid) or await bot.fetch_channel(cid)
                 for eid, typ, seller, buyer, pr, mat, disp, amount, lid, suuid in rows:
-                    item = f"{amount or ''}× {item_name(mat, disp)}" if mat else "ein Item"
                     esc = discord.utils.escape_markdown
+                    item = f"{amount or ''}× {esc(item_name(mat, disp))}" if mat else "ein Item"  # Anvil-Name ist spielergesteuert (#151)
                     if typ == "CREATED":
                         msg = f"-# 🛒 **{esc(seller)}** bietet **{item}** für **{price(pr)}** an"
                     else:
@@ -288,7 +288,7 @@ async def check_alarms(bot, lid, seller, suuid, mat, disp, amount, pr, hint=None
             bot.db.commit()
         except Exception:
             continue  # schon benachrichtigt
-        e = discord.Embed(title=f"🔔 {item_name(mat, disp)} im Angebot", color=0x57F287,
+        e = discord.Embed(title=f"🔔 {discord.utils.escape_markdown(item_name(mat, disp))} im Angebot", color=0x57F287,
                           description=f"**{amount}×** für **{price(pr)}** · {price(unit)} pro Stück")
         e.add_field(name="Verkäufer", value=discord.utils.escape_markdown(seller))
         e.set_footer(text=f"Klick auf Jetzt kaufen oder ingame: {hint or '/shop ' + seller} · Alarm #{aid}")

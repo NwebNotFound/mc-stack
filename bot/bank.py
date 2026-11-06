@@ -105,12 +105,13 @@ async def place(bot, interaction, item, amount):
     import aiohttp, buy
     u = buy.linked_uuid(bot, interaction.user.id)
     if not u:
-        return await interaction.response.send_message("\U0001F517 Zum Kaufen musst du erst dein Minecraft-Konto mit `/link` verkn\u00fcpfen.", ephemeral=True)
+        return await _reply(interaction, "\U0001F517 Zum Kaufen musst du erst dein Minecraft-Konto mit `/link` verkn\u00fcpfen.")
     try:
         o = make_order(item, amount, u)
     except ValueError:
-        return await interaction.response.send_message("Bitte eine Menge von 1 bis %d w\u00e4hlen." % MAX_AMOUNT, ephemeral=True)
-    await interaction.response.defer(ephemeral=True, thinking=True)
+        return await _reply(interaction, "Bitte eine Menge von 1 bis %d w\u00e4hlen." % MAX_AMOUNT)
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     async with aiohttp.ClientSession() as session:
         st, val = await submit(session, o, interaction.user.id)
     if st == "ok":
@@ -119,10 +120,28 @@ async def place(bot, interaction, item, amount):
     await interaction.followup.send(f"\u274c {val}" if st == "err" else SOON, ephemeral=True)
 
 
+USED = "Diese Auswahl wurde schon benutzt. Starte den Bank-Kauf bitte neu."
+
+
+async def _reply(interaction, msg, **kw):
+    if interaction.response.is_done():
+        return await interaction.followup.send(msg, ephemeral=True, **kw)
+    return await interaction.response.send_message(msg, ephemeral=True, **kw)
+
+
+def _close(view):
+    """Auswahl nur einmal nutzbar (#151): sonst bestellt jede weitere Wahl erneut (neue request_id)."""
+    if view is None:
+        return
+    for c in view.children:
+        c.disabled = True
+    view.stop()
+
+
 class AmountModal(discord.ui.Modal, title="Wie viele bei der Bank kaufen?"):
-    def __init__(self, bot, item):
+    def __init__(self, bot, item, parent=None):
         super().__init__()
-        self.bot, self.item = bot, item
+        self.bot, self.item, self.parent = bot, item, parent
         self.qty = discord.ui.TextInput(label=f"Menge (1-{MAX_AMOUNT})", default="1", max_length=5)
         self.add_item(self.qty)
 
@@ -130,6 +149,10 @@ class AmountModal(discord.ui.Modal, title="Wie viele bei der Bank kaufen?"):
         v = str(self.qty.value).strip()
         if not v.isdigit():
             return await interaction.response.send_message(f"Bitte eine Zahl von 1 bis {MAX_AMOUNT} eingeben.", ephemeral=True)
+        if self.parent is not None:
+            if self.parent.is_finished():
+                return await interaction.response.send_message(USED, ephemeral=True)
+            _close(self.parent)
         await place(self.bot, interaction, self.item, int(v))
 
 
@@ -142,8 +165,12 @@ class AmountSelect(discord.ui.Select):
 
     async def callback(self, interaction):
         v = self.values[0]
+        if self.view is not None and self.view.is_finished():
+            return await interaction.response.send_message(USED, ephemeral=True)
         if v == "custom":
-            return await interaction.response.send_modal(AmountModal(self.bot, self.item))
+            return await interaction.response.send_modal(AmountModal(self.bot, self.item, self.view))
+        _close(self.view)
+        await interaction.response.edit_message(view=self.view)
         await place(self.bot, interaction, self.item, int(v))
 
 
