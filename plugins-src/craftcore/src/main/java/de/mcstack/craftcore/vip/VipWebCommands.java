@@ -53,7 +53,7 @@ public final class VipWebCommands implements VipWebQueue.Applier {
     private VipWebQueue.Outcome create(VipCommand c, UUID actor, String rank, boolean admin) throws Exception {
         String type = c.type() == null || c.type().isBlank() ? "normal" : c.type();
         VipCommand withType = new VipCommand(c.requestId(), c.discordId(), c.createdAt(), c.action(), c.worldId(),
-            c.name(), type, c.visibility(), c.role(), c.confirm(), c.settings(), c.hasSettings(), c.actorUuid());
+            c.name(), type, c.visibility(), c.role(), c.confirm(), c.settings(), c.hasSettings(), c.actorUuid(), c.linked());
         int owned = store.count(actor);
         boolean taken = !store.ownersOf(c.name()).isEmpty();
         VipCommandRules.Context ctx = new VipCommandRules.Context(admin, false, false, trustedMayStart,
@@ -178,7 +178,10 @@ public final class VipWebCommands implements VipWebQueue.Applier {
      */
     Optional<UUID> actor(VipCommand c) throws SQLException {
         Optional<UUID> local = link(c.discordId());
-        if (c.actorUuid() == null) return local;
+        // The website says the link is gone (unlink, lost role, relinked elsewhere): fail closed.
+        if (Boolean.FALSE.equals(c.linked())) return Optional.empty();
+        // Without the website's dispatch-time check the UUID from the queue is not trusted.
+        if (c.actorUuid() == null || !Boolean.TRUE.equals(c.linked())) return local;
         UUID web = UUID.fromString(c.actorUuid());
         if (local.isPresent() && !local.get().equals(web)) return Optional.empty();
         return Optional.of(web);

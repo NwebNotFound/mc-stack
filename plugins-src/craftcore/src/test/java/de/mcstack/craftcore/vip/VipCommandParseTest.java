@@ -25,9 +25,18 @@ class VipCommandParseTest {
         assertNull(parse("").command().actorUuid());
     }
 
-    @Test void malformedActorUuidIsABrokenItem() {
+    @Test void malformedActorUuidIsDeniedNotSkipped() {
         VipCommand.Parsed p = parse(",\"actor_uuid\":\"not-a-uuid\"");
         assertFalse(p.ok());
+        assertTrue(p.deny(), "ids are valid, so it is acked denied");
         assertEquals("invalid_player", p.error());
+        assertEquals("r1", p.command().requestId());
+    }
+
+    @Test void readsTheDispatchTimeLinkFlag() {
+        assertEquals(Boolean.TRUE, parse(",\"linked\":true").command().linked());
+        assertEquals(Boolean.FALSE, parse(",\"linked\":false").command().linked());
+        assertNull(parse("").command().linked());
+        assertNull(parse(",\"linked\":\"yes\"").command().linked(), "only a JSON boolean counts");
     }
 }
