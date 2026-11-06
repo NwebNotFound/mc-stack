@@ -77,9 +77,18 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   for(String sql:List.of(ParkourSql.CREATE_COURSES,ParkourSql.ADD_DISPLAY,ParkourSql.ADD_ICON,ParkourSql.ADD_HIDDEN,ParkourSql.SEED_COURSES,ParkourSql.CAVE_NAME,ParkourSql.VIEW_COURSES)) s.execute(sql);
   try { syncCourses(c); } catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht synchronisiert werden",ex); }
  }
- private void syncCourses(Connection c) throws SQLException {
-  try(Statement source=ParkoursDatabase.getConnection().createStatement(); ResultSet rows=source.executeQuery("SELECT pk_name FROM parkours"); PreparedStatement insert=c.prepareStatement("INSERT INTO parkour_courses (slug) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM parkour_courses WHERE slug=?)")) {
-   while(rows.next()) { String slug=ParkourSql.course(rows.getString(1)); if(slug!=null) { insert.setString(1,slug); insert.setString(2,slug); insert.executeUpdate(); } }
+ private void syncCourses(Connection c) throws SQLException { insertCourses(c,lobbySlugs()); }
+ /** Kurs-Slugs aus Lobby Parkours geteilter SQLite-Verbindung: nur auf dem Main-Thread aufrufen. */
+ private List<String> lobbySlugs() throws SQLException {
+  List<String> slugs=new ArrayList<>();
+  try(Statement source=ParkoursDatabase.getConnection().createStatement(); ResultSet rows=source.executeQuery("SELECT pk_name FROM parkours")) {
+   while(rows.next()) { String slug=ParkourSql.course(rows.getString(1)); if(slug!=null) slugs.add(slug); }
+  }
+  return slugs;
+ }
+ private void insertCourses(Connection c,List<String> slugs) throws SQLException {
+  try(PreparedStatement insert=c.prepareStatement("INSERT INTO parkour_courses (slug) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM parkour_courses WHERE slug=?)")) {
+   for(String slug:slugs) { insert.setString(1,slug); insert.setString(2,slug); insert.executeUpdate(); }
   }
   try(Statement s=c.createStatement()) { s.executeUpdate(ParkourSql.CAVE_NAME); }
  }
@@ -87,9 +96,31 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug FROM parkour_courses ORDER BY slug")) { List<String> ids=new ArrayList<>(); while(r.next()) ids.add(r.getString(1)); return ids; } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return List.of(); }
  }
+ private volatile Map<String,String> courseNameCache=Map.of();
+ private volatile long courseNamesLoadedAt;
+ private final java.util.concurrent.atomic.AtomicBoolean loadingCourseNames=new java.util.concurrent.atomic.AtomicBoolean();
+ /**
+  * Kursnamen aus dem Cache (Main-Thread: Tab-Completion, Tafeln, Admin-Befehle). MariaDB wird nur
+  * im worker gelesen; ist der Cache aelter als 30 s, wird er im Hintergrund erneuert.
+  */
  Map<String,String> courseNames() {
-  try(Connection c=db()) { syncCourses(c); try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug, course_name FROM v_parkour_courses")) { Map<String,String> names=new LinkedHashMap<>(); while(r.next()) names.put(r.getString(1),r.getString(2)); return names; } }
-  catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); return Map.of(); }
+  if(System.currentTimeMillis()-courseNamesLoadedAt>30_000) refreshCourseNames();
+  return courseNameCache;
+ }
+ private void refreshCourseNames() {
+  if(worker.isShutdown() || !loadingCourseNames.compareAndSet(false,true)) return;
+  // Lobby Parkours SQLite-Verbindung auf dem Main-Thread lesen, MariaDB nur im worker.
+  List<String> slugs;
+  try { slugs=lobbySlugs(); } catch(SQLException ex) { loadingCourseNames.set(false); courseNamesLoadedAt=System.currentTimeMillis(); getLogger().log(Level.WARNING,"Parkour-Kurse konnten nicht gelesen werden",ex); return; }
+  try {
+   worker.execute(()->{
+    try(Connection c=db()) {
+     insertCourses(c,slugs);
+     try(Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT slug, course_name FROM v_parkour_courses")) { Map<String,String> names=new LinkedHashMap<>(); while(r.next()) names.put(r.getString(1),r.getString(2)); courseNameCache=Collections.unmodifiableMap(names); }
+    } catch(SQLException ex) { getLogger().log(Level.WARNING,"Kurse konnten nicht gelesen werden",ex); }
+    finally { courseNamesLoadedAt=System.currentTimeMillis(); loadingCourseNames.set(false); }
+   });
+  } catch(RejectedExecutionException ex) { loadingCourseNames.set(false); }
  }
  boolean updateCourse(String slug,String field,String value) throws SQLException {
   if(!List.of("display_name","icon").contains(field)) throw new IllegalArgumentException(field);
@@ -211,6 +242,7 @@ public final class ParkourBridge extends JavaPlugin implements Listener {
   Map<String,List<ParkourSql.Entry>> byCourse=new TreeMap<>(); Map<String,String> names=new HashMap<>();
   try(Connection c=db(); Statement s=c.createStatement()) { try(ResultSet n=s.executeQuery("SELECT slug,course_name FROM v_parkour_courses")) { while(n.next()) names.put(n.getString(1),n.getString(2)); } try(ResultSet r=s.executeQuery(ParkourSql.TOP)) { Map<String,Set<String>> seen=new HashMap<>(); while(r.next()) { String course=ParkourSql.course(r.getString(1)); if(course==null) continue; List<ParkourSql.Entry> entries=byCourse.computeIfAbsent(course,k->new ArrayList<>()); if(entries.size()<10 && seen.computeIfAbsent(course,k->new HashSet<>()).add(r.getString(2))) entries.add(new ParkourSql.Entry(r.getString(3),r.getLong(4))); } } }
   catch(SQLException ex) { getLogger().log(Level.WARNING,"Parkour-Bestenliste konnte nicht gelesen werden",ex); return; }
+  courseNameCache=Collections.unmodifiableMap(new LinkedHashMap<>(names));
   if(isEnabled()) getServer().getScheduler().runTask(this,()->renderAll(byCourse,names));
  }); }
  /** "board" = Sammeltafel aller Kurse (bisherige Tafel), "boards.<kurs>" = Top 10 eines Kurses. */
