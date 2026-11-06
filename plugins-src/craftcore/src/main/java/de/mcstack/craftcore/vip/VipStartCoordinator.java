@@ -35,6 +35,8 @@ public final class VipStartCoordinator {
     public interface Host {
         Reply start(String worldId);
         Reply status(String slot);
+        /** Stops a slot this coordinator started but no longer tracks. Blocking; called off the server thread. */
+        default void stop(String worldId, String slot) { }
     }
 
     /** Runs a task later. The plugin passes an asynchronous scheduler: polling does HTTP. */
@@ -45,7 +47,11 @@ public final class VipStartCoordinator {
     /** One callback per finished start. Implementations may block; they run off the server thread. */
     public interface Events {
         default void ready(String worldId, String slot) { }
-        /** Exactly once per start that ends without a slot. {@code began} tells whether the host was asked. */
+        /**
+         * Exactly once per start that ends without a connect. {@code began} tells whether the host was asked.
+         * A non-null {@code slot} was started by the host and must be stopped by the receiver; null means there is
+         * nothing to stop, or the coordinator stops it itself (a host reply that arrives after the cancel).
+         */
         default void finished(String worldId, String reason, String slot, boolean began) { }
     }
 
@@ -81,6 +87,8 @@ public final class VipStartCoordinator {
         final AtomicBoolean begun = new AtomicBoolean();
         final AtomicBoolean scheduled = new AtomicBoolean();
         final AtomicBoolean done = new AtomicBoolean();
+        /** Set by whoever takes over stopping the started slot, so it is stopped exactly once. */
+        final AtomicBoolean released = new AtomicBoolean();
         volatile String slot;
         volatile long startedAt;
         volatile long deadline;
@@ -168,7 +176,7 @@ public final class VipStartCoordinator {
 
     /** Plugin disable: fail every open start without touching the host or the database. */
     public void shutdown() {
-        for (Start start : List.copyOf(starts.values())) end(start, CANCELLED, false);
+        for (Start start : List.copyOf(starts.values())) { start.released.set(true); end(start, CANCELLED, false); }
         starts.clear();
     }
 
@@ -182,12 +190,14 @@ public final class VipStartCoordinator {
             case ONLINE -> {
                 if (blank(reply.slot())) { fail(start, START_FAILED); return; }
                 start.slot = reply.slot();
+                if (start.finished()) { stopLate(start); return; }
                 // Even a 200 from the start call is confirmed by one status ping before connecting.
                 poll(start);
             }
             case STARTING -> {
                 if (blank(reply.slot())) { fail(start, START_FAILED); return; }
                 start.slot = reply.slot();
+                if (start.finished()) { stopLate(start); return; }
                 if (clock.getAsLong() >= start.deadline) { fail(start, TIMEOUT); return; }
                 schedule(start);
             }
@@ -232,8 +242,28 @@ public final class VipStartCoordinator {
     private void end(Start start, String reason, boolean report) {
         if (!start.done.compareAndSet(false, true)) return;
         starts.remove(start.worldId, start);
-        if (report) notify(() -> events.finished(start.worldId, reason, start.slot, start.begun.get()));
+        if (report) {
+            String slot = claim(start);
+            notify(() -> events.finished(start.worldId, reason, slot, start.begun.get()));
+        }
         start.future.complete(Outcome.failed(reason));
+    }
+
+    /**
+     * The last waiter left (or the start failed) while {@code host.start} was still blocking: the host then booted a
+     * slot nobody tracks. Stop it here unless {@link #end} already saw the slot and handed it to {@link Events}.
+     */
+    private void stopLate(Start start) {
+        String slot = claim(start);
+        if (slot == null) return;
+        try { host.stop(start.worldId, slot); } catch (RuntimeException ignored) { }
+    }
+
+    /** The slot to stop, exactly once across {@link #end} and {@link #stopLate}; null when there is none or it is taken. */
+    private static String claim(Start start) {
+        String slot = start.slot;
+        if (blank(slot) || !start.released.compareAndSet(false, true)) return null;
+        return slot;
     }
 
     private static void notify(Runnable callback) {
