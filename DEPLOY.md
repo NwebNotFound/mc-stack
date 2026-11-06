@@ -91,3 +91,7 @@ Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig vo
 | `MCStack-Dev-Reset` | 05:10 (20 min Abstand) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nilsw\mc-stack\dev-reset.ps1` | verpasster Start an, Verzoegerung 10 min; neue Instanz nicht starten; Abbruch nach 1 h |
 
 Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben aktivieren"). Kein AtStartup-Task. Die Scheduler-Aenderungen gehoeren nicht in diesen PR und werden vom Homelab Deployer umgesetzt.
+
+## VIP-Web-Queue einschalten
+
+`compose.yaml` reicht `MC_INGEST_TOKEN` und `VIP_WEB_QUEUE` (Standard `0` = aus) an `lobby` und `survival` durch. Aktivieren: in `.env` `VIP_WEB_QUEUE=1` setzen (Token steht dort schon), dann Backup (`backup.ps1`) und `docker compose up -d --no-deps lobby survival`; im Lobby-Log nach `VIP-Queue` pruefen. Abschalten: `VIP_WEB_QUEUE=0` und die beiden Services neu erzeugen. Keine Secrets ins Repo.
