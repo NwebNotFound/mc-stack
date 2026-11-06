@@ -132,12 +132,17 @@ final class Features implements Listener {
           if(!p.isOnline()){release(claim.id());return;}
           List<ItemStack> items;
           try {items=decode(claim.items());} catch(Exception ex){plugin.getLogger().warning("Grabdaten unlesbar: "+ex);release(claim.id());p.sendMessage("Grab konnte nicht gelesen werden.");return;}
-          for(ItemStack item:items) if(item!=null) for(ItemStack excess:p.getInventory().addItem(item).values()) p.getWorld().dropItemNaturally(p.getLocation(),excess);
-          p.giveExp(claim.xp());
+          final List<ItemStack> loot=items;
+          // Close the grave out (CLAIMED, delivered=TRUE) first and hand out items only after that commit:
+          // a failed close-out leaves CLAIMING/delivered=FALSE with nothing given, so reopening it later cannot loot twice.
           Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
-            try {plugin.tx(c->{GraveStore.finish(c,claim.id());return null;});
-              Bukkit.getScheduler().runTask(plugin,()->{graveLocations.remove(graveKey(world,x,y,z));if(b.getType()==Material.PLAYER_HEAD || b.getType()==Material.BARREL)b.setType(Material.AIR);if(p.isOnline())p.sendMessage("Grab geleert.");});
-            } catch(Exception ex){plugin.getLogger().severe("Grab "+claim.id()+" ausgegeben, DB-Abschluss fehlgeschlagen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab ausgegeben; Datenbankabschluss fehlgeschlagen. Bitte Admin informieren.");});}
+            try {plugin.tx(c->{GraveStore.finish(c,claim.id());return null;});}
+            catch(Exception ex){plugin.getLogger().warning("Grab "+claim.id()+" DB-Abschluss fehlgeschlagen, nichts ausgegeben: "+ex);release(claim.id());Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geoeffnet werden. Bitte erneut versuchen.");});return;}
+            Bukkit.getScheduler().runTask(plugin,()->{
+              graveLocations.remove(graveKey(world,x,y,z));if(b.getType()==Material.PLAYER_HEAD || b.getType()==Material.BARREL)b.setType(Material.AIR);
+              if(p.isOnline()){for(ItemStack item:loot) if(item!=null) for(ItemStack excess:p.getInventory().addItem(item).values()) p.getWorld().dropItemNaturally(p.getLocation(),excess);p.giveExp(claim.xp());p.saveData();p.sendMessage("Grab geleert.");}
+              else for(ItemStack item:loot) if(item!=null) try{plugin.tx(c->{Deliveries.insert(c,UUID.randomUUID().toString(),playerId.toString(),item,"grave");return null;});}catch(Exception ex){plugin.getLogger().severe("Grab "+claim.id()+": Abholfach fehlgeschlagen, Item am Grab abgelegt: "+ex);b.getWorld().dropItemNaturally(b.getLocation(),item);}
+            });
           });
         });
       } catch(Exception ex){plugin.getLogger().warning("Grab oeffnen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geoeffnet werden.");});}

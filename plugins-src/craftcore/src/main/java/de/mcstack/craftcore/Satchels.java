@@ -21,6 +21,8 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockCookEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.FurnaceSmeltEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
@@ -31,6 +33,7 @@ import org.bukkit.event.inventory.SmithItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.SmithingInventory;
+import org.bukkit.inventory.StonecutterInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -344,6 +347,25 @@ final class Satchels implements CommandExecutor, TabCompleter, Listener {
 
   @EventHandler(ignoreCancelled = true) public void smelt(FurnaceSmeltEvent event) {
     if (SatchelItems.tagged(event.getSource())) event.setCancelled(true);
+  }
+
+  /** Campfires, smokers and blast furnaces cook through BlockCookEvent; the result would lose the sell cap. */
+  @EventHandler(ignoreCancelled = true) public void cook(BlockCookEvent event) {
+    if (SatchelItems.tagged(event.getSource())) event.setCancelled(true);
+  }
+
+  /** A placed and re-mined block drops a fresh, untagged item, which would strip the sell cap. */
+  @EventHandler(ignoreCancelled = true) public void place(BlockPlaceEvent event) {
+    if (!SatchelItems.tagged(event.getItemInHand())) return;
+    event.setCancelled(true);
+    event.getPlayer().sendMessage("Satchel-Belohnungen kann man nicht platzieren.");
+  }
+
+  /** Stonecutter results are new stacks without the cap tag: block taking the result (slot 1) of a tagged input. */
+  @EventHandler(ignoreCancelled = true) public void stonecut(InventoryClickEvent event) {
+    if (!(event.getView().getTopInventory() instanceof StonecutterInventory cutter) || event.getRawSlot() != 1 || !SatchelItems.tagged(cutter.getInputItem())) return;
+    event.setCancelled(true);
+    if (event.getWhoClicked() instanceof Player player) player.sendMessage("Satchel-Belohnungen kann man nicht verarbeiten.");
   }
 
   private static boolean smithTagged(SmithingInventory inventory) {

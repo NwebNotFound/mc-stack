@@ -211,17 +211,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(args==null)args=new Object[0];
     switch(method) {
       case "isEnabled": return isEnabled(); case "getName": return "CraftCore"; case "hasBankSupport": return false;
-      case "fractionalDigits": return 2; case "format": return Money.format(Money.cents((double)args[0]));
+      case "fractionalDigits": return 2; case "format": return Money.format(Money.cents((double)args[0],java.math.RoundingMode.HALF_EVEN));
       case "currencyNamePlural": case "currencyNameSingular": return "CP";
       case "getBanks": return Collections.emptyList();
       case "createBank": case "deleteBank": case "bankBalance": case "bankHas": case "bankWithdraw": case "bankDeposit": case "isBankOwner": case "isBankMember": return new EconomyResponse(0,0,EconomyResponse.ResponseType.NOT_IMPLEMENTED,"Bankkonten nicht unterstützt");
       case "hasAccount": return true;
       case "createPlayerAccount": balance(resolve(args[0]).getUniqueId()); return true;
       case "getBalance": return balance(resolve(args[0]).getUniqueId())/100.0;
-      case "has": { long n=Money.cents((double)args[args.length-1]); return n>=0 && balance(resolve(args[0]).getUniqueId())>=n; }
+      case "has": { long n; try { n=Money.cents((double)args[args.length-1],java.math.RoundingMode.UP); } catch(IllegalArgumentException | ArithmeticException e) { return false; } return n>=0 && balance(resolve(args[0]).getUniqueId())>=n; }
       case "withdrawPlayer": case "depositPlayer": {
         UUID id=resolve(args[0]).getUniqueId(); double amount=(double)args[args.length-1];
-        try { long n=Money.cents(amount); if(n<0)throw new IllegalArgumentException(); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
+        try { long n=Money.cents(amount,method.equals("withdrawPlayer")?java.math.RoundingMode.UP:java.math.RoundingMode.DOWN); if(n<0)throw new IllegalArgumentException(); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
         catch(IllegalArgumentException | ArithmeticException e) { return new EconomyResponse(0,0,EconomyResponse.ResponseType.FAILURE,"Ungültiger Betrag"); }
       }
       case "toString": return "CraftCore Economy"; case "hashCode": return System.identityHashCode(this); case "equals": return args[0]==economy;
