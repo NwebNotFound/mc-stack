@@ -641,7 +641,11 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-}"
+      # HERMES_MCP_TUNNEL_TOKEN is the name; the old .env.example name
+      # MCP_TUNNEL_TOKEN is still accepted as a fallback. Not `:?` on purpose:
+      # compose interpolates every service, so a required variable here would
+      # break every compose command for setups that never use this profile.
+      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-${MCP_TUNNEL_TOKEN:-}}"
     networks: [mcp]
 
   cloudflared:

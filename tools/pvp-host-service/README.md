@@ -12,4 +12,6 @@ Der Dienst startet, wenn mindestens einer der getrennten Tokens `PVP_HOST_TOKEN`
 - `POST /vip/stop` mit `{"slot":"vipworld-1"}` stoppt einen konfigurierten Slot.
 - `GET /vip/status` liefert Slots, Welt-IDs, das begrenzte Laufzeitlimit und `budgetOk` für den Start einer weiteren Welt.
 
+Jeder Docker-Aufruf hat ein Zeitlimit (inspect/logs 30 s, start 60 s, stop 150 s wegen der 2-min-Stop-Gnadenfrist, `compose up` 180 s). Läuft eines ab, antwortet der Dienst mit `503` (`docker_timeout`) und gibt die VIP-Sperre frei. Eine VIP-Anfrage wartet höchstens 210 s auf eine andere laufende VIP-Anfrage und bekommt sonst `503 busy`, statt endlos zu warten.
+
 Das Repository wird relativ zum Dienst gefunden; `MC_STACK_DIR` kann den Pfad überschreiben. Docker Compose und die konfigurierten VIP-Slots müssen vorhanden sein.
