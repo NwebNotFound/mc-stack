@@ -62,7 +62,8 @@ public final class VipWorldSync {
         // The body is a full replace: a cut list would delete the missing worlds on the website.
         // Above the contract limit nothing is sent; the website keeps its last complete list.
         if (snap.worlds().size() > VipStore.SYNC_MAX_WORLDS)
-            throw new IllegalStateException("more than " + VipStore.SYNC_MAX_WORLDS + " live VIP worlds, sync skipped");
+            throw new IllegalStateException(store.liveWorldCount() + " live VIP worlds, more than the limit of "
+                + VipStore.SYNC_MAX_WORLDS + "; sync skipped, website keeps its last list");
         Map<String, JsonArray> invites = new HashMap<>();
         for (VipStore.SyncMember m : snap.members()) {
             JsonObject i = new JsonObject();

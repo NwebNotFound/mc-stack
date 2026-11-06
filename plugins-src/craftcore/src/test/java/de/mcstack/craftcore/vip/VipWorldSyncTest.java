@@ -153,7 +153,7 @@ class VipWorldSyncTest {
         assertEquals(VipStore.SYNC_MAX_WORLDS, JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds").size());
         exec("INSERT INTO vip_worlds VALUES ('dddddddd-bbbb-4ccc-8ddd-000000000001','" + OWNER + "','Zuviel','normal','stopped',NULL,99999,NULL,'private',NULL,NULL)");
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> sync.maybeSend(6_000L));
-        assertTrue(e.getMessage().contains("sync skipped"));
+        assertTrue(e.getMessage().startsWith("501 live VIP worlds") && e.getMessage().contains("sync skipped"), e.getMessage());
         assertEquals(1, posts.size(), "no truncated replace is posted");
     }
 

@@ -19,6 +19,7 @@ public final class VipStore {
     /** Contract limit per sync (docs/vip-api.md, website cleanWorlds). One more row is read to detect overflow. */
     public static final int SYNC_MAX_WORLDS = 500;
     static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at,w.settings FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT " + (SYNC_MAX_WORLDS + 1);
+    static final String COUNT_LIVE = "SELECT COUNT(*) FROM vip_worlds WHERE status<>'deleted'";
     static final String SYNC_MEMBERS = "SELECT m.world_id,m.player,p.name,m.role,m.added_at FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=m.player WHERE w.status<>'deleted' ORDER BY m.world_id,m.added_at";
     static final String SYNC_ADDONS = "SELECT a.world_id,a.addon FROM vip_world_addons a JOIN vip_worlds w ON w.id=a.world_id WHERE w.status<>'deleted' ORDER BY a.world_id,a.addon";
     static final String SYNC_ONLINE = "SELECT server,COUNT(*) FROM player_presence WHERE online=TRUE GROUP BY server";
@@ -107,6 +108,9 @@ public final class VipStore {
         return Optional.empty();
     }
 
+    public int liveWorldCount() throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(COUNT_LIVE); ResultSet r=s.executeQuery()) { r.next(); return r.getInt(1); }
+    }
     public SyncSnapshot syncSnapshot() throws SQLException {
         try (Connection c=source.open()) {
             List<SyncRow> worlds=new ArrayList<>();
