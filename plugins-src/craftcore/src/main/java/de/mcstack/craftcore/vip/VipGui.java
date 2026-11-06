@@ -75,6 +75,8 @@ public final class VipGui implements Listener {
     private final Map<UUID, String> waiting = queue.waiting;
     /** Players that already left this server, so a connect retry does not bounce them again. */
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
+    /** Owners whose /vw create is running, so a macro cannot fire a second one in parallel. */
+    private final Set<UUID> creating = ConcurrentHashMap.newKeySet();
     /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
     private final Map<UUID, Integer> generation = queue.generation;
     private final Map<UUID, String> sentSlot = queue.sentSlot;
@@ -337,13 +339,17 @@ public final class VipGui implements Listener {
         }
         String kind = type == null ? "normal" : type.toLowerCase(Locale.ROOT);
         if (!List.of("normal", "flat", "void").contains(kind)) { message(player, "Welttyp: normal, flat oder void."); return; }
+        UUID owner = player.getUniqueId();
+        // One create per owner at a time on this server; the insert itself re-checks the limit across servers.
+        if (!creating.add(owner)) { message(player, "Deine VIP-Welt wird gerade erstellt ..."); return; }
         async(() -> {
-            int slots = slotsFor(player);
-            if (!VipRules.canCreate(store.count(player.getUniqueId()), slots)) {
-                message(player, slots == 0 ? "Du hast keinen VIP-Rang." : "Du hast keinen freien VIP-Weltplatz.");
-                return;
-            }
-            store.create(player.getUniqueId(), clean, kind);
+            try {
+                int slots = slotsFor(player);
+                if (!VipRules.canCreate(store.count(owner), slots) || !store.create(owner, clean, kind, slots)) {
+                    message(player, slots == 0 ? "Du hast keinen VIP-Rang." : "Du hast keinen freien VIP-Weltplatz.");
+                    return;
+                }
+            } finally { creating.remove(owner); }
             message(player, "VIP-Welt erstellt.");
             openHub(player);
         }, error -> {
