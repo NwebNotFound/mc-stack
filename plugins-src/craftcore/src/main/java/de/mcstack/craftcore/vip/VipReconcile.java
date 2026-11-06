@@ -19,4 +19,16 @@ public final class VipReconcile {
         if ("running".equals(dbStatus) || "starting".equals(dbStatus)) return new Action(Kind.STOPPED, null);
         return new Action(Kind.UNCHANGED, dbSlot);
     }
+
+    /**
+     * The slot the host really runs (or starts) this world on, or null when it runs it nowhere. A stop must only ever
+     * target this slot: the database slot can be stale after an idle stop and may meanwhile host another owner's world.
+     */
+    public static String liveSlot(String worldId, List<Slot> hostSlots) {
+        if (worldId == null || hostSlots == null) return null;
+        for (Slot s : hostSlots) {
+            if (worldId.equals(s.worldId()) && ("online".equals(s.status()) || "starting".equals(s.status()))) return s.slot();
+        }
+        return null;
+    }
 }

@@ -90,6 +90,7 @@ public final class PvpModule implements CommandExecutor, TabCompleter {
     }
     @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] a) {
         if(!(sender instanceof Player p)) { sender.sendMessage("Nur fuer Spieler.");return true; }
+        if(a.length==1 && a[0].equalsIgnoreCase("leave") && !PvpAccess.mayLeave(matches!=null && matches.inMatch(p.getUniqueId()))) { p.sendMessage("Waehrend eines PvP-Matches nicht moeglich."); return true; }
         if(a.length==1 && a[0].equalsIgnoreCase("leave")) { p.teleport(Bukkit.getWorlds().get(0).getSpawnLocation()); p.setGameMode(GameMode.ADVENTURE); return true; }
         if(!PvpAccess.mayBypass(p::hasPermission)) {p.sendMessage("Keine Berechtigung.");return true;}
         try {

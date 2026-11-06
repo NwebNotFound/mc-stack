@@ -238,6 +238,45 @@ class VipStartCoordinatorTest {
         assertEquals(2, host.starts.get());
     }
 
+    @Test void cancelWhileTheHostStartBlocksStopsTheLateSlotOnce() {
+        // Issue #154: the last waiter leaves while host.start() still blocks; the slot it returns afterwards
+        // must not keep running untracked.
+        host.startReplies.add(VipStartCoordinator.Reply.starting("vipworld-2"));
+        List<String> finished = Collections.synchronizedList(new ArrayList<>());
+        VipStartCoordinator coordinator = new VipStartCoordinator(host, scheduler, executor, clock::get, 500, 60_000, 5,
+            new VipStartCoordinator.Events() {
+                public void finished(String id, String reason, String slot, boolean began) {
+                    finished.add(reason + ":" + slot + ":" + began);
+                }
+            });
+        UUID player = UUID.randomUUID();
+        CompletableFuture<VipStartCoordinator.Outcome> future = coordinator.join("world", player);
+        host.duringStart = () -> coordinator.leave("world", player);
+        executor.runAll();
+        assertEquals(VipStartCoordinator.CANCELLED, future.join().reason());
+        assertEquals(List.of("cancelled:null:true"), finished, "the cancel saw no slot yet, so the coordinator stops it");
+        assertEquals(List.of("world:vipworld-2"), host.stops);
+        scheduler.runAll();
+        assertEquals(1, host.stops.size(), "no poll and no second stop after the late stop");
+    }
+
+    @Test void timeoutHandsTheStartedSlotOverForStopping() {
+        host.startReplies.add(VipStartCoordinator.Reply.starting("vipworld-1"));
+        List<String> finished = Collections.synchronizedList(new ArrayList<>());
+        VipStartCoordinator coordinator = new VipStartCoordinator(host, scheduler, executor, clock::get, 500, 1_000, 5,
+            new VipStartCoordinator.Events() {
+                public void finished(String id, String reason, String slot, boolean began) {
+                    finished.add(reason + ":" + slot);
+                }
+            });
+        coordinator.join("world", UUID.randomUUID());
+        executor.runAll();
+        clock.addAndGet(5_000);
+        scheduler.runAll();
+        assertEquals(List.of("timeout:vipworld-1"), finished, "a timed-out start reports its slot so it gets stopped");
+        assertTrue(host.stops.isEmpty(), "the receiver of the event stops it, not the coordinator a second time");
+    }
+
     static final class Manual implements VipStartCoordinator.Scheduler {
         final List<Runnable> tasks = Collections.synchronizedList(new ArrayList<>());
         public void later(long delayMillis, Runnable task) { tasks.add(task); }
@@ -272,14 +311,20 @@ class VipStartCoordinatorTest {
         final AtomicInteger starts = new AtomicInteger();
         final Deque<VipStartCoordinator.Reply> startReplies = new ArrayDeque<>();
         final Deque<VipStartCoordinator.Reply> statusReplies = new ArrayDeque<>();
+        final List<String> stops = Collections.synchronizedList(new ArrayList<>());
+        volatile Runnable duringStart;
 
         public VipStartCoordinator.Reply start(String worldId) {
             starts.incrementAndGet();
+            Runnable hook = duringStart;
+            if (hook != null) hook.run();
             return startReplies.isEmpty() ? VipStartCoordinator.Reply.failed(VipStartCoordinator.START_FAILED) : startReplies.poll();
         }
 
         public VipStartCoordinator.Reply status(String slot) {
             return statusReplies.isEmpty() ? VipStartCoordinator.Reply.starting(slot) : statusReplies.poll();
         }
+
+        public void stop(String worldId, String slot) { stops.add(worldId + ":" + slot); }
     }
 }
