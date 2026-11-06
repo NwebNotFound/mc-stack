@@ -335,6 +335,13 @@ class AuctionView(discord.ui.View):
         self.bot, self.auctions, self.owner_id, self.page, self.sel = bot, auctions, owner_id, page, None
         self.build()
 
+    async def interaction_check(self, interaction):
+        """Nur wer /ah geoeffnet hat, blaettert/waehlt auf dieser Nachricht (#151)."""
+        if self.owner_id is None or interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message("Das ist die Auktionsliste von jemand anderem - \u00f6ffne deine eigene mit `/ah`.", ephemeral=True)
+        return False
+
     def current(self):
         return next((a for a in self.auctions if a["id"] == self.sel), None)
 
