@@ -1,10 +1,11 @@
 """Kaufen per Discord: Shop und AH ueber Crafts RCON-Befehle `shop buy` / `ah buy` (Survival)."""
-import asyncio, logging, os, re, time, uuid
+import asyncio, logging, os, re, sqlite3, time, uuid
 import discord
 
 log = logging.getLogger("buy")
 RCON = None  # wird von bot.py gesetzt: rcon(host, command)
 HOST = os.getenv("SURVIVAL_HOST", "survival")
+DB_PATH = "/app/data/links.sqlite3"  # gleiche Datei wie bot.db; im Worker-Thread eigene Verbindung (#148)
 SOON = "\u23f3 Kaufen per Discord ist gleich verf\u00fcgbar - der Server startet gerade neu. Versuch es in ein paar Minuten nochmal."
 ERRORS = {
     "NO_FUNDS": "\U0001F4B8 Du hast nicht genug CP f\u00fcr diesen Kauf.",
@@ -80,6 +81,16 @@ def execute(db, rcon, host, discord_id, kind, buyer, lid, qty, max_c, key):
         db.execute("UPDATE dc_purchases SET response=?, done=? WHERE idem_key=?", (str(reply).strip(), int(time.time()), key))
         db.commit()
     return p
+
+
+def execute_at(path, rcon, host, discord_id, kind, buyer, lid, qty, max_c, key):
+    """execute() mit eigener SQLite-Verbindung: fuer asyncio.to_thread, denn bot.db
+    ist an den Event-Loop-Thread gebunden (check_same_thread)."""
+    db = sqlite3.connect(path, timeout=10)
+    try:
+        return execute(db, rcon, host, discord_id, kind, buyer, lid, qty, max_c, key)
+    finally:
+        db.close()
 
 
 def lookup(kind, lid):
@@ -178,7 +189,7 @@ class ConfirmView(discord.ui.View):
                 c.disabled = True
             await interaction.response.edit_message(view=self)
             try:
-                p = await asyncio.to_thread(execute, self.bot.db, RCON, HOST, interaction.user.id, self.kind, self.buyer, self.lid, self.qty, self.total, self.key)
+                p = await asyncio.to_thread(execute_at, DB_PATH, RCON, HOST, interaction.user.id, self.kind, self.buyer, self.lid, self.qty, self.total, self.key)
             except Exception:
                 log.exception("Kauf per RCON fehlgeschlagen")
                 p = ("soon",)
