@@ -22,4 +22,13 @@ class VipReconcileTest {
         var slots=List.of(new VipReconcile.Slot("vipworld-2","starting","world"));
         assertEquals(new VipReconcile.Action(VipReconcile.Kind.STARTING,"vipworld-2"),VipReconcile.decide("running","vipworld-1","world",slots));
     }
+    @Test void stopTargetsOnlyTheSlotThatRunsThisWorld() {
+        // Row of world A still says vipworld-1 after its idle stop; B now runs there (issue #152).
+        var slots=List.of(new VipReconcile.Slot("vipworld-1","online","world-b"),
+            new VipReconcile.Slot("vipworld-2","sleeping","world-a"));
+        assertNull(VipReconcile.liveSlot("world-a",slots), "a stale row must never stop another owner's world");
+        assertEquals("vipworld-1",VipReconcile.liveSlot("world-b",slots));
+        assertEquals("vipworld-3",VipReconcile.liveSlot("world-c",List.of(new VipReconcile.Slot("vipworld-3","starting","world-c"))));
+        assertNull(VipReconcile.liveSlot("world-a",null));
+    }
 }

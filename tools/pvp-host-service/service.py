@@ -146,6 +146,14 @@ class Handler(BaseHTTPRequestHandler):
                 slot = payload.get("slot")
                 if not isinstance(slot, str) or slot not in cfg["slots"]:
                     self.json_response(400, {"status": "error", "code": "invalid_slot"}); return
+                expected = payload.get("worldId")
+                if expected is not None:
+                    # Only stop the slot if it still runs that world: a stale slot may host another owner's world.
+                    if not isinstance(expected, str) or not UUID_RE.fullmatch(expected):
+                        self.json_response(400, {"status": "error", "code": "invalid_world_id"}); return
+                    running = inspect_slot(slot)["worldId"]
+                    if not running or running.lower() != expected.lower():
+                        self.json_response(409, {"status": "error", "code": "world_mismatch"}); return
                 subprocess.run(["docker", "stop", "mc-stack-" + slot + "-1"], capture_output=True, text=True, check=True)
                 self.json_response(200, {"status": "stopping"}); return
             world_id = payload.get("worldId")

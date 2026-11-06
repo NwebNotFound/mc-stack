@@ -312,7 +312,16 @@ public final class VipGui implements Listener {
             if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
             if (!mayManage(player, entry)) { message(player, "Du darfst diese Welt nicht verwalten."); return; }
             if (!VipRules.canStop(entry.status(), entry.slot())) { message(player, "Die VIP-Welt laeuft nicht."); return; }
-            if (host.stop(entry.slot()).outcome() != VipHostClient.Outcome.STOPPED) {
+            // Never trust the slot of the row: after an idle stop it may host another owner's world by now.
+            List<VipReconcile.Slot> slots = host.slots();
+            if (slots == null) { message(player, "VIP-Host nicht erreichbar, bitte spaeter erneut versuchen."); return; }
+            String live = VipReconcile.liveSlot(entry.id(), slots);
+            if (live == null) {
+                store.idleStopped(id);
+                message(player, "VIP-Welt gestoppt.");
+                return;
+            }
+            if (host.stop(live, entry.id()).outcome() != VipHostClient.Outcome.STOPPED) {
                 message(player, "VIP-Welt konnte nicht gestoppt werden."); return;
             }
             store.stopped(id);

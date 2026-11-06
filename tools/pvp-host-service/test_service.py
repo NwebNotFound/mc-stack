@@ -95,6 +95,21 @@ ram:
             self.assertEqual((200, {"status": "stopping"}), self.vip("POST", "/vip/stop", {"slot": "vipworld-2"}))
             self.assertEqual(["docker", "stop", "mc-stack-vipworld-2-1"], run.call_args.args[0])
 
+    def test_vip_stop_checks_the_running_world(self):
+        other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        with patch("service.subprocess.run") as run:
+            self.assertEqual(400, self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": "../bad"})[0])
+            run.assert_not_called()
+            run.return_value = self.docker_result("running", other)
+            self.assertEqual((409, {"status": "error", "code": "world_mismatch"}),
+                             self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": self.WORLD}))
+            self.assertNotIn(["docker", "stop", "mc-stack-vipworld-1-1"], [c.args[0] for c in run.call_args_list])
+            run.reset_mock()
+            run.return_value = self.docker_result("running", self.WORLD.upper())
+            self.assertEqual((200, {"status": "stopping"}),
+                             self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": self.WORLD}))
+            self.assertEqual(["docker", "stop", "mc-stack-vipworld-1-1"], run.call_args.args[0])
+
     def test_world_directory_created_and_existing_kept(self):
         base = self.root / "data" / "vipworlds"
         new_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
