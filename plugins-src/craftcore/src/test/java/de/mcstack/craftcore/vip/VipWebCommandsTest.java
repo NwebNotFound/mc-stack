@@ -104,6 +104,45 @@ class VipWebCommandsTest {
             confirm, null, false);
     }
 
+    // Live failure 06.11. (deploy-pr167-evidence): the admin was linked on the website (mc_links)
+    // but MariaDB discord_links had no row, so every web command acked denied/not_linked.
+    private static final UUID WEB_ADMIN = UUID.fromString("66666666-6666-4666-8666-666666666666");
+    private static VipCommand create(String discordId, String actorUuid) {
+        return new VipCommand("req-create", discordId, NOW - 1000, "create", null, "AdminTest", "normal", null, null,
+            null, null, false, actorUuid);
+    }
+
+    @Test void websiteLinkCreatesWithoutALocalDiscordLinkRow() throws Exception {
+        database();
+        ranks.put(WEB_ADMIN, "admin");
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000009", WEB_ADMIN.toString()));
+        assertEquals("done", out.status(), out.reason());
+        assertEquals(1, new VipStore(() -> DriverManager.getConnection(url)).count(WEB_ADMIN));
+    }
+
+    @Test void withoutAnyLinkTheCommandIsStillNotLinked() throws Exception {
+        database();
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000009", null));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+    }
+
+    @Test void aLocalLinkThatDisagreesWithTheWebsiteIsNotLinked() throws Exception {
+        database();
+        ranks.put(WEB_ADMIN, "admin");
+        // discord 100000000000000004 is locally linked to ADMIN, the website says WEB_ADMIN
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000004", WEB_ADMIN.toString()));
+        assertEquals("denied", out.status());
+        assertEquals("not_linked", out.reason());
+        assertEquals(0, new VipStore(() -> DriverManager.getConnection(url)).count(WEB_ADMIN));
+    }
+
+    @Test void aMatchingLocalLinkStillWorks() throws Exception {
+        database();
+        VipWebQueue.Outcome out = commands().apply(create("100000000000000004", ADMIN.toString()));
+        assertEquals("done", out.status(), out.reason());
+    }
+
     @Test void trustedMemberWithoutRankStartsTheWorld() throws Exception {
         database();
         world(OWNER, "stopped", null);

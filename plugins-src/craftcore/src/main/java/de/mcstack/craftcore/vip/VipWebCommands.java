@@ -36,9 +36,9 @@ public final class VipWebCommands implements VipWebQueue.Applier {
     @Override
     public VipWebQueue.Outcome apply(VipCommand c) {
         try {
-            Optional<UUID> linked = link(c.discordId());
-            if (linked.isEmpty()) return VipWebQueue.Outcome.denied("not_linked");
-            UUID actor = linked.get();
+            Optional<UUID> actorOpt = actor(c);
+            if (actorOpt.isEmpty()) return VipWebQueue.Outcome.denied("not_linked");
+            UUID actor = actorOpt.get();
             String rank = String.valueOf(ranks.rank(actor));
             boolean admin = "admin".equalsIgnoreCase(rank);
             if ("create".equals(c.action())) return create(c, actor, rank, admin);
@@ -53,7 +53,7 @@ public final class VipWebCommands implements VipWebQueue.Applier {
     private VipWebQueue.Outcome create(VipCommand c, UUID actor, String rank, boolean admin) throws Exception {
         String type = c.type() == null || c.type().isBlank() ? "normal" : c.type();
         VipCommand withType = new VipCommand(c.requestId(), c.discordId(), c.createdAt(), c.action(), c.worldId(),
-            c.name(), type, c.visibility(), c.role(), c.confirm(), c.settings(), c.hasSettings());
+            c.name(), type, c.visibility(), c.role(), c.confirm(), c.settings(), c.hasSettings(), c.actorUuid());
         int owned = store.count(actor);
         boolean taken = !store.ownersOf(c.name()).isEmpty();
         VipCommandRules.Context ctx = new VipCommandRules.Context(admin, false, false, trustedMayStart,
@@ -168,6 +168,20 @@ public final class VipWebCommands implements VipWebQueue.Applier {
                 return r.next() ? Optional.ofNullable(r.getString(1)) : Optional.empty();
             }
         }
+    }
+
+    /**
+     * The caller's Minecraft UUID. Contract (docs/vip-api.md): the website's verified mc_links row,
+     * which the website sends as actor_uuid. MariaDB discord_links is only filled by /cclink and is
+     * empty for most players, so it is a cross-check, not the source: a row that disagrees with the
+     * website's UUID is not_linked. Without actor_uuid the local row is the only source.
+     */
+    Optional<UUID> actor(VipCommand c) throws SQLException {
+        Optional<UUID> local = link(c.discordId());
+        if (c.actorUuid() == null) return local;
+        UUID web = UUID.fromString(c.actorUuid());
+        if (local.isPresent() && !local.get().equals(web)) return Optional.empty();
+        return Optional.of(web);
     }
 
     private Optional<UUID> link(String discordId) throws SQLException {

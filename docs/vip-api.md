@@ -72,7 +72,7 @@ The website stores the status mc-stack sends. The website does not set `expired`
 
 mc-stack checks again when it runs the item.
 
-1. **Discord link.** The Minecraft UUID is the `mc_links` row for that `discord_id`. No row acks `denied` / `not_linked`. If the item also contains `mc_uuid`, it must equal that UUID or the ack is `denied` / `not_linked`.
+1. **Discord link.** The Minecraft UUID is the website's verified `mc_links` row (D1) for that `discord_id`. The website sends it in each item as `actor_uuid` (`mc_uuid` is accepted as the older name), and mc-stack uses it. MariaDB `discord_links` is only filled by `/cclink` and is not the source: if it has a row for that `discord_id` that differs from `actor_uuid`, the ack is `denied` / `not_linked`. An item without `actor_uuid` and without a `discord_links` row acks `denied` / `not_linked`. A malformed `actor_uuid` acks `denied` / `invalid_player`.
 2. **Rank.** `create`, and every action the caller takes as owner or admin, requires the caller's linked UUID to be `vip`, `mvp`, or `admin`. Anything else is `denied` / `no_rank`. A trusted member's `start` does not use the caller's rank. mc-stack reads the world owner's rank instead, and that owner must be `vip`, `mvp`, or `admin` or the start is `denied` / `no_rank`. Admins may use and manage worlds.
 3. **Who may do what.**
 

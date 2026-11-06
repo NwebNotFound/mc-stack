@@ -10,7 +10,13 @@ import java.util.Set;
  */
 public record VipCommand(String requestId, String discordId, long createdAt, String action, String worldId,
                          String name, String type, String visibility, String role, String confirm,
-                         JsonObject settings, boolean hasSettings) {
+                         JsonObject settings, boolean hasSettings, String actorUuid) {
+    /** Items without a website link UUID (tests, older senders). */
+    public VipCommand(String requestId, String discordId, long createdAt, String action, String worldId,
+                      String name, String type, String visibility, String role, String confirm,
+                      JsonObject settings, boolean hasSettings) {
+        this(requestId, discordId, createdAt, action, worldId, name, type, visibility, role, confirm, settings, hasSettings, null);
+    }
     public static final Set<String> ACTIONS = Set.of(
         "create", "rename", "start", "stop", "settings", "set_visibility",
         "invite", "uninvite", "trust", "delete");
@@ -43,9 +49,17 @@ public record VipCommand(String requestId, String discordId, long createdAt, Str
         String worldId = text(o, "world_id");
         if (worldId != null && !worldId.matches(UUID)) return Parsed.error("invalid_world_id");
         JsonObject settings = object(o, "settings");
+        // The website resolves the caller's verified mc_links row (D1) and sends that UUID as
+        // actor_uuid (older contract text: mc_uuid). A malformed value is a broken item.
+        String actorUuid = text(o, "actor_uuid");
+        if (actorUuid == null) actorUuid = text(o, "mc_uuid");
+        if (actorUuid != null) {
+            actorUuid = actorUuid.toLowerCase(java.util.Locale.ROOT);
+            if (!actorUuid.matches(UUID)) return Parsed.error("invalid_player");
+        }
         return new Parsed(new VipCommand(requestId, discordId, created, action.toLowerCase(java.util.Locale.ROOT),
             worldId, text(o, "name"), text(o, "type"), text(o, "visibility"), text(o, "role"),
-            text(o, "confirm"), settings, settings != null), "");
+            text(o, "confirm"), settings, settings != null, actorUuid), "");
     }
 
     /** Unknown actions are skipped with a log line, never executed. */
