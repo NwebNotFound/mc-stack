@@ -90,6 +90,8 @@ public final class VipHostClient {
     }
     public Result start(String id) { JsonObject json=new JsonObject(); json.addProperty("worldId", id); return post("/vip/start", json, true); }
     public Result stop(String slot) { JsonObject json=new JsonObject(); json.addProperty("slot", slot); return post("/vip/stop", json, false); }
+    /** Stops the slot only if it still runs that world; the host refuses the stop when another world runs there. */
+    public Result stop(String slot, String worldId) { JsonObject json=new JsonObject(); json.addProperty("slot", slot); json.addProperty("worldId", worldId); return post("/vip/stop", json, false); }
     public Result status(String slot) {
         try { var response=client.send(request("/vip/status", 5).GET().build(), HttpResponse.BodyHandlers.ofString()); return parseStatus(response.statusCode(), response.body(), slot); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); return new Result(Outcome.ERROR, null); }
