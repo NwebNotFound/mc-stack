@@ -9,6 +9,11 @@ public final class VipStore {
     public record World(String id, String name, String status, String slot, String type) {}
     public record Entry(String id, UUID owner, String name, String type, String status, String slot) {}
     public record Member(UUID player, String name, String role) {}
+    /** One world as the website panel needs it (POST /api/mc-vip-worlds). */
+    public record SyncRow(String id, UUID owner, String ownerName, String name, String type, String status,
+                          String slot, String visibility, long createdAt, Long lastStartedAt) {}
+    /** Website limit: at most 30 worlds per sync; oldest first so existing cards stay stable. */
+    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT 30";
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
     static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) VALUES (?,?,?,?,'stopped',?)";
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
@@ -94,6 +99,17 @@ public final class VipStore {
         return Optional.empty();
     }
 
+    public List<SyncRow> syncRows() throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SYNC_WORLDS); ResultSet r=s.executeQuery()) {
+            List<SyncRow> rows=new ArrayList<>();
+            while(r.next()) {
+                long started=r.getLong(10); Long last=r.wasNull()?null:started;
+                rows.add(new SyncRow(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),
+                    r.getString(6),r.getString(7),r.getString(8),r.getLong(9),last));
+            }
+            return rows;
+        }
+    }
     public List<Member> members(String worldId) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_MEMBERS)) {
             s.setString(1,worldId);
