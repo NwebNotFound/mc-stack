@@ -125,6 +125,34 @@ def backup():
     return target.name
 
 
+BANNED_TEXT = "\u26d4 Diese Verkn\u00fcpfung wurde von einem Admin gesperrt. Wenn du denkst, dass das ein Fehler ist, melde dich bei einem Admin."
+
+
+def init_link_bans(db):
+    """Sperrliste fuer /whitelist remove (#149): verhindert, dass sich der Spieler per Re-Link selbst wieder whitelistet."""
+    db.execute("CREATE TABLE IF NOT EXISTS link_bans (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, discord_id INTEGER, by_id INTEGER, created INTEGER NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS link_bans_uuid ON link_bans (uuid)")
+    db.execute("CREATE INDEX IF NOT EXISTS link_bans_discord ON link_bans (discord_id)")
+
+
+def _uuid_key(uuid):
+    return str(uuid or "").replace("-", "").lower()
+
+
+def add_link_ban(db, uuid, discord_id=None, by_id=None):
+    db.execute("INSERT INTO link_bans (uuid, discord_id, by_id, created) VALUES (?,?,?,?)", (_uuid_key(uuid) or None, discord_id, by_id, int(time.time())))
+    db.commit()
+
+
+def lift_link_ban(db, uuid):
+    db.execute("DELETE FROM link_bans WHERE uuid=?", (_uuid_key(uuid),))
+    db.commit()
+
+
+def is_link_banned(db, discord_id, uuid):
+    return db.execute("SELECT 1 FROM link_bans WHERE uuid=? OR (discord_id IS NOT NULL AND discord_id=?)", (_uuid_key(uuid), discord_id)).fetchone() is not None
+
+
 class RoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -153,6 +181,7 @@ class Bot(discord.Client):
         PENDING.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(DATA / "links.sqlite3")
         self.db.execute("CREATE TABLE IF NOT EXISTS links (discord_id INTEGER PRIMARY KEY, uuid TEXT UNIQUE NOT NULL, name TEXT NOT NULL, code TEXT, expires INTEGER, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)")
+        init_link_bans(self.db)
         self.db.commit()
         self.offsets = {}
         self.dm_state = {}
@@ -209,6 +238,9 @@ class Bot(discord.Client):
     def save(self, sql, params=()):
         self.db.execute(sql, params)
         self.db.commit()
+
+    def link_banned(self, discord_id, uuid):
+        return is_link_banned(self.db, discord_id, uuid)
 
     def remove_pending(self, uuid):
         (PENDING / uuid).unlink(missing_ok=True)
@@ -368,6 +400,8 @@ class Bot(discord.Client):
             log.exception("Mojang-Abfrage fehlgeschlagen")
             return False, "Mojang antwortet gerade nicht 😕 Versuch es in ein paar Minuten nochmal."
         async with self.lock:
+            if self.link_banned(user.id, uuid):
+                return False, BANNED_TEXT
             row = self.db.execute("SELECT discord_id,state FROM links WHERE discord_id=? OR uuid=?", (user.id, uuid)).fetchall()
             for did, state in row:
                 if did == user.id and state == "pending":
@@ -410,6 +444,11 @@ class Bot(discord.Client):
             if not re.fullmatch(r"[0-9]{8}", code) or not secrets.compare_digest(row[1], code):
                 self.save("UPDATE links SET attempts=attempts+1 WHERE discord_id=?", (user.id,))
                 return False, f"Der Code passt leider nicht ❌ Noch {max(0, 4 - row[3])} Versuche."
+            if self.link_banned(user.id, row[0]):
+                self.remove_pending(row[0])
+                self.save("DELETE FROM links WHERE discord_id=? AND state='pending'", (user.id,))
+                self.dm_state[user.id] = "name"
+                return False, BANNED_TEXT
             self.remove_pending(row[0])
             self.save("UPDATE links SET state='adding',code=NULL WHERE discord_id=?", (user.id,))
             guild = self.get_guild(int(self.cfg["GUILD_ID"]))
@@ -1409,7 +1448,12 @@ def register(bot):
             uuid, name = await mojang(mc_name)
             async with bot.lock:
                 if action == "remove":
+                    # Sperre zuerst schreiben: auch wenn RCON scheitert, kann sich der Spieler nicht neu verknuepfen (#149)
+                    linked = bot.db.execute("SELECT discord_id FROM links WHERE uuid=?", (uuid,)).fetchone()
+                    add_link_ban(bot.db, uuid, linked[0] if linked else None, interaction.user.id)
                     bot.save("UPDATE links SET state='removing' WHERE uuid=? AND state!='pending'", (uuid,))
+                else:
+                    lift_link_ban(bot.db, uuid)  # Admin nimmt den Spieler bewusst wieder auf
                 await asyncio.to_thread(whitelist, action, uuid)
                 if action == "remove":
                     bot.remove_pending(uuid)
