@@ -29,7 +29,15 @@ import { loadConfig, type Config } from "./config.js";
 import { GatewayClient } from "./hermes.js";
 import { logger } from "./logger.js";
 import { RunManager } from "./runner.js";
-import { BruteForceGuard, opsHostAllowed, opsPeerAllowed, resolveClientIp, type LocalAddress } from "./security.js";
+import { lookup } from "node:dns/promises";
+import {
+  BruteForceGuard,
+  opsHostAllowed,
+  opsPeerAllowed,
+  ProxyHostResolver,
+  resolveClientIp,
+  type LocalAddress,
+} from "./security.js";
 import { RunStore, type RunStore as RunStoreType } from "./store.js";
 import { registerTools } from "./tools.js";
 
@@ -63,6 +71,8 @@ interface ServerDeps {
   allowT2: boolean;
   /** Per-listener brute-force brake (the ops listener has its own, stricter one). */
   bruteForce: BruteForceGuard;
+  /** Resolved addresses of the trusted proxy containers (cloudflared-mcp). */
+  proxyHosts: ProxyHostResolver;
 }
 
 function buildServer(
@@ -148,7 +158,10 @@ function createApp(deps: ServerDeps): Express {
   const allowToken = rateLimiter(120);
 
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
-    const clientIp = resolveClientIp(req, cfg.trustedProxies);
+    // Through the tunnel the socket peer is always cloudflared-mcp; keying the
+    // lockout on it would let one caller lock out everyone (issue #142). The
+    // per-client key is CF-Connecting-IP when the peer is a trusted proxy.
+    const clientIp = resolveClientIp(req, cfg.trustedProxies, deps.proxyHosts.addresses());
     const bruteForce = deps.bruteForce;
 
     const lockout = bruteForce.check(clientIp);
@@ -167,7 +180,9 @@ function createApp(deps: ServerDeps): Express {
     const header = req.headers.authorization ?? "";
     const match = /^Bearer\s+(.+)$/i.exec(header);
     if (!match) {
-      bruteForce.failure(clientIp);
+      // A request without any bearer token is not a guess: it is not counted
+      // toward the lockout (a crawler or a mis-configured client must not be
+      // able to lock the owner out).
       res
         .status(401)
         .setHeader("WWW-Authenticate", `Bearer realm="hermes-mcp"`)
@@ -270,7 +285,10 @@ async function main(): Promise<void> {
     windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
   });
 
-  const shared = { cfg, client, runs, store };
+  const proxyHosts = new ProxyHostResolver(cfg.trustedProxyHosts, (host) => lookup(host, { all: true }));
+  proxyHosts.start();
+
+  const shared = { cfg, client, runs, store, proxyHosts };
   const mainApp = createApp({ ...shared, allowT2: false, bruteForce: mainBruteForce });
   const opsApp = createApp({ ...shared, allowT2: true, bruteForce: opsBruteForce });
 

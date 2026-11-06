@@ -362,10 +362,15 @@ services:
       HERMES_MCP_ALLOWED_HOSTS: "${HERMES_MCP_ALLOWED_HOSTS:-mcp.nwebnotfound.dev,localhost,127.0.0.1,hermes-mcp}"
       HERMES_MCP_DATA_DIR: "/app/data"
       # Hardening (see tools/hermes-mcp/README.md):
-      # - trust X-Forwarded-For only from these peers (empty = never);
+      # - trust proxy headers only from these peers (IPs/CIDRs, empty = none)
+      #   and from the resolved addresses of the compose services named in
+      #   HERMES_MCP_TRUSTED_PROXY_HOSTS (default: the tunnel container). Behind
+      #   such a peer the brute-force lockout is keyed on CF-Connecting-IP, so one
+      #   tunnel caller can no longer lock everybody out;
       # - cap runs per UTC day and the accepted model/provider/effort overrides;
       # - stop a run that waits for approval, and time out lost (`unknown`) runs.
       HERMES_MCP_TRUSTED_PROXIES: "${HERMES_MCP_TRUSTED_PROXIES:-}"
+      HERMES_MCP_TRUSTED_PROXY_HOSTS: "${HERMES_MCP_TRUSTED_PROXY_HOSTS:-cloudflared-mcp}"
       HERMES_MCP_MAX_RUNS_PER_DAY: "${HERMES_MCP_MAX_RUNS_PER_DAY:-50}"
       HERMES_MCP_LOCKOUT_AFTER: "${HERMES_MCP_LOCKOUT_AFTER:-5}"
       HERMES_MCP_LOCKOUT_SECONDS: "${HERMES_MCP_LOCKOUT_SECONDS:-300}"

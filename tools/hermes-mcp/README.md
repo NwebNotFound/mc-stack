@@ -36,10 +36,18 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
   digests, no length leak), are never logged
   and never returned by a tool. Repeated bad tokens from one client IP are
   braked with an exponential lockout (`429` + `Retry-After`), in-memory.
-- `X-Forwarded-For` is only trusted when the direct peer is in
-  `HERMES_MCP_TRUSTED_PROXIES` (default: empty → the socket address is used, so
-  a client cannot spoof its identity). Behind a trusted proxy, the right-most
-  untrusted hop is the client.
+- Proxy headers are only trusted when the direct peer is in
+  `HERMES_MCP_TRUSTED_PROXIES` (IPs/CIDRs, default empty) or is one of the
+  addresses the compose service names in `HERMES_MCP_TRUSTED_PROXY_HOSTS`
+  resolve to (compose default `cloudflared-mcp`, refreshed every 30 s via Docker
+  DNS). Otherwise the socket address is used, so a client cannot spoof its
+  identity. Behind a trusted peer, `CF-Connecting-IP` (set by Cloudflare's edge)
+  is the client; without it, the right-most untrusted `X-Forwarded-For` hop.
+  This matters for the lockout: through the tunnel the socket peer is always the
+  cloudflared container, so without it every internet caller would share one
+  lockout bucket and a few bad tokens would lock out the owner too.
+- Requests that carry **no** `Authorization: Bearer` header get a `401` but do
+  not count toward the lockout; only presented-but-wrong tokens do.
 - The Hermes gateway keys stay in the gateway call: each profile has its own
   profile-scoped `API_SERVER_KEY`. hermes-mcp reads them from
   `HERMES_PROFILE_KEYS` (JSON in `.env`) and never prints them.
@@ -151,7 +159,8 @@ All optional; the defaults are fail-closed.
 | `HERMES_MCP_ALLOWED_MODELS` | `deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5` | models accepted by `start_run(model=…)`; omit `model` for the profile default |
 | `HERMES_MCP_ALLOWED_PROVIDERS` | `openrouter,anthropic` | providers accepted by `start_run(provider=…)` |
 | `HERMES_MCP_ALLOWED_REASONING_EFFORTS` | `minimal,low,medium,high` | `reasoning_effort` accepted (`xhigh`/`none` excluded) |
-| `HERMES_MCP_TRUSTED_PROXIES` | *(empty)* | peers allowed to set `X-Forwarded-For` (exact IP or CIDR) |
+| `HERMES_MCP_TRUSTED_PROXIES` | *(empty)* | peers allowed to set `CF-Connecting-IP` / `X-Forwarded-For` (exact IP or CIDR) |
+| `HERMES_MCP_TRUSTED_PROXY_HOSTS` | *(empty; compose: `cloudflared-mcp`)* | compose service names resolved to trusted proxy addresses |
 | `HERMES_MCP_LOCKOUT_AFTER` | `5` | bad tokens before an IP is locked out |
 | `HERMES_MCP_LOCKOUT_SECONDS` | `300` | exponential lockout cap |
 | `HERMES_MCP_APPROVAL_WAIT_SECONDS` | `900` | a run waiting for approval is stopped after this (hermes-mcp never approves) |

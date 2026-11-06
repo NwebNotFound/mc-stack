@@ -88,16 +88,34 @@ export function isTrustedProxy(ip: string, trusted: string[]): boolean {
   return trusted.some((entry) => ipMatches(ip, entry));
 }
 
+/** True when `ip` is a syntactically valid IPv4/IPv6 address. */
+export function isIp(ip: string): boolean {
+  const v = normalizeIp(ip);
+  return v !== "" && ipToBigInt(v) !== null;
+}
+
 /**
- * Client IP for logging/limiting. `X-Forwarded-For` is only consulted when the
- * direct socket peer is a trusted proxy; the right-most untrusted hop wins, so a
- * client cannot prepend a fake address.
+ * Client IP for logging/limiting. Proxy headers are only consulted when the
+ * direct socket peer is a trusted proxy (`trusted`: configured IPs/CIDRs, plus
+ * `extraTrusted`: e.g. the resolved addresses of the cloudflared-mcp container).
+ *
+ * Behind a trusted proxy:
+ *  - `CF-Connecting-IP` wins when it is a valid IP. Cloudflare's edge sets it
+ *    to the real client and overwrites any client-supplied value, and
+ *    cloudflared passes it through, so through the tunnel every internet caller
+ *    gets their OWN key instead of all sharing the cloudflared container's;
+ *  - otherwise the right-most untrusted `X-Forwarded-For` hop, so a client
+ *    cannot prepend a fake address.
  */
-export function resolveClientIp(req: Request, trusted: string[]): string {
+export function resolveClientIp(req: Request, trusted: string[], extraTrusted: string[] = []): string {
   const socketIp = normalizeIp(req.socket?.remoteAddress ?? "");
-  if (trusted.length === 0 || !isTrustedProxy(socketIp, trusted)) {
+  const all = extraTrusted.length > 0 ? [...trusted, ...extraTrusted] : trusted;
+  if (all.length === 0 || !isTrustedProxy(socketIp, all)) {
     return socketIp || "unknown";
   }
+  const cf = req.headers["cf-connecting-ip"];
+  const cfValue = Array.isArray(cf) ? (cf.length === 1 ? cf[0] : "") : String(cf ?? "");
+  if (cfValue && isIp(cfValue.trim())) return normalizeIp(cfValue);
   const header = req.headers["x-forwarded-for"];
   const raw = Array.isArray(header) ? header.join(",") : String(header ?? "");
   const chain = raw
@@ -106,9 +124,59 @@ export function resolveClientIp(req: Request, trusted: string[]): string {
     .filter(Boolean);
   chain.push(socketIp);
   for (let i = chain.length - 1; i >= 0; i -= 1) {
-    if (!isTrustedProxy(chain[i], trusted)) return chain[i];
+    if (!isTrustedProxy(chain[i], all)) return chain[i];
   }
   return chain[0] || socketIp || "unknown";
+}
+
+type LookupAll = (host: string) => Promise<Array<{ address: string }>>;
+
+/**
+ * Resolves the compose service names of trusted proxies (default
+ * `cloudflared-mcp`) to their current container addresses and refreshes them
+ * periodically, so the tunnel peer is recognised without hard-coding a subnet.
+ * A name that does not resolve (e.g. the tunnel profile is not running) simply
+ * contributes nothing.
+ */
+export class ProxyHostResolver {
+  private current: string[] = [];
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly hostnames: string[],
+    private readonly lookup: LookupAll,
+  ) {}
+
+  addresses(): string[] {
+    return this.current;
+  }
+
+  async refresh(): Promise<string[]> {
+    const next = new Set<string>();
+    for (const host of this.hostnames) {
+      try {
+        for (const entry of await this.lookup(host)) {
+          if (isIp(entry.address)) next.add(normalizeIp(entry.address));
+        }
+      } catch {
+        // not resolvable right now: contributes nothing
+      }
+    }
+    this.current = [...next];
+    return this.current;
+  }
+
+  start(intervalMs = 30_000): void {
+    if (this.hostnames.length === 0 || this.timer) return;
+    void this.refresh();
+    this.timer = setInterval(() => void this.refresh(), intervalMs);
+    this.timer.unref();
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
 }
 
 export interface BruteForceOptions {
