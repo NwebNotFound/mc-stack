@@ -32,6 +32,8 @@ class VipWorldSyncTest {
             s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role VARCHAR(16), added_at BIGINT)");
             s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT)");
             s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
+            s.execute("CREATE TABLE player_presence (uuid VARCHAR(36), server VARCHAR(64), last_seen TIMESTAMP, online BOOLEAN)");
+            s.execute("INSERT INTO player_presence VALUES ('" + FRIEND + "','vip-1',NULL,TRUE),('" + OWNER + "','vip-1',NULL,TRUE),('x','vip-1',NULL,FALSE),('y','lobby',NULL,TRUE)");
             s.execute("INSERT INTO known_players VALUES ('" + OWNER + "','NwebNotFound'),('" + FRIEND + "','Ada')");
             s.execute("INSERT INTO vip_worlds VALUES ('" + W1 + "','" + OWNER + "','Testwelt','flat','running','vip-1',100,150,'public',NULL,'{\"gamemode\":\"creative\",\"difficulty\":\"easy\",\"pvp\":true,\"keepInventory\":true,\"mobGriefing\":false,\"doDaylightCycle\":false}')");
             s.execute("INSERT INTO vip_worlds VALUES ('" + W2 + "','" + OWNER + "','Zweite','normal','queued',NULL,200,NULL,'private',NULL,NULL)");
@@ -41,16 +43,22 @@ class VipWorldSyncTest {
         }
     }
 
+    private int limitLookups;
+
+    private void exec(String sql) throws SQLException {
+        try (Connection c = DriverManager.getConnection(url); Statement s = c.createStatement()) { s.execute(sql); }
+    }
+
     private VipWorldSync sync() {
         VipStore store = new VipStore(() -> DriverManager.getConnection(url));
         return new VipWorldSync(store, new VipWebQueue.Transport() {
             public String get(String path) { throw new UnsupportedOperationException(); }
             public int post(String path, String body) { posts.add(new String[] {path, body}); return reply; }
-        });
+        }, owner -> { limitLookups++; return 10; });
     }
 
     @Test void publishesEveryLiveWorldInTheWebsiteContract() throws Exception {
-        assertTrue(sync().maybeSend(1_000L, 0));
+        assertTrue(sync().maybeSend(1_000L));
         assertEquals(1, posts.size());
         assertEquals("/mc-vip-worlds", posts.get(0)[0]);
         JsonArray worlds = JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds");
@@ -66,6 +74,10 @@ class VipWorldSyncTest {
         assertEquals("vip-1", a.get("slot").getAsString());
         assertEquals("friends", a.get("visibility").getAsString(), "column value public is the contract's friends");
         assertEquals(150L, a.get("last_started_at").getAsLong());
+        assertEquals(2, a.get("players").getAsInt(), "online presence rows on the world's slot only");
+        assertEquals(10, a.get("player_limit").getAsInt());
+        assertEquals(120L, a.getAsJsonArray("invites").get(0).getAsJsonObject().get("added_at").getAsLong());
+        assertEquals(1_000L, JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().get("synced_at").getAsLong());
         JsonObject invite = a.getAsJsonArray("invites").get(0).getAsJsonObject();
         assertEquals(FRIEND, invite.get("uuid").getAsString());
         assertEquals("Ada", invite.get("name").getAsString());
@@ -79,24 +91,54 @@ class VipWorldSyncTest {
         assertEquals("private", b.get("visibility").getAsString());
         assertFalse(b.has("slot"));
         assertFalse(b.has("last_started_at"));
+        assertEquals(0, b.get("players").getAsInt(), "no slot, no players");
         assertEquals("survival", b.getAsJsonObject("settings").get("gamemode").getAsString(), "defaults when no settings stored");
     }
 
-    @Test void sendsAfterAnsweredCommandsAndOtherwiseOncePerMinute() throws Exception {
+    @Test void postsOnEveryChangeAndOtherwiseOnlyOnResync() throws Exception {
         VipWorldSync sync = sync();
-        assertTrue(sync.maybeSend(1_000L, 0), "first round always publishes");
-        assertFalse(sync.maybeSend(2_000L, 0), "idle round within a minute stays quiet");
-        assertTrue(sync.maybeSend(3_000L, 1), "a create/rename/delete is visible right after the round");
-        assertFalse(sync.maybeSend(3_000L + VipWorldSync.EVERY_MILLIS - 1, 0));
-        assertTrue(sync.maybeSend(3_000L + VipWorldSync.EVERY_MILLIS, 0));
-        assertEquals(3, posts.size());
+        assertTrue(sync.maybeSend(1_000L), "first round always publishes");
+        assertFalse(sync.maybeSend(6_000L), "unchanged list stays quiet (idempotent)");
+        exec("UPDATE vip_worlds SET name='Neu' WHERE id='" + W1 + "'");
+        assertTrue(sync.maybeSend(11_000L), "rename");
+        exec("UPDATE vip_worlds SET status='stopped', slot=NULL WHERE id='" + W1 + "'");
+        assertTrue(sync.maybeSend(16_000L), "stop");
+        exec("UPDATE vip_worlds SET settings='{\"gamemode\":\"adventure\"}' WHERE id='" + W2 + "'");
+        assertTrue(sync.maybeSend(21_000L), "settings");
+        exec("DELETE FROM vip_world_members WHERE world_id='" + W1 + "'");
+        assertTrue(sync.maybeSend(26_000L), "members");
+        exec("INSERT INTO vip_worlds VALUES ('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4','" + FRIEND + "','Neue','void','stopped',NULL,300,NULL,'private',NULL,NULL)");
+        assertTrue(sync.maybeSend(31_000L), "create");
+        exec("UPDATE vip_worlds SET status='deleted' WHERE id='" + W2 + "'");
+        assertTrue(sync.maybeSend(36_000L), "delete");
+        JsonArray last = JsonParser.parseString(posts.get(posts.size() - 1)[1]).getAsJsonObject().getAsJsonArray("vip_worlds");
+        assertEquals(2, last.size());
+        assertEquals("Neu", last.get(0).getAsJsonObject().get("name").getAsString());
+        assertEquals(0, last.get(0).getAsJsonObject().getAsJsonArray("invites").size());
+        assertFalse(sync.maybeSend(36_000L + VipWorldSync.RESYNC_MILLIS - 1), "nothing changed");
+        assertTrue(sync.maybeSend(36_000L + VipWorldSync.RESYNC_MILLIS), "periodic resync");
+        assertEquals(8, posts.size(), "1 first + 6 changes + 1 resync");
+        assertTrue(limitLookups <= 4, "rank lookups are cached per owner, not repeated every round: " + limitLookups);
+    }
+
+    @Test void neverPublishesMoreThanThirtyWorlds() throws Exception {
+        for (int i = 0; i < 40; i++) exec("INSERT INTO vip_worlds VALUES ('bbbbbbbb-bbbb-4ccc-8ddd-" + String.format("%012d", i) + "','" + OWNER + "','W" + i + "','normal','stopped',NULL," + (1000 + i) + ",NULL,'private',NULL,NULL)");
+        assertTrue(sync().maybeSend(1_000L));
+        assertEquals(30, JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds").size());
+    }
+
+    @Test void brokenStoredSettingsFallBackToDefaults() throws Exception {
+        exec("UPDATE vip_worlds SET settings='not json' WHERE id='" + W1 + "'");
+        assertTrue(sync().maybeSend(1_000L));
+        JsonObject a = JsonParser.parseString(posts.get(0)[1]).getAsJsonObject().getAsJsonArray("vip_worlds").get(0).getAsJsonObject();
+        assertEquals("survival", a.getAsJsonObject("settings").get("gamemode").getAsString());
     }
 
     @Test void rejectedSyncThrowsAndIsRetriedNextRound() throws Exception {
         VipWorldSync sync = sync();
         reply = 401;
-        assertThrows(IllegalStateException.class, () -> sync.maybeSend(1_000L, 0));
+        assertThrows(IllegalStateException.class, () -> sync.maybeSend(1_000L));
         reply = 200;
-        assertTrue(sync.maybeSend(2_000L, 0), "a failed send does not count as sent");
+        assertTrue(sync.maybeSend(2_000L), "a failed send does not count as sent");
     }
 }

@@ -95,3 +95,5 @@ Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben
 ## VIP-Web-Queue einschalten
 
 `compose.yaml` reicht `MC_INGEST_TOKEN` und `VIP_WEB_QUEUE` (Standard `0` = aus) an `lobby` und `survival` durch. Aktivieren: in `.env` `VIP_WEB_QUEUE=1` setzen (Token steht dort schon), dann Backup (`backup.ps1`) und `docker compose up -d --no-deps lobby survival`; im Lobby-Log nach `VIP-Queue` pruefen. Abschalten: `VIP_WEB_QUEUE=0` und die beiden Services neu erzeugen. Keine Secrets ins Repo.
+
+Welt-Sync zur Website (gleicher Schalter `VIP_WEB_QUEUE`): die Lobby schickt alle VIP-Welten (max. 30) per `POST /api/mc-vip-worlds` an die Website, sobald sich etwas aendert (Pruefung alle 5 s, auch fuer `/vw` im Spiel), sonst alle 5 Minuten. Ohne diesen Sync zeigt `/vip` keine Welten und keine Aktionen. Pruefen: im Lobby-Log keine Zeile `VIP-Sync:`; in D1 (nur lesen) `SELECT kind, updated_at FROM mc_blobs WHERE kind='vip_worlds'` hat eine Zeile. Fehler blockieren nichts und werden in der naechsten Runde wiederholt.

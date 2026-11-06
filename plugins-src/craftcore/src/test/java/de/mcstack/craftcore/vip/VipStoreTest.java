@@ -19,6 +19,7 @@ class VipStoreTest {
             s.execute("CREATE TABLE vip_world_members (world_id VARCHAR(36), player VARCHAR(36), role ENUM('member','builder','trusted') NOT NULL, added_at BIGINT)");
             s.execute("CREATE TABLE vip_world_addons (world_id VARCHAR(36), addon VARCHAR(32), added_at BIGINT)");
             s.execute("CREATE TABLE known_players (uuid VARCHAR(36) PRIMARY KEY, name VARCHAR(16))");
+            s.execute("CREATE TABLE player_presence (uuid VARCHAR(36), server VARCHAR(64), last_seen TIMESTAMP, online BOOLEAN)");
         }
         return c;
     }
@@ -56,7 +57,8 @@ class VipStoreTest {
                 Map.entry("FIND_OWNERS_BY_NAME", 1), Map.entry("FIND_BY_OWNER_NAME", 2), Map.entry("MARK_DELETED", 1),
                 Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2),
                 Map.entry("SET_SETTINGS", 2), Map.entry("FIND_SETTINGS", 1), Map.entry("SET_VISIBILITY", 2),
-                Map.entry("DELETE_WORLD", 2), Map.entry("INSERT_AUDIT", 8), Map.entry("SYNC_WORLDS", 0));
+                Map.entry("DELETE_WORLD", 2), Map.entry("INSERT_AUDIT", 8), Map.entry("SYNC_WORLDS", 0),
+                Map.entry("SYNC_MEMBERS", 0), Map.entry("SYNC_ADDONS", 0), Map.entry("SYNC_ONLINE", 0));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

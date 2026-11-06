@@ -11,9 +11,16 @@ public final class VipStore {
     public record Member(UUID player, String name, String role) {}
     /** One world as the website panel needs it (POST /api/mc-vip-worlds). */
     public record SyncRow(String id, UUID owner, String ownerName, String name, String type, String status,
-                          String slot, String visibility, long createdAt, Long lastStartedAt) {}
+                          String slot, String visibility, long createdAt, Long lastStartedAt, String settings) {}
+    public record SyncMember(String worldId, UUID player, String name, String role, long addedAt) {}
+    /** Everything the website panel needs, read in four queries regardless of the number of worlds. */
+    public record SyncSnapshot(List<SyncRow> worlds, List<SyncMember> members, Map<String, List<String>> addons,
+                               Map<String, Integer> online) {}
     /** Website limit: at most 30 worlds per sync; oldest first so existing cards stay stable. */
-    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT 30";
+    static final String SYNC_WORLDS = "SELECT w.id,w.owner,p.name,w.name,w.type,w.status,w.slot,w.visibility,w.created_at,w.last_started_at,w.settings FROM vip_worlds w LEFT JOIN known_players p ON p.uuid=w.owner WHERE w.status<>'deleted' ORDER BY w.created_at,w.id LIMIT 30";
+    static final String SYNC_MEMBERS = "SELECT m.world_id,m.player,p.name,m.role,m.added_at FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=m.player WHERE w.status<>'deleted' ORDER BY m.world_id,m.added_at";
+    static final String SYNC_ADDONS = "SELECT a.world_id,a.addon FROM vip_world_addons a JOIN vip_worlds w ON w.id=a.world_id WHERE w.status<>'deleted' ORDER BY a.world_id,a.addon";
+    static final String SYNC_ONLINE = "SELECT server,COUNT(*) FROM player_presence WHERE online=TRUE GROUP BY server";
     static final String COUNT_WORLDS = "SELECT COUNT(*) FROM vip_worlds WHERE owner=? AND status<>'deleted'";
     static final String INSERT_WORLD = "INSERT INTO vip_worlds (id,owner,name,type,status,created_at) VALUES (?,?,?,?,'stopped',?)";
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
@@ -99,15 +106,29 @@ public final class VipStore {
         return Optional.empty();
     }
 
-    public List<SyncRow> syncRows() throws SQLException {
-        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SYNC_WORLDS); ResultSet r=s.executeQuery()) {
-            List<SyncRow> rows=new ArrayList<>();
-            while(r.next()) {
-                long started=r.getLong(10); Long last=r.wasNull()?null:started;
-                rows.add(new SyncRow(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),
-                    r.getString(6),r.getString(7),r.getString(8),r.getLong(9),last));
+    public SyncSnapshot syncSnapshot() throws SQLException {
+        try (Connection c=source.open()) {
+            List<SyncRow> worlds=new ArrayList<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_WORLDS); ResultSet r=s.executeQuery()) {
+                while(r.next()) {
+                    long started=r.getLong(10); Long last=r.wasNull()?null:started;
+                    worlds.add(new SyncRow(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getString(5),
+                        r.getString(6),r.getString(7),r.getString(8),r.getLong(9),last,r.getString(11)));
+                }
             }
-            return rows;
+            List<SyncMember> members=new ArrayList<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_MEMBERS); ResultSet r=s.executeQuery()) {
+                while(r.next()) members.add(new SyncMember(r.getString(1),UUID.fromString(r.getString(2)),r.getString(3),r.getString(4),r.getLong(5)));
+            }
+            Map<String,List<String>> addons=new HashMap<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_ADDONS); ResultSet r=s.executeQuery()) {
+                while(r.next()) addons.computeIfAbsent(r.getString(1),k->new ArrayList<>()).add(r.getString(2));
+            }
+            Map<String,Integer> online=new HashMap<>();
+            try (PreparedStatement s=c.prepareStatement(SYNC_ONLINE); ResultSet r=s.executeQuery()) {
+                while(r.next()) online.put(r.getString(1),r.getInt(2));
+            }
+            return new SyncSnapshot(worlds,members,addons,online);
         }
     }
     public List<Member> members(String worldId) throws SQLException {
