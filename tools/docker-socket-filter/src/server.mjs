@@ -2,6 +2,8 @@
  * docker-socket-filter entrypoint.
  *
  * Fail closed:
+ *  - without OPS_FILTER_TOKEN (>= 24 chars) the filter refuses to start; every
+ *    request except `/_ping` must carry `Authorization: Bearer <token>`;
  *  - a restart-allowlist entry that is not a plain container name shape aborts
  *    startup (a typo must never widen the surface);
  *  - an empty restart allowlist is allowed (then no restart passes at all).
@@ -25,20 +27,16 @@ import {
   DEFAULT_MAX_RESPONSE_BYTES,
   DEFAULT_RESTART_ALLOW_T1,
   DEFAULT_RESTART_ALLOW_T2,
+  MIN_TOKEN_LENGTH,
+  parseAllow,
   REF_RE,
 } from "./filter.mjs";
 
 const port = Number(process.env.OPS_FILTER_PORT ?? "2375");
 const host = process.env.OPS_FILTER_HOST ?? "0.0.0.0";
 const upstreamSocketPath = process.env.OPS_FILTER_UPSTREAM ?? "/var/run/docker.sock";
+const token = (process.env.OPS_FILTER_TOKEN ?? "").trim();
 const maxResponseBytes = Number(process.env.OPS_FILTER_MAX_RESPONSE_BYTES ?? String(DEFAULT_MAX_RESPONSE_BYTES));
-
-function parseAllow(raw, fallback) {
-  return (raw === undefined || raw.trim() === "" ? fallback.join(",") : raw)
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
 
 const restartAllow = parseAllow(process.env.OPS_FILTER_RESTART_ALLOW, DEFAULT_RESTART_ALLOW_T1);
 const restartAllowT2 = parseAllow(process.env.OPS_FILTER_RESTART_ALLOW_T2, DEFAULT_RESTART_ALLOW_T2);
@@ -50,6 +48,11 @@ for (const name of [...restartAllow, ...restartAllowT2]) {
   }
 }
 
+if (token.length < MIN_TOKEN_LENGTH) {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), event: "error", code: "missing_token", detail: `OPS_FILTER_TOKEN is required (>= ${MIN_TOKEN_LENGTH} chars)` }));
+  process.exit(1);
+}
+
 if (!Number.isFinite(port) || port < 1 || port > 65535) {
   console.error(JSON.stringify({ ts: new Date().toISOString(), event: "error", code: "bad_port" }));
   process.exit(1);
@@ -59,7 +62,7 @@ const log = (entry) => {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...entry }));
 };
 
-const server = createFilterServer({ upstreamSocketPath, restartAllow, restartAllowT2, maxResponseBytes, log });
+const server = createFilterServer({ upstreamSocketPath, token, restartAllow, restartAllowT2, maxResponseBytes, log });
 
 server.listen(port, host, () => {
   log({

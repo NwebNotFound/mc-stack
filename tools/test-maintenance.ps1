@@ -57,12 +57,17 @@ Check ($lines.Count -ge 8 -and @($lines | Where-Object { $_.step -eq 'ready' -an
 
 Write-Host 'lock'
 $first = Enter-MaintLock $root 0
+$markerPath = Join-Path $root 'backups/.maintenance.active'
+$markerInfo = $null; try { $markerInfo = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch { }
+Check ($null -ne $markerInfo -and $markerInfo.name -eq 'test' -and $markerInfo.pid -eq $PID) 'the lock writes the maintenance marker for ops-helper'
 $msg = ''; try { Enter-MaintLock $root 0 | Out-Null } catch { $msg = $_.Exception.Message }
 Check ($msg -like '*Sperre belegt*') 'a second run fails fast with WaitSeconds 0'
 $global:MaintSleep = { param($s) Exit-MaintLock $first }   # the backup finishes while dev-reset waits
 $second = $null; try { $second = Enter-MaintLock $root 60 } catch { }
 Check ($null -ne $second) 'dev-reset waits for a running backup, then gets the lock'
+Check (Test-Path -LiteralPath $markerPath) 'the marker stays while the second holder has the lock'
 Exit-MaintLock $second
+Check (-not (Test-Path -LiteralPath $markerPath)) 'releasing the lock removes the marker'
 $global:MaintSleep = { param($s) }
 
 Write-Host 'failed backup marker'
@@ -97,6 +102,7 @@ Write-Host 'backup.ps1 with the DB down (the 05.11. 11:36 case)'
 $global:DbStates = @('exited')
 $msg = ''; try { & "$root/backup.ps1" -ReadyAttempts 2 } catch { $msg = $_.Exception.Message }
 Check ($msg -like 'Nicht bereit*') "backup throws a clear error ($msg)"
+Check (-not (Test-Path -LiteralPath (Join-Path $root 'backups/.maintenance.active'))) 'a failed backup leaves no maintenance marker'
 Check (@(Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { $_.Name -notlike '*FAILED*' -and -not (Test-Path (Join-Path $_.FullName 'COMPLETE.txt')) }).Count -eq 0) 'no half backup that looks valid'
 Check (-not ($global:DockerCalls | Where-Object { $_ -like 'compose stop*' })) 'servers were not stopped'
 $blog = Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log' | Select-Object -First 1
@@ -116,7 +122,13 @@ Check (@($dl | Where-Object { $_.step -eq 'lock' -and $_.level -eq 'warn' }).Cou
 Write-Host 'online backup (default: nothing stopped)'
 foreach ($srv in 'lobby','survival') { New-Item -ItemType Directory -Force -Path "$root/data/$srv/world" | Out-Null; Set-Content "$root/data/$srv/world/level.dat" 'x'; Set-Content "$root/data/$srv/world/session.lock" 'lock' }
 $global:DbStates = @('healthy')
-$global:MaintDumpOverride = { param($path) Set-Content -LiteralPath $path -Value ('-- dump ' + ('x' * 200)) }
+# pvp arena and two player VIP worlds (issue #145: they were never backed up)
+New-Item -ItemType Directory -Force -Path "$root/data/pvp/world", "$root/data/vipworlds/11111111-2222-3333-4444-555555555555", "$root/data/vipworlds/66666666-7777-8888-9999-000000000000" | Out-Null
+Set-Content "$root/data/pvp/world/level.dat" 'x'
+Set-Content "$root/data/vipworlds/11111111-2222-3333-4444-555555555555/level.dat" 'x'
+Set-Content "$root/data/vipworlds/11111111-2222-3333-4444-555555555555/session.lock" 'lock'
+Set-Content "$root/data/vipworlds/66666666-7777-8888-9999-000000000000/level.dat" 'x'
+$global:MaintDumpOverride = { param($path) $global:DockerCalls.Add('dump ' + (Split-Path $path -Leaf)); Set-Content -LiteralPath $path -Value ('-- dump ' + ('x' * 200)) }
 function Reset-Calls { $global:DockerCalls.Clear() }
 Reset-Calls
 $msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
@@ -127,16 +139,25 @@ foreach ($srv in 'lobby','survival') {
   $off = Idx "compose exec -T $srv rcon-cli save-off"; $flush = Idx "compose exec -T $srv rcon-cli save-all flush"; $on = Idx "compose exec -T $srv rcon-cli save-on"
   Check ($off -ge 0 -and $flush -gt $off -and $on -gt $flush) "${srv}: save-off -> save-all flush -> save-on"
 }
-Check ((Idx 'compose exec -T lobby rcon-cli save-on') -lt (Idx 'compose exec -T survival rcon-cli save-off')) 'lobby saves again before survival pauses'
+$lastOff = [Math]::Max((Idx 'compose exec -T lobby rcon-cli save-all flush'), (Idx 'compose exec -T survival rcon-cli save-all flush'))
+$firstOn = [Math]::Min((Idx 'compose exec -T lobby rcon-cli save-on'), (Idx 'compose exec -T survival rcon-cli save-on'))
+Check ((Idx 'dump craftcore.sql') -gt $lastOff -and (Idx 'dump luckperms.sql') -gt $lastOff) 'both DB dumps run after save-off + flush on both servers'
+Check ((Idx 'dump craftcore.sql') -lt $firstOn -and (Idx 'dump luckperms.sql') -lt $firstOn) 'and before saving is turned back on'
+Check ((Idx 'compose --profile pvp --profile vip --profile vip3 ps --status running --services') -ge 0) 'running pvp/vip servers are looked up (with their profiles)'
 Check ((Idx 'compose stop*') -lt 0 -and (Idx 'compose up*') -lt 0) 'no container stop or start in the default path'
 $latest = Get-ChildItem "$root/backups" -Directory -Filter 'daily-2*' | Where-Object { Test-Path (Join-Path $_.FullName 'COMPLETE.txt') } | Sort-Object Name | Select-Object -Last 1
 Check ($latest -and (Test-Path "$($latest.FullName)/lobby/world/level.dat") -and -not (Test-Path "$($latest.FullName)/lobby/world/session.lock")) 'worlds copied, session.lock skipped, COMPLETE written'
-$ol = @(Get-Content -LiteralPath (Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log').FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run -eq ($_.run) })
-$steps = @($ol | Select-Object -Last 12 | ForEach-Object { $_.step + ':' + $_.msg })
+Check ($latest -and (Test-Path "$($latest.FullName)/craftcore.sql") -and (Test-Path "$($latest.FullName)/luckperms.sql")) 'craftcore and luckperms are both dumped'
+Check ($latest -and (Test-Path "$($latest.FullName)/pvp/world/level.dat")) 'the pvp world is copied'
+Check ($latest -and (Test-Path "$($latest.FullName)/vipworlds/11111111-2222-3333-4444-555555555555/level.dat") -and (Test-Path "$($latest.FullName)/vipworlds/66666666-7777-8888-9999-000000000000/level.dat") -and -not (Test-Path "$($latest.FullName)/vipworlds/11111111-2222-3333-4444-555555555555/session.lock")) 'every VIP world is copied (session.lock skipped)'
+$ol = @(Get-Content -LiteralPath (Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log').FullName | ForEach-Object { $_ | ConvertFrom-Json })
+$lastRun = ($ol | Select-Object -Last 1).run
+$steps = @($ol | Where-Object { $_.run -eq $lastRun } | ForEach-Object { $_.step + ':' + $_.msg })
 $iOff = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -like 'save:lobby: save-off*' })
 $iCopy = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -like 'worlds:lobby:*' })
 $iOn = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -eq 'save:lobby: save-on' })
-Check ($iOff -ge 0 -and $iCopy -gt $iOff -and $iOn -gt $iCopy) 'log order: save-off, copy, save-on'
+$iDump = [array]::FindIndex([string[]]$steps, [Predicate[string]]{ param($x) $x -like 'dump:luckperms.sql*' })
+Check ($iOff -ge 0 -and $iDump -gt $iOff -and $iCopy -gt $iDump -and $iOn -gt $iCopy) 'log order: save-off, dumps, copy, save-on'
 
 Write-Host 'online backup: copy failure still turns saving back on'
 Reset-Calls

@@ -10,6 +10,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONTAINER = "mc-stack-pvp-1"
 VIP_LOCK = threading.Lock()
+# Every docker call is bounded (issue #147): a hung `docker compose up` or `docker inspect` (e.g. while Docker Desktop
+# restarts) must not hold VIP_LOCK forever. A timeout is a SubprocessError and becomes HTTP 503.
+INSPECT_TIMEOUT = 30
+LOGS_TIMEOUT = 30
+# `docker stop` waits for the container's stop grace period (2 min for the Paper services in compose.yaml).
+STOP_TIMEOUT = 150
+START_TIMEOUT = 60
+COMPOSE_UP_TIMEOUT = 180
+# A request waits at most this long for another VIP request to finish, then gets 503 instead of queueing forever.
+VIP_LOCK_TIMEOUT = COMPOSE_UP_TIMEOUT + 30
+TIMEOUTS = {"inspect": INSPECT_TIMEOUT, "start": START_TIMEOUT, "stop": STOP_TIMEOUT}
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 SLOT_RE = re.compile(r"vipworld-[1-3]\Z")
 
@@ -19,7 +30,7 @@ def docker(action):
     if action == "inspect":
         args += ["-f", "{{.State.Status}}"]
     args.append(CONTAINER)
-    return subprocess.run(args, capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(args, capture_output=True, text=True, check=True, timeout=TIMEOUTS[action]).stdout.strip()
 
 
 def status(value):
@@ -79,7 +90,7 @@ def budget_ok(cfg, running):
 
 def inspect_slot(slot):
     container = "mc-stack-" + slot + "-1"
-    result = subprocess.run(["docker", "inspect", "-f", '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{range .Config.Env}}{{println .}}{{end}}', container], capture_output=True, text=True)
+    result = subprocess.run(["docker", "inspect", "-f", '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{range .Config.Env}}{{println .}}{{end}}', container], capture_output=True, text=True, timeout=INSPECT_TIMEOUT)
     if result.returncode:
         if "no such" in (result.stderr or "").lower():
             return {"slot": slot, "status": "offline", "worldId": None}
@@ -92,7 +103,7 @@ def inspect_slot(slot):
         if health.strip():
             ready = health.strip() == "healthy"
         else:
-            logs = subprocess.run(["docker", "logs", "--tail", "200", container], capture_output=True, text=True, check=True)
+            logs = subprocess.run(["docker", "logs", "--tail", "200", container], capture_output=True, text=True, check=True, timeout=LOGS_TIMEOUT)
             output = (logs.stdout or "") + (logs.stderr or "")
             ready = any("Done (" in line and "! For help" in line for line in output.splitlines())
         slot_status = "online" if ready else "starting"
@@ -100,6 +111,9 @@ def inspect_slot(slot):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Socket timeout for reading a request: a client that never sends its body cannot pin a thread.
+    timeout = 30
+
     def json_response(self, code, value, compact=False):
         body = json.dumps(value, separators=(",", ":") if compact else None).encode()
         self.send_response(code)
@@ -123,11 +137,16 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, subprocess.SubprocessError):
                 self.json_response(503, {"status": "offline"}, compact=True)
             return
+        if not VIP_LOCK.acquire(timeout=VIP_LOCK_TIMEOUT):
+            self.json_response(503, {"status": "error", "code": "busy"}); return
         try:
-            with VIP_LOCK:
-                self.handle_vip()
+            self.handle_vip()
+        except subprocess.TimeoutExpired:
+            self.json_response(503, {"status": "error", "code": "docker_timeout"})
         except (OSError, subprocess.SubprocessError, ValueError, KeyError):
             self.json_response(503, {"status": "error", "code": "service_unavailable"})
+        finally:
+            VIP_LOCK.release()
 
     def handle_vip(self):
         root = repo_root()
@@ -154,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
                     running = inspect_slot(slot)["worldId"]
                     if not running or running.lower() != expected.lower():
                         self.json_response(409, {"status": "error", "code": "world_mismatch"}); return
-                subprocess.run(["docker", "stop", "mc-stack-" + slot + "-1"], capture_output=True, text=True, check=True)
+                subprocess.run(["docker", "stop", "mc-stack-" + slot + "-1"], capture_output=True, text=True, check=True, timeout=STOP_TIMEOUT)
                 self.json_response(200, {"status": "stopping"}); return
             world_id = payload.get("worldId")
             if not isinstance(world_id, str) or not UUID_RE.fullmatch(world_id):
@@ -195,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
         if free == "vipworld-3":
             args += ["--profile", "vip3"]
         args += ["up", "-d", "--force-recreate", "--no-deps", free]
-        subprocess.run(args, cwd=str(root), env=env, capture_output=True, text=True, check=True)
+        subprocess.run(args, cwd=str(root), env=env, capture_output=True, text=True, check=True, timeout=COMPOSE_UP_TIMEOUT)
         self.json_response(202, {"status": "starting", "slot": free})
 
     def send_error(self, code, message=None, explain=None):
