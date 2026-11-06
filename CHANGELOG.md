@@ -7,7 +7,7 @@
 
 - **Neue Startseite** – Die Hauptseite stellt Nils und seine Projekte vor, mit Steckbrief, Projektkarten und den letzten Neuigkeiten. <!-- en: **New home page** – The main page introduces Nils and his projects, with a profile card, project cards and the latest news. -->
 - **VIP-Welten über die Website** – Auf der Website legst du deine VIP-Welten an, startest, benennst und stellst sie ein und lädst Freunde ein; Erfolg meldet die Seite erst, wenn der Server die Aktion bestätigt hat. <!-- en: **VIP worlds from the website** – On the website you create, start, rename and configure your VIP worlds and invite friends; the page only reports success once the server has confirmed the action. -->
-- **Schnellere Website** – Seiten und Bilder werden besser zwischengespeichert, deshalb laden sie beim nächsten Besuch deutlich schneller. <!-- en: **Faster website** – Styles, scripts and images are cached better; images outside the visible area load only when needed. -->
+- **Schnellere Website** – Styles, Skripte und Bilder werden besser zwischengespeichert; Bilder außerhalb des sichtbaren Bereichs laden erst bei Bedarf. <!-- en: **Faster website** – Styles, scripts and images are cached better; images outside the visible area load only when needed. -->
 - **Eine Navigation für alles** – Hauptseite und Server-Seite teilen sich jetzt dieselbe Navigationsleiste, auch auf dem Handy. <!-- en: **One navigation for everything** – The main site and the server site now share the same navigation bar, on phones too. -->
 
 ### 05.11.2026
