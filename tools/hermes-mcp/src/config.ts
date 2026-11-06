@@ -74,6 +74,14 @@ export interface Config {
   opsHost: string;
   /** Consecutive bad tokens on the local (T2-capable) listener before lockout. */
   opsLockoutAfter: number;
+  /**
+   * Explicit peer allowlist (IPs/CIDRs) for the local listener. Empty -> the
+   * built-in rule: refuse sibling containers on the container's own subnets,
+   * allow loopback, the subnet gateways and the host port mapping.
+   */
+  opsAllowedPeers: string[];
+  /** Host headers the local listener accepts (default: loopback names only). */
+  opsAllowedHosts: string[];
 
   backend: Backend;
   /** Only used by the host-only CLI backend. */
@@ -217,6 +225,8 @@ export function loadConfig(): Config {
     opsPort: num("HERMES_MCP_OPS_PORT", 8767, 1, 65535),
     opsHost: str("HERMES_MCP_OPS_HOST", "0.0.0.0"),
     opsLockoutAfter: num("HERMES_MCP_OPS_LOCKOUT_AFTER", 3, 1, 1000),
+    opsAllowedPeers: list("HERMES_MCP_OPS_ALLOWED_PEERS", []),
+    opsAllowedHosts: list("HERMES_MCP_OPS_ALLOWED_HOSTS", ["localhost", "127.0.0.1", "::1"]).map((h) => h.toLowerCase()),
 
     backend: backendRaw,
     cliCommand: str("HERMES_CLI", "hermes"),

@@ -161,6 +161,8 @@ All optional; the defaults are fail-closed.
 | `OPS_HELPER_TIMEOUT_SECONDS` | `120` | default per-call timeout (builds/deploys raise it to 1800 s) |
 | `HERMES_MCP_OPS_TOKEN` | *(empty)* | the elevated (`ops`) token; empty → T1/T2 are refused for everyone |
 | `HERMES_MCP_OPS_PORT` / `HERMES_MCP_OPS_HOST` | `8767` / `0.0.0.0` | the local-only listener that serves T2 (published as `127.0.0.1:8767`) |
+| `HERMES_MCP_OPS_ALLOWED_PEERS` | *(empty)* | explicit peer allowlist (IP/CIDR) for the local listener; empty = built-in rule (see "The two listeners") |
+| `HERMES_MCP_OPS_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host headers the local listener accepts |
 | `HERMES_MCP_OPS_LOCKOUT_AFTER` | `3` | consecutive bad tokens on the ops listener before that IP is locked out (its own brake) |
 
 ## Ops tools: threat model
@@ -220,6 +222,27 @@ base token, :8765 -> T1/T2 absent      ops token, :8765 -> T1 present, T2 absent
 base token, :8767 -> T1/T2 absent      ops token, :8767 -> T1 + T2 present
 unknown token     -> 401
 ```
+
+The local listener does not rely on the port number alone. It binds `0.0.0.0`
+inside the container (the host port mapping needs that), so any container that
+shares a network with hermes-mcp — `cloudflared-mcp`, or a container of another
+compose project that joins the fixed-name `mcp` network — could otherwise
+connect to `hermes-mcp:8767`, and a single tunnel ingress rule pointing there
+would publish T2. The listener therefore refuses, before auth:
+
+* any peer inside one of the container's own subnets that is not that subnet's
+  gateway (Docker delivers the `127.0.0.1:8767` mapping from the gateway, from
+  loopback or, on Docker Desktop, from a proxy address outside these subnets) →
+  `403 forbidden_peer`, logged with the address;
+* any `Host` header other than `HERMES_MCP_OPS_ALLOWED_HOSTS` (default
+  `localhost,127.0.0.1,::1`), so a request carrying the tunnel hostname is
+  refused → `403 forbidden_host`.
+
+If your own host requests are refused as `forbidden_peer`, set
+`HERMES_MCP_OPS_ALLOWED_PEERS` to the logged address (it then replaces the
+built-in rule; loopback stays allowed). Residual risk: on Docker Desktop a
+container that can reach `host.docker.internal:8767` arrives through the host
+mapping like the host itself; the Host check and the ops token still apply.
 
 The local listener has its own stricter brute-force brake
 (`HERMES_MCP_OPS_LOCKOUT_AFTER`, default 3 consecutive bad tokens), separate from

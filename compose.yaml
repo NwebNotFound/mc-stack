@@ -381,17 +381,27 @@ services:
       HERMES_MCP_OPS_TOKEN: "${HERMES_MCP_OPS_TOKEN:-}"
       # Local-only listener. It serves the T2 tools and is published on
       # 127.0.0.1 ONLY (see `ports`). The tunnel must never point at it.
+      # It binds 0.0.0.0 inside the container (the port mapping needs that), so
+      # it enforces "local only" itself: peers that are sibling containers on
+      # hermes-mcp's own networks (cloudflared-mcp, anything else that joins
+      # `mcp`) get 403, and only loopback Host headers are accepted
+      # (HERMES_MCP_OPS_ALLOWED_HOSTS, default localhost,127.0.0.1,::1). If the
+      # host's own requests are refused as `forbidden_peer`, set
+      # HERMES_MCP_OPS_ALLOWED_PEERS to the logged address.
       HERMES_MCP_OPS_PORT: "${HERMES_MCP_OPS_PORT:-8767}"
       HERMES_MCP_OPS_LOCKOUT_AFTER: "${HERMES_MCP_OPS_LOCKOUT_AFTER:-3}"
+      HERMES_MCP_OPS_ALLOWED_PEERS: "${HERMES_MCP_OPS_ALLOWED_PEERS:-}"
+      HERMES_MCP_OPS_ALLOWED_HOSTS: "${HERMES_MCP_OPS_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [mcp, ops]
     ports:
       # Local T2 entry point: loopback only, never routed by cloudflared-mcp.
       - "127.0.0.1:${HERMES_MCP_OPS_PORT:-8767}:${HERMES_MCP_OPS_PORT:-8767}"
+    # Only the tunnel-facing listener is meant for the compose networks; the
+    # ops listener is reached through the 127.0.0.1 port mapping above.
     expose:
       - "8765/tcp"
-      - "${HERMES_MCP_OPS_PORT:-8767}/tcp"
     volumes:
       - ./data/hermes-mcp:/app/data
     read_only: true
