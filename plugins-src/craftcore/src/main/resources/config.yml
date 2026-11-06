@@ -125,6 +125,27 @@ market:
     # Halbwertszeit in Stunden. Unter 1 CP Quote-Basis gilt der kurze Wert.
     half-life-hours: 72
     half-life-cheap-hours: 12
+  # Knappheit (docs/market-pricing-plan.md §11). Aus, bis Nils sie einschaltet.
+  # s = clamp((ref / (supply + 1))^k * (1 + demand-weight * max(0, netDemand) / ref), smin, smax)
+  scarcity:
+    enabled: false
+    k: 0.5
+    smin: 0.5
+    smax: 3.0
+    unique-smax: 8.0
+    unique-items: [DRAGON_EGG]
+    ema-alpha: 0.25
+    ref-cheap: 4096
+    ref-mid: 256
+    ref-rare: 16
+    ref-unique: 4
+    demand-weight: 1.0
+    # Bestand: letzter bekannter Inventarstand je Spieler bleibt nach dem Logout stehen (leerer Server = kein Ausschlag).
+    period-ticks: 1200
+    min-holders: 3
+    holder-ttl-days: 30
+    # Nachfrage wird gesammelt und alle 5 s in einer Transaktion geschrieben.
+    demand-flush-ticks: 100
   tier1-after: 64
   tier1-factor: 0.5
   tier2-after: 256

@@ -14,10 +14,11 @@ public final class VipStore {
     static final String LIST_WORLDS = "SELECT id,name,status,slot,type FROM vip_worlds WHERE owner=? AND status<>'deleted' ORDER BY name";
     static final String FIND_WORLD = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE id=? AND status<>'deleted'";
     static final String RENAME_WORLD = "UPDATE vip_worlds SET name=? WHERE id=? AND owner=? AND status<>'deleted'";
-    static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=?";
+    static final String SET_STATUS = "UPDATE vip_worlds SET status=?,slot=? WHERE id=? AND status<>'deleted'";
     static final String SET_RUNNING = "UPDATE vip_worlds SET status='running',last_started_at=? WHERE id=? AND status='starting' AND slot=?";
     static final String INSERT_RUN = "INSERT INTO vip_world_runs (world_id,slot,started_at) VALUES (?,?,?)";
-    static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=?";
+    static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL WHERE id=? AND status IN ('stopped','error')";
+    static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=? AND status<>'deleted'";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
     static final String STOP_IDLE_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='idle' WHERE world_id=? AND stopped_at IS NULL";
@@ -37,7 +38,10 @@ public final class VipStore {
     static final String SET_VISIBILITY = "UPDATE vip_worlds SET visibility=? WHERE id=? AND status<>'deleted'";
     static final String DELETE_WORLD = "UPDATE vip_worlds SET status='deleted',deleted_at=? WHERE id=? AND status<>'deleted'";
     static final String INSERT_AUDIT = "INSERT INTO vip_world_audit (world_id,action,admin_uuid,admin_name,owner_uuid,owner_name,detail,created_at) VALUES (?,?,?,?,?,?,?,?)";
-
+    /** Worlds the player was invited to (member of), for the hub and /vw join. */
+    static final String LIST_SHARED = "SELECT w.id,w.name,w.status,w.slot,w.type FROM vip_worlds w JOIN vip_world_members m ON m.world_id=w.id WHERE m.player=? AND w.status<>'deleted' ORDER BY w.name";
+    /** Invites added after a point in time, with the owner's name, for the cross-server invite notice. */
+    static final String NEW_INVITES = "SELECT w.name,p.name,m.added_at,w.id FROM vip_world_members m JOIN vip_worlds w ON w.id=m.world_id LEFT JOIN known_players p ON p.uuid=w.owner WHERE m.player=? AND m.added_at>? AND w.status<>'deleted' ORDER BY m.added_at";
     static final String FIND_OWNERS_BY_NAME = "SELECT owner FROM vip_worlds WHERE name=? AND status<>'deleted'";
     static final String FIND_BY_OWNER_NAME = "SELECT id,owner,name,type,status,slot FROM vip_worlds WHERE owner=? AND name=? AND status<>'deleted'";
 
@@ -61,6 +65,18 @@ public final class VipStore {
             s.setString(1,owner.toString()); try (ResultSet r=s.executeQuery()) { List<World> worlds=new ArrayList<>(); while(r.next()) worlds.add(new World(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5))); return worlds; }
         }
     }
+    public List<World> listShared(UUID player) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_SHARED)) {
+            s.setString(1,player.toString()); try (ResultSet r=s.executeQuery()) { List<World> worlds=new ArrayList<>(); while(r.next()) worlds.add(new World(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5))); return worlds; }
+        }
+    }
+    public record Invite(String world, String owner, long addedAt, String id) {}
+    public List<Invite> invitesSince(UUID player, long since) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(NEW_INVITES)) {
+            s.setString(1,player.toString()); s.setLong(2,since);
+            try (ResultSet r=s.executeQuery()) { List<Invite> out=new ArrayList<>(); while(r.next()) out.add(new Invite(r.getString(1), r.getString(2)==null?"?":r.getString(2), r.getLong(3), r.getString(4))); return out; }
+        }
+    }
     public Optional<World> find(UUID owner, String name) throws SQLException { return list(owner).stream().filter(w->w.name().equalsIgnoreCase(name)).findFirst(); }
     public Optional<Entry> findById(String id) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(FIND_WORLD)) {
@@ -71,6 +87,13 @@ public final class VipStore {
             }
         }
     }
+    public Optional<Entry> findJoinableById(UUID player, String id) throws SQLException {
+        Optional<Entry> entry=findById(id);
+        if (entry.isEmpty()) return entry;
+        if (entry.get().owner().equals(player) || members(id).stream().anyMatch(m -> m.player().equals(player))) return entry;
+        return Optional.empty();
+    }
+
     public List<Member> members(String worldId) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_MEMBERS)) {
             s.setString(1,worldId);
@@ -159,8 +182,9 @@ public final class VipStore {
     public void rename(UUID owner, String id, String name) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(RENAME_WORLD)) { s.setString(1,name); s.setString(2,id); s.setString(3,owner.toString()); s.executeUpdate(); }
     }
-    public void status(String id, String status, String slot) throws SQLException {
-        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_STATUS)) { s.setString(1,status); s.setString(2,slot); s.setString(3,id); s.executeUpdate(); }
+    /** A deleted world is never brought back by a later status write (a start racing a delete). Returns false then. */
+    public boolean status(String id, String status, String slot) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(SET_STATUS)) { s.setString(1,status); s.setString(2,slot); s.setString(3,id); return s.executeUpdate()==1; }
     }
     public void running(String id, String slot) throws SQLException {
         long now=clock.millis();
@@ -171,6 +195,10 @@ public final class VipStore {
         } catch(SQLException e) { c.rollback(); throw e; } }
     }
     public void stopped(String id) throws SQLException { stop(id,STOP_RUNS); }
+    /** Soft delete of a stopped world; false when it is running, starting or already deleted. */
+    public boolean markDeleted(String id) throws SQLException {
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(MARK_DELETED)) { s.setString(1,id); return s.executeUpdate()==1; }
+    }
     public void idleStopped(String id) throws SQLException { stop(id,STOP_IDLE_RUNS); }
     private void stop(String id, String sql) throws SQLException {
         long now=clock.millis();

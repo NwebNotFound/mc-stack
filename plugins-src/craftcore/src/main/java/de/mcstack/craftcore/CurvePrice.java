@@ -84,6 +84,19 @@ final class CurvePrice {
     return new Cent(buyCents(m, factors), sellCents(m, sellCap, factors));
   }
 
+  /**
+   * Quote with a scarcity factor {@code s}. Scarcity ({@code s > 1}) lifts buy and sell; abundance ({@code s < 1})
+   * only lowers what the bank pays, never what it charges. A cheaper bank buy would let the 1-cent sell floor of a
+   * recipe output (16 panes from 6 glass) pay out more than the ingredients cost.
+   */
+  static Cent scaled(double mid, double s, Long sellCap, Factors factors) {
+    return new Cent(scaledBuy(mid, s, factors), sellCents(mid * s, sellCap, factors));
+  }
+
+  static long scaledBuy(double mid, double s, Factors factors) {
+    return buyCents(mid * Math.max(1, s), factors);
+  }
+
   /** Sum of the pre-step sell cents for qty units, starting at net and stepping down. */
   static long sumSell(double base, double net, int qty, Long sellCap, Factors factors) {
     if (qty < 1 || qty > MAX_QTY) throw new IllegalArgumentException("qty");
