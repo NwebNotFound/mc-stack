@@ -2,7 +2,7 @@
 
 ## Für Spieler
 
-<!-- Eintrag: `- **Kurztitel** – ein Satz als Unterzeile. Optional EN am Zeilenende: `<!-- en: **Title** – subline -->`.` unter einer Überschrift `### TT.MM.JJJJ`, neueste zuerst. -->
+<!-- Eintrag: `- **Kurztitel** – ein Satz als Unterzeile.` unter einer Überschrift `### TT.MM.JJJJ`, neueste zuerst. Optional Englisch am Zeilenende als HTML-Kommentar mit dem Präfix "en:" und derselben Form (Titel – Unterzeile), siehe die Einträge unten. -->
 ### 01.11.2026
 
 - **Echte Spielerköpfe auf der Website** – Auf der Website siehst du jetzt überall echte Spielerköpfe: in der Spielerliste, im Profil und oben in deiner Konto-Anzeige. <!-- en: **Real player heads on the website** – On the website you now see real player heads everywhere: in the player list, in the profile and in your account display at the top. -->
