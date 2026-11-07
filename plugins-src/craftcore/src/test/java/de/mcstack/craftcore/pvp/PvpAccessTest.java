@@ -38,4 +38,14 @@ class PvpAccessTest {
     @Test void otherPermissionsDoNotAllowBypass() {
         assertFalse(PvpAccess.mayBypass(Set.of("group.member")::contains));
     }
+    @Test void leaveAndTeleportsOutOfTheMatchAreRefusedUntilItFinishes() {
+        // Issue #155: a losing player escaped with /pvp leave and forced a draw.
+        assertFalse(PvpAccess.mayLeave(true));
+        assertTrue(PvpAccess.mayLeave(false));
+        assertTrue(PvpAccess.blocksTeleport("pvp_m_12345678", false, "pvp_m_12345678", "world"));
+        assertFalse(PvpAccess.blocksTeleport("pvp_m_12345678", true, "pvp_m_12345678", "world"), "cleanup teleports after finishing");
+        assertFalse(PvpAccess.blocksTeleport("pvp_m_12345678", false, "pvp_m_12345678", "pvp_m_12345678"), "pearls inside the arena");
+        assertFalse(PvpAccess.blocksTeleport("pvp_m_12345678", false, "world", "pvp_m_12345678"), "the round start teleports in");
+        assertFalse(PvpAccess.blocksTeleport(null, false, "world", "pvp_build"));
+    }
 }

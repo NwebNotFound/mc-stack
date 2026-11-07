@@ -35,4 +35,19 @@ class VipQueueStateTest {
     assertNull(q.beforeSwitch(nils, "vipworld-1", 0), "the VIP auto-connect itself does not cancel the queue");
     assertNull(q.beforeSwitch(UUID.randomUUID(), "survival", 0), "a player without a queue switches normally");
   }
+
+  @Test void quitForgetsThePlayerAndARejoinNeverRevivesAnOldRetry() {
+    // Issue #158: the generation map grew by one entry per player and was never cleaned up.
+    VipQueueState q = new VipQueueState();
+    int old = q.generation(nils);
+    assertTrue(q.current(nils, old));
+    q.waiting.put(nils, "world-1");
+    q.forget(nils);
+    assertTrue(q.generation.isEmpty() && q.waiting.isEmpty());
+    assertFalse(q.current(nils, old), "a retry still running after the quit is dropped");
+    assertTrue(q.generation.isEmpty(), "checking a late retry does not create the entry again");
+    int rejoined = q.generation(nils);
+    assertNotEquals(old, rejoined, "after a rejoin the old generation never matches again");
+    assertFalse(q.current(nils, old));
+  }
 }

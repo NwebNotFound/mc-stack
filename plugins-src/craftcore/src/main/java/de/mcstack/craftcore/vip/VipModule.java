@@ -18,6 +18,7 @@ public final class VipModule {
             new VipStartCoordinator.Host() {
                 public VipStartCoordinator.Reply start(String id) { return reply(host.start(id)); }
                 public VipStartCoordinator.Reply status(String slot) { return reply(host.status(slot)); }
+                public void stop(String id, String slot) { host.stop(slot, id); }
             },
             // poll() does blocking HTTP, so the timer must never run on the server thread
             (delayMillis, task) -> Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, task, Math.max(1, delayMillis / 50)),
@@ -35,8 +36,9 @@ public final class VipModule {
                 }
                 public void finished(String id, String reason, String slot, boolean began) {
                     background(plugin, () -> {
-                        // A start that already reached the host must not leave the slot running.
-                        if (began && slot != null && VipStartCoordinator.CANCELLED.equals(reason)) host.stop(slot);
+                        // A start that already reached the host must not leave the slot running, whatever the
+                        // reason (cancel, timeout, host unavailable): otherwise the slot stays held until idle stop.
+                        if (began && slot != null) host.stop(slot, id);
                         try { store.status(id, "stopped", null); }
                         catch (Exception e) { plugin.getLogger().warning("VIP-Startabbruch: " + e.getClass().getSimpleName()); }
                     });
