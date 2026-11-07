@@ -515,6 +515,48 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   assert.equal(out.result.rollback.length, 2);
 });
 
+test("a deploy that gives up waiting for a backup rolls the jars back but restarts nothing during it (Gatekeeper #173)", async () => {
+  const repoAllow = enabledAllowlist();
+  const dir = tmpDir();
+  repoAllow.paths.repo = REPO_ROOT;
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
+  repoAllow.paths.backups = backups;
+  const marker = `${backups}/.maintenance.active`;
+  const pluginLobby = tmpDir("ops-helper-lobby-");
+  const pluginSurvival = tmpDir("ops-helper-survival-");
+  writeFileSync(`${pluginLobby}/craftcore.jar`, "old-lobby-jar");
+  writeFileSync(`${pluginSurvival}/craftcore.jar`, "old-survival-jar");
+  repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
+
+  const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true, maintenanceWaitSeconds: 0 }, now: () => Date.now() });
+  let calls = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    calls += 1;
+    if (calls === 2) writeFileSync(marker, JSON.stringify({ name: "backup" })); // backup.ps1 starts after lobby was deployed
+  };
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
+  writeFileSync(jar, "new-jar-bytes");
+  const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+
+  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
+  rmSync(marker);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "maintenance_in_progress");
+  assert.equal(deps.runner.argvs().filter((argv) => argv[1] === "restart").length, 1, "only the deploy restart of lobby, none during the backup");
+  assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "old-lobby-jar", "the previous lobby jar is back on disk");
+  assert.equal(readFileSync(`${pluginSurvival}/craftcore.jar`, "utf8"), "old-survival-jar");
+  assert.equal(out.result.mixed_state, true);
+  assert.ok(out.result.restart_pending.includes("lobby"), JSON.stringify(out.result.rollback));
+  assert.equal(out.result.rollback.every((entry) => entry.restarted !== true), true);
+  assert.match(out.message, /restart still needed for: .*lobby/);
+});
+
 test("ops_rollback_plugin restores the recorded jars", async () => {
   const repoAllow = enabledAllowlist();
   const dir = tmpDir();

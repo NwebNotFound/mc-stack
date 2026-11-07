@@ -1305,11 +1305,13 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
       await waitForMaintenanceIdle(deps);
     } catch (exc) {
       const rolled = steps.length > 0 ? await rollbackServices(deps, previous, steps) : [];
+      const pending = rolled.filter((entry) => entry.restart_pending).map((entry) => entry.service);
       return {
         ok: false,
         code: "maintenance_in_progress",
-        message: redactText((exc as Error).message).slice(0, 300),
-        result: { service, steps, rollback: rolled },
+        message: redactText((exc as Error).message).slice(0, 300) +
+          (pending.length > 0 ? `; previous jars restored on disk, restart still needed for: ${pending.join(", ")} (they run the new jar until then)` : ""),
+        result: { service, steps, rollback: rolled, restart_pending: pending, mixed_state: pending.length > 0 },
       };
     }
     const jar = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
@@ -1378,9 +1380,16 @@ async function rollbackServices(
       const target = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
       copyFileSync(check.path, target);
       if (sha256File(target) !== check.sha256) throw new Error("the restored jar does not match its recorded sha256");
+      // Never restart a game server while backup.ps1 / dev-reset.ps1 holds the marker (#144 scenario B, Gatekeeper
+      // #173): the old jar is back on disk, the restart is left for later and reported as pending.
+      const active = maintenanceActive(deps);
+      if (active) {
+        out.push({ service, restored: true, restarted: false, restart_pending: true, reason: "maintenance_in_progress", maintenance: active.maintenance });
+        continue;
+      }
       await restartServiceByName(deps, service);
       const health = await waitForHealthy(deps, service);
-      out.push({ service, restored: true, healthy: health.healthy, state: health.state });
+      out.push({ service, restored: true, restarted: true, healthy: health.healthy, state: health.state });
     } catch (exc) {
       out.push({ service, restored: false, reason: redactText((exc as Error).message).slice(0, 200) });
     }

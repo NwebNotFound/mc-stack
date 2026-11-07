@@ -130,13 +130,19 @@ function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional, 
 
 function Get-MaintOptionalProfiles { @('--profile', 'pvp', '--profile', 'vip', '--profile', 'vip3') }
 
-# Compose services that have a running container right now (best effort: empty on any error).
-function Get-MaintRunningServices {
+# Compose services that have a running container right now (best effort: empty on any error; -Strict throws instead,
+# for callers that must not read "docker did not answer" as "stopped").
+function Get-MaintRunningServices([switch]$Strict) {
   $ErrorActionPreference = 'Continue'
   $profiles = Get-MaintOptionalProfiles
   $out = & docker compose @profiles ps --status running --services 2>$null
-  if ($LASTEXITCODE -ne 0) { return @() }
+  if ($LASTEXITCODE -ne 0) { if ($Strict) { throw "docker compose ps fehlgeschlagen (exit $LASTEXITCODE)" }; return @() }
   @($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+# True only when docker answered and the service has no running container (an error is "unknown", not "stopped").
+function Test-MaintStopped([string]$Server) {
+  try { return -not (@(Get-MaintRunningServices -Strict) -contains $Server) } catch { return $false }
 }
 
 # World folders of one server data dir: world, world_*, or anything with a level.dat.

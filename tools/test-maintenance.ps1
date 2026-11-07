@@ -27,6 +27,16 @@ function global:docker {
       return $state
     }
     if ($global:DockerStderr -and ($a -join ' ') -like '*rcon-cli*') { Write-Error 'warning: stderr noise'; return }
+    # running pvp/vip servers: $global:Running; from `ps` call number $global:RunningLaterFrom on $global:RunningLater;
+    # from call number $global:PsFailFrom on docker fails
+    if (($a -join ' ') -like '*ps --status running --services*') {
+      $global:PsCalls++
+      if ($global:PsFailFrom -and $global:PsCalls -ge $global:PsFailFrom) { $global:LASTEXITCODE = 1; return }
+      if ($global:RunningLaterFrom -and $global:PsCalls -ge $global:RunningLaterFrom) { return @($global:RunningLater) }
+      return @($global:Running)
+    }
+    # an RCON command that times out ($global:RconFail = 'pvp save-on' style patterns)
+    foreach ($f in @($global:RconFail)) { if ($f -and ($a -join ' ') -like "*exec -T $f*") { $global:LASTEXITCODE = 1; return 'rcon timeout' } }
     if (($a -join ' ') -like '*mariadb*') { return '1' }
     return ''
   }
@@ -176,6 +186,34 @@ $global:DockerStderr = $true
 $msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
 $global:DockerStderr = $false
 Check ($msg -eq '') "docker stderr with exit 0 does not fail the backup ($msg)"
+
+Write-Host 'online backup: a running PvP/VIP server whose save-on fails keeps failing the run (Gatekeeper #173)'
+Reset-Calls
+$global:Running = @('pvp'); $global:RconFail = @('pvp rcon-cli save-on'); $global:PsCalls = 0
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$calls = @($global:DockerCalls)
+$ons = @($calls | Where-Object { $_ -like '*exec -T pvp rcon-cli save-on*' }).Count
+Check ($msg -like '*save-on fehlgeschlagen*pvp*') "the run fails with the reason ($msg)"
+Check ($ons -ge 2) "finally retries save-on for the still running pvp ($ons calls)"
+$rl = @(Get-Content -LiteralPath (Get-ChildItem "$root/logs/maintenance" -Filter 'backup-*.log').FullName | ForEach-Object { $_ | ConvertFrom-Json })
+$run = ($rl | Select-Object -Last 1).run
+Check (@($rl | Where-Object { $_.run -eq $run -and $_.step -eq 'end' -and $_.msg -like 'exit 1*' }).Count -eq 1) 'backup log ends with exit 1'
+
+Write-Host 'online backup: save-on fails because the PvP/VIP server stopped meanwhile -> success'
+Reset-Calls
+$global:Running = @('vipworld-1'); $global:PsCalls = 0; $global:RunningLaterFrom = 2; $global:RunningLater = @()   # running at save-off, gone at save-on
+$global:RconFail = @('vipworld-1 rcon-cli save-on')
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+Check ($msg -eq '') "a server that stopped does not fail the backup ($msg)"
+$global:RunningLaterFrom = 0
+
+Write-Host 'online backup: save-on fails and docker cannot say whether it still runs -> not swallowed'
+Reset-Calls
+$global:Running = @('vipworld-1'); $global:RconFail = @('vipworld-1 rcon-cli save-on')
+$global:PsCalls = 0; $global:PsFailFrom = 2   # the first `ps` (which servers run) answers, the later ones fail
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+Check ($msg -like '*save-on fehlgeschlagen*vipworld-1*') "unknown state counts as running: the run fails ($msg)"
+$global:Running = @(); $global:RconFail = @(); $global:PsFailFrom = 0
 
 Write-Host '-StopServers keeps the old behaviour'
 Reset-Calls

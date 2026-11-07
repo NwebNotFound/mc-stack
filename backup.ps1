@@ -90,9 +90,14 @@ try {
   }
   foreach($server in @($savesOff)){
     if($optional -contains $server){
-      # A PvP/VIP server may have stopped meanwhile; that must not fail the backup, but it is logged as an error.
+      # A PvP/VIP server may have stopped meanwhile: that alone must not fail the backup. It leaves $savesOff only
+      # after save-on worked or it is confirmed stopped; otherwise `finally` retries and fails the run (Gatekeeper #173).
       try { Invoke-MaintRcon $server 'save-on' -AllProfiles; Write-MaintLog 'save' 'info' "${server}: save-on" }
-      catch { Write-MaintLog 'save' 'error' "${server}: save-on fehlgeschlagen: $($_.Exception.Message)" }
+      catch {
+        Write-MaintLog 'save' 'error' "${server}: save-on fehlgeschlagen: $($_.Exception.Message)"
+        if(-not (Test-MaintStopped $server)){ continue }
+        Write-MaintLog 'save' 'warn' "${server}: laeuft nicht mehr, kein save-on noetig"
+      }
     } else { Invoke-MaintRcon $server 'save-on'; Write-MaintLog 'save' 'info' "${server}: save-on" }
     $savesOff=@($savesOff | Where-Object { $_ -ne $server })
   }
@@ -110,7 +115,11 @@ try {
   # Saving must never stay off, also when a copy or the dump failed.
   foreach($server in $savesOff){
     try { Invoke-MaintRcon $server 'save-on' -AllProfiles:($optional -contains $server); Write-MaintLog 'save' 'info' "${server}: save-on (Aufraeumen)" }
-    catch { Write-MaintLog 'save' 'error' "${server}: save-on fehlgeschlagen: $($_.Exception.Message)"; $exitCode=1 }
+    catch {
+      if(($optional -contains $server) -and (Test-MaintStopped $server)){ Write-MaintLog 'save' 'warn' "${server}: laeuft nicht mehr, kein save-on noetig"; continue }
+      Write-MaintLog 'save' 'error' "${server}: save-on fehlgeschlagen, Speichern ist noch AUS: $($_.Exception.Message)"; $exitCode=1
+      if(-not $errorText){ $errorText="save-on fehlgeschlagen: $server (Speichern ist noch aus)" }
+    }
   }
   if($stopped -and (-not $LeaveStopped -or -not $complete)){
     docker compose up -d --no-deps lobby survival
