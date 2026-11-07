@@ -195,6 +195,57 @@ Reset-World; $global:DockerUp = $false; $global:Ct['survival'] = 'exited|'
 $st = Pass 140
 Check ($st.docker -eq 'down' -and -not ((Revives) -like 'docker compose*')) 'Docker down: compose targets skipped, Docker not started'
 
+Write-Host 'docker down: the host task only needs "running + listening" (/vip/status is 503 without Docker)'
+Reset-World; $global:DockerUp = $false; $global:HttpOk = $false
+Pass 150 | Out-Null; Pass 152 | Out-Null; $st = Pass 154
+Check (-not ((Revives) -like 'stop-task*') -and $st.targets['pvp-host-service'].verdict -eq 'ok' -and -not $st.targets['pvp-host-service'].needsHuman) 'Docker down, task running, port open, status 503: no stop-task'
+Reset-World; $global:DockerUp = $false; $global:PortOpen = $false
+Pass 156 | Out-Null; Pass 158 | Out-Null
+Check ((Revives) -contains 'stop-task mc-stack PvP host service') 'Docker down and the port closed twice: still revived'
+
+# A real native `docker` that writes to stderr (Windows PowerShell 5.1 turns 2>&1 stderr into terminating errors
+# under 'Stop'; the PS-function mock above never writes stderr). Missing container, compose progress, Docker down.
+Write-Host 'native docker stub with stderr'
+Remove-Item Function:\docker
+$stub = Join-Path $root 'stub'; New-Item -ItemType Directory -Path $stub | Out-Null
+$ps = (Get-Process -Id $PID).Path
+Set-Content -LiteralPath "$stub/stub.ps1" -Encoding UTF8 -Value @'
+$d = $env:WD_STUB_DIR; $a = @($args)
+Add-Content -LiteralPath "$d/calls.log" -Value ($a -join ' ')
+if ($a[0] -eq 'info') { if (Test-Path "$d/down") { [Console]::Error.WriteLine('Cannot connect to the Docker daemon. Is the docker daemon running?'); exit 1 }; '27.0'; exit 0 }
+if ($a[0] -eq 'inspect') {
+  $name = $a[-1]; $svc = $name -replace '^mc-stack-', '' -replace '-1$', ''
+  $f = "$d/ct-$svc"
+  if (-not (Test-Path $f)) { [Console]::Error.WriteLine("error: no such object: $name"); exit 1 }
+  (Get-Content -LiteralPath $f -Raw).Trim(); exit 0
+}
+if ($a[0] -eq 'compose') { [Console]::Error.WriteLine(' Container mc-stack-x-1  Starting'); [Console]::Error.WriteLine(' Container mc-stack-x-1  Started'); exit 0 }
+exit 0
+'@
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+  Set-Content -LiteralPath "$stub/docker.cmd" -Encoding ASCII -Value "@`"$ps`" -NoProfile -ExecutionPolicy Bypass -File `"$stub\stub.ps1`" %*"
+} else {
+  Set-Content -LiteralPath "$stub/docker" -Encoding ASCII -Value "#!/bin/sh`nexec `"$ps`" -NoProfile -File `"$stub/stub.ps1`" `"`$@`""
+  & chmod +x "$stub/docker"
+}
+$env:WD_STUB_DIR = $stub
+$oldPath = $env:PATH; $env:PATH = $stub + [IO.Path]::PathSeparator + $env:PATH
+foreach ($svc in 'velocity','lobby','craftcore-db','playit','ops-helper','docker-socket-filter','plugin-builder') { Set-Content -LiteralPath "$stub/ct-$svc" -Value 'running|healthy' }
+Set-Content -LiteralPath "$stub/ct-survival" -Value 'exited|'   # dead; bot has no container at all (missing, stderr)
+Reset-World; $global:Calls.Clear()
+$msg = ''; $st = $null; try { $st = Pass 200 } catch { $msg = $_.Exception.Message }
+$sc = @(Get-Content -LiteralPath "$stub/calls.log")
+Check ($msg -eq '' -and $st) "stderr from docker does not abort the pass ($msg)"
+Check (($sc -contains 'compose up -d --no-deps survival') -and ($sc -contains 'compose --profile bot up -d --no-deps bot')) 'missing bot and exited survival are both revived'
+$wl = Get-Content -LiteralPath (Get-ChildItem "$root/logs/watchdog" -Filter 'watchdog-*.log' | Select-Object -First 1).FullName -Raw
+Check ($wl -notmatch 'revive-failed') 'compose progress on stderr is not a failed revive'
+Check (@($global:Calls | Where-Object { $_ -like 'probe-task*' }).Count -ge 1) 'the host task is still checked'
+New-Item -ItemType File -Path "$stub/down" | Out-Null
+$msg = ''; $st = $null; try { $st = Pass 230 } catch { $msg = $_.Exception.Message }
+Check ($msg -eq '' -and $st.docker -eq 'down') "Docker down (stderr, exit 1): reported as down, no throw ($msg)"
+$env:PATH = $oldPath
+
+
 Write-Host 'backup.ps1 / dev-reset.ps1 holds'
 $b = Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw
 Check ($b -match "Set-WatchdogHold \`$PSScriptRoot 'backup'" -and $b -match 'if\(\$LeaveStopped -and \$complete\)\{ Set-WatchdogHold' -and $b -match "Clear-WatchdogHold \`$PSScriptRoot 'backup'") 'backup.ps1 holds while running, keeps the hold after -LeaveStopped'

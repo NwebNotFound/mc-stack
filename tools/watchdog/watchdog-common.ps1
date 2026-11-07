@@ -74,15 +74,19 @@ function Get-WdHolds([string]$Root, [double]$MaxHours) {
 }
 
 # ---- probes (overridden in tests) ----
-function Test-WdDocker { $null = & docker info --format '{{.ServerVersion}}' 2>&1; return ($LASTEXITCODE -eq 0) }
+# Native docker calls run with ErrorActionPreference 'Continue': under Windows PowerShell 5.1 a stderr line captured
+# with 2>&1 is a terminating error under 'Stop' (watchdog.ps1). Only the exit code decides (as Invoke-MaintRcon).
+function Test-WdDocker { $ErrorActionPreference = 'Continue'; $null = & docker info --format '{{.ServerVersion}}' 2>&1; return ($LASTEXITCODE -eq 0) }
 # "running|healthy", "exited|", "missing|" ... from `docker inspect` of mc-stack-<svc>-1.
 function Get-WdContainer([string]$Service) {
+  $ErrorActionPreference = 'Continue'
   $out = (& docker inspect --format '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "mc-stack-$Service-1" 2>&1) -join ''
   if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ status = 'missing'; health = '' } }
   $p = $out.Trim().Split('|')
   return [pscustomobject]@{ status = $p[0]; health = $(if ($p.Count -gt 1) { $p[1] } else { '' }) }
 }
 function Invoke-WdCompose([string]$Profile, [string[]]$Arguments) {
+  $ErrorActionPreference = 'Continue'   # compose writes its progress lines to stderr
   $a = @('compose') + $(if ($Profile) { @('--profile', $Profile) } else { @() }) + $Arguments
   $out = & docker @a 2>&1
   if ($LASTEXITCODE -ne 0) { throw "docker $($a -join ' ') failed: $(($out | Out-String).Trim())" }
@@ -104,6 +108,9 @@ function Invoke-WdProbe($t) {
   $ts = Get-WdTaskState $t.task
   if ($ts -eq 'Missing') { return 'missing-task' }
   if ($ts -ne 'Running') { return 'dead' }
+  # With Docker down the service's /vip/status answers 503 (it asks docker per VIP slot): then only "running and
+  # listening" counts, so a healthy service is not killed while Docker Desktop starts or updates.
+  if ($t.dockerDown) { if (Test-WdPort $t.port) { return 'ok' } else { return 'unhealthy' } }
   if ((Test-WdPort $t.port) -and (Test-WdHttp $t.url $t.headers)) { return 'ok' }
   return 'unhealthy'
 }
@@ -163,7 +170,7 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
     $port = [int]$(if ($envVars[$h.portEnv]) { $envVars[$h.portEnv] } else { $h.defaultPort })
     $headers = @{}; if ($envVars[$h.tokenEnv]) { $headers[$h.tokenHeader] = $envVars[$h.tokenEnv] }
     $url = "http://127.0.0.1:$port$($h.statusPath)"
-    $checks += [pscustomobject]@{ kind = 'task'; name = $h.name; task = $task; port = $port; url = $url; headers = $headers }
+    $checks += [pscustomobject]@{ kind = 'task'; name = $h.name; task = $task; port = $port; url = $url; headers = $headers; dockerDown = (-not $dockerUp) }
   }
 
   $pending = @()
@@ -171,7 +178,8 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
     $s = $state[$t.name]
     if (-not $s) { $s = [pscustomobject]@{ verdict = ''; unhealthyStreak = 0; revives = @(); lastRevive = $null; needsHuman = $false } }
     $s.revives = @(@($s.revives) | Where-Object { $_ -and ([datetime]$_) -gt $Now.AddHours(-1) })
-    $verdict = Invoke-WdProbe $t
+    # one target that cannot be probed must not abort the pass (state, other targets, the host task)
+    try { $verdict = Invoke-WdProbe $t } catch { Write-WdLog $t.name 'probe-failed' $_.Exception.Message 'error'; $s.verdict = 'unknown'; $state[$t.name] = $s; $status.targets[$t.name] = [ordered]@{ verdict = 'unknown'; lastRevive = $s.lastRevive; revivesLastHour = @($s.revives).Count; needsHuman = [bool]$s.needsHuman }; continue }
     $s.verdict = $verdict
     if ($verdict -eq 'missing-task') {
       if (-not $s.needsHuman) { Write-WdLog $t.name 'needs-human' 'scheduled task is not registered: run its install-task.ps1' 'error' }
@@ -215,7 +223,7 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
           Write-WdLog '-' 'paused' ("hold appeared during the pass, revives skipped: " + (($late | ForEach-Object { $_.owner }) -join ', '))
         } else {
           foreach ($p in $pending) {
-            $again = Invoke-WdProbe $p.t   # state may have changed since the first probe
+            $again = try { Invoke-WdProbe $p.t } catch { $p.verdict }   # state may have changed since the first probe
             if ($again -eq 'ok') { $p.s.verdict = 'ok'; $p.s.unhealthyStreak = 0; continue }
             try {
               Invoke-WdRevive $p.t $p.verdict
