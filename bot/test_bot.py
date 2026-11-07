@@ -273,6 +273,45 @@ class BuyTests(unittest.TestCase):
         self.assertEqual(calls[0], calls[1])
         self.assertEqual(d.execute("SELECT response FROM dc_purchases").fetchone()[0], "ERR SOLD_OUT")
 
+    def test_execute_in_worker_thread_uses_own_connection(self):
+        # #148: bot.db is bound to the event-loop thread; the purchase runs via asyncio.to_thread
+        import asyncio, sqlite3, buy
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "links.sqlite3")
+            main = sqlite3.connect(path)
+            buy.init_db(main)
+            calls = []
+            def rcon(host, cmd):
+                calls.append(cmd); return "OK 2 668 1"
+            with self.assertRaises(sqlite3.ProgrammingError):
+                asyncio.run(asyncio.to_thread(buy.execute, main, rcon, "survival", 7, "shop", self.U, self.L, 2, 668, "dc-t0"))
+            p = asyncio.run(asyncio.to_thread(buy.execute_at, path, rcon, "survival", 7, "shop", self.U, self.L, 2, 668, "dc-t1"))
+            self.assertEqual(p, ("ok", 2, 668, 1)); self.assertEqual(len(calls), 1)
+            self.assertEqual(main.execute("SELECT response FROM dc_purchases WHERE idem_key='dc-t1'").fetchone()[0], "OK 2 668 1")
+            main.close()
+
+    def test_confirm_view_purchase_goes_through_worker_thread(self):
+        import asyncio, sqlite3, buy
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "links.sqlite3")
+            main = sqlite3.connect(path)
+            buy.init_db(main)
+            calls = []
+            def rcon(host, cmd):
+                calls.append(cmd); return "OK 1 500 0"
+            async def run():
+                b = Mock(); b.db = main
+                view = buy.ConfirmView(b, "shop", self.L, self.U, ("Bob", "diamond", 1, 500, "x"), 1, 500)
+                inter = Mock(); inter.user.id = 7
+                inter.response.edit_message = AsyncMock(); inter.edit_original_response = AsyncMock()
+                with patch.object(buy, "DB_PATH", path), patch.object(buy, "RCON", rcon), patch.object(buy, "admin_log", AsyncMock()):
+                    await view.ok.callback(inter)
+                return inter
+            inter = asyncio.run(run())
+            self.assertEqual(len(calls), 1)
+            self.assertIn("Gekauft", inter.edit_original_response.call_args.kwargs["embed"].title)
+            main.close()
+
     def test_buy_options(self):
         import shops
         rows = [("Bob", "diamond", None, 3, 10.0, 0, ("shop", self.L, 1000)), ("X", "dirt", None, 1, 1.0, 0)]

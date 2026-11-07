@@ -1,5 +1,5 @@
 """Changelog: postet neue Eintraege aus changelog.json in CHANGELOG_CHANNEL_ID (einmalig, Status in data/)."""
-import json, logging, os
+import asyncio, json, logging, os
 from pathlib import Path
 import discord
 
@@ -92,21 +92,21 @@ async def post_new(bot, force_version=None):
         if entry.get("requires") == "ah_data" and not force_version:
             try:
                 import shops
-                if not shops.query("SELECT 1 FROM v_ah_listings LIMIT 1"):
+                if not await asyncio.to_thread(shops.query, "SELECT 1 FROM v_ah_listings LIMIT 1"):
                     continue
             except Exception:
                 continue
         if entry.get("requires") == "shop_views" and not force_version:
             try:
                 import shops
-                shops.query("SELECT 1 FROM v_shop_events LIMIT 1")
+                await asyncio.to_thread(shops.query, "SELECT 1 FROM v_shop_events LIMIT 1")
             except Exception:
                 continue  # erst posten, wenn die Shop-Views existieren
         if entry.get("requires") == "market_views" and not force_version:
             try:
                 import shops
-                shops.query("SELECT 1 FROM v_market LIMIT 1")
-                shops.query("SELECT 1 FROM v_market_history LIMIT 1")
+                await asyncio.to_thread(shops.query, "SELECT 1 FROM v_market LIMIT 1")
+                await asyncio.to_thread(shops.query, "SELECT 1 FROM v_market_history LIMIT 1")
             except Exception:
                 continue  # erst posten, wenn die Markt-Views existieren
         await channel.send(embed=embed(entry))
