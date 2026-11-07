@@ -2,6 +2,7 @@ package de.mcstack.craftcore;
 import org.junit.jupiter.api.Test;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Gatekeeper #170 re-review: each crash/failure window of the inbox and grave-XP hand-out, on H2. */
@@ -92,6 +93,50 @@ class HandoutsTest {
       assertTrue(Handouts.reconcileXp(c, "lobby", P, Set.of()).getKey().isEmpty(), "graves of another server are not paid here");
       assertTrue(GraveStore.xpPaid(c, 7));
       assertEquals(Set.of(Handouts.xpMark(7)), Handouts.reconcileXp(c, "survival", P, Set.of(Handouts.xpMark(7))).getValue(), "stale marker dropped");
+    }
+  }
+  // Gatekeeper #170: a join recovery that overlaps a hand-out must not act on a marker snapshot taken before it.
+  @Test void recoveryWaitsForAHandoutInProgress() throws Exception {
+    try (Connection c = db("g1")) {
+      Set<String> playerFile = ConcurrentHashMap.newKeySet();           // the player's saved markers
+      CountDownLatch reserved = new CountDownLatch(1);
+      Thread[] recovery = new Thread[1]; Object[] dropped = new Object[1]; Throwable[] err = new Throwable[1];
+      Thread handout = new Thread(() -> { try { HandoutGate.run(P, () -> {
+        assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));
+        reserved.countDown();
+        while (recovery[0] == null || recovery[0].getState() != Thread.State.WAITING) Thread.onSpinWait();   // recovery is now blocked on the gate
+        playerFile.add(Handouts.itemMark("d1", 5));                   // items + marker saved in one write
+        assertTrue(Handouts.finish(c, "d1", 5));
+        return null; }); } catch (Throwable e) { err[0] = e; reserved.countDown(); } });
+      handout.start(); reserved.await();
+      recovery[0] = new Thread(() -> { try { dropped[0] = HandoutGate.run(P, () -> Handouts.reconcile(c, P, "survival", Set.copyOf(playerFile))); } catch (Throwable e) { err[0] = e; } });
+      recovery[0].start(); handout.join(); recovery[0].join();
+      assertNull(err[0], "no failure inside the threads");
+      assertEquals(List.of("geliefert:5:NBT"), rows(c), "delivered once, not reopened");
+      assertEquals(Set.of(Handouts.itemMark("d1", 5)), dropped[0]);
+    }
+  }
+  @Test void withoutTheGateAStaleSnapshotWouldReopenAGivenHandout() throws Exception {
+    try (Connection c = db("g2")) {
+      Set<String> stale = Set.of();                                     // join captured the markers first ...
+      assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));         // ... then /abholen reserved, gave and saved
+      Handouts.reconcile(c, P, "survival", stale);                      // ... and the delayed recovery ran
+      assertFalse(Handouts.finish(c, "d1", 5), "the hazard the gate prevents: the given row was reopened");
+      assertEquals(List.of("offen:5:NBT"), rows(c));
+    }
+  }
+  @Test void overlappingXpPaymentsPayOnce() throws Exception {
+    try (Connection c = db("g3")) {
+      Set<String> playerFile = new HashSet<>();
+      List<long[]> owed = List.of(new long[]{7, 30});
+      // grave hand-out pays, saves the marker; the DB update is still pending
+      List<long[]> first = HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile)));
+      assertEquals(1, first.size()); playerFile.add(Handouts.xpMark(7));
+      // a join recovery (or a second hand-out) with the same stale list, in the next gate section: nothing to pay
+      assertTrue(HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile))).isEmpty());
+      assertTrue(Handouts.reconcileXp(c, "survival", P, Set.copyOf(playerFile)).getKey().isEmpty(), "recovery marks it paid instead");
+      playerFile.clear();                                               // marker dropped after the DB update
+      assertTrue(HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile))).isEmpty(), "paid in the DB: never again");
     }
   }
   @Test void markersRoundTrip() {

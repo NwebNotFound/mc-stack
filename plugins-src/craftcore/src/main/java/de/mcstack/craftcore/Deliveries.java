@@ -19,7 +19,7 @@ final class Deliveries {
  record Row(String id,String data,int amount,String source){}
  static void collect(CraftCore core,Player p){collect(core,p,null);}
  /** As /abholen; with `only` just those delivery ids (a grave hands out its own items, nothing else). */
- static void collect(CraftCore core,Player p,Set<String> only){try {String player=p.getUniqueId().toString(),server=server();
+ static void collect(CraftCore core,Player p,Set<String> only){try {String player=p.getUniqueId().toString(),server=server();HandoutGate.run(player,()->{
   // first settle hand-outs a crash or DB failure left reserved on this server (Handouts: the player file decides)
   Set<String> drop=core.tx(c->Handouts.reconcile(c,player,server,marks(core,p)));if(!drop.isEmpty())dropMarks(core,p,drop);
   List<Row> rows=core.tx(c->{List<Row> out=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT id,item_nbt,amount,source FROM pending_deliveries WHERE player_uuid=? AND status='offen' ORDER BY created_at,id")){q.setString(1,player);try(ResultSet r=q.executeQuery()){while(r.next())out.add(new Row(r.getString(1),r.getString(2),r.getInt(3),r.getString(4)));}}return out;});
@@ -33,7 +33,7 @@ final class Deliveries {
    catch(Exception ex){core.getLogger().warning("Abholfach: Abschluss "+row.id()+" folgt beim naechsten Join/abholen: "+ex);}
    if(leftoverCount>0)p.sendMessage(DeliveryLeftovers.message(leftoverCount));
    delivered+=given;}
-  DeliveryNotices.rememberOpen(core,p);if(delivered>0)p.sendMessage(delivered+" Items aus dem Abholfach erhalten.");if(!rows.isEmpty()&&delivered<rows.stream().mapToInt(Row::amount).sum())p.sendMessage("Weitere Lieferungen warten auf Inventarplatz: /abholen");else if(rows.isEmpty())p.sendMessage("Keine offenen Lieferungen. /abholen");}catch(Exception ex){core.getLogger().severe("Abholfach: "+ex);p.sendMessage("Abholfach momentan nicht verfuegbar. Bitte Admin informieren.");}}
+  DeliveryNotices.rememberOpen(core,p);if(delivered>0)p.sendMessage(delivered+" Items aus dem Abholfach erhalten.");if(!rows.isEmpty()&&delivered<rows.stream().mapToInt(Row::amount).sum())p.sendMessage("Weitere Lieferungen warten auf Inventarplatz: /abholen");else if(rows.isEmpty())p.sendMessage("Keine offenen Lieferungen. /abholen");return null;});}catch(Exception ex){core.getLogger().severe("Abholfach: "+ex);p.sendMessage("Abholfach momentan nicht verfuegbar. Bitte Admin informieren.");}}
  static String server(){return System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");}
  // Hand-out markers in the player's PersistentDataContainer: saved in the same player file as the inventory/XP.
  private static NamespacedKey key(CraftCore core){return new NamespacedKey(core,"handouts");}

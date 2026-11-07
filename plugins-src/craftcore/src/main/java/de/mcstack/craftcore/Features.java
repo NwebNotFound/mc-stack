@@ -156,37 +156,44 @@ final class Features implements Listener {
     });
   }
   record GraveClaim(long id,String items,int xp) {}
-  private static final Set<Long> payingXp=java.util.concurrent.ConcurrentHashMap.newKeySet();
   /**
-   * Main thread: give the owed XP together with an "x:<grave>" marker in the player file (one saveData), then mark it
-   * paid in the DB and drop the marker. If the DB update fails or the server dies, the marker tells the next join
-   * that it was paid (Handouts.reconcileXp), so it is never paid twice; without a saved marker it is paid again.
+   * Main thread, inside the player's HandoutGate: of `owed`, pay only what the DB still owes and no saved marker
+   * already covers (Handouts.xpToPay); give it together with "x:<grave>" markers (one saveData), then mark it paid
+   * in the DB and drop the markers. A DB failure or crash leaves the marker: the next join marks it paid, no repeat.
    */
   void payXp(Player p,List<long[]> owed){
-    int sum=0; List<Long> mine=new ArrayList<>();
-    for(long[] g:owed){if(g[1]>0 && payingXp.add(g[0])){sum+=(int)g[1];mine.add(g[0]);}}
-    if(mine.isEmpty())return;
-    List<String> marks=new ArrayList<>(); for(long id:mine) marks.add(Handouts.xpMark(id));
-    p.giveExp(sum); for(String m:marks) Deliveries.addMark(plugin,p,m); p.saveData();
-    Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
-      try{plugin.tx(c->{for(long id:mine)GraveStore.xpPaid(c,id);return null;});Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())Deliveries.dropMarks(plugin,p,marks);});}
-      catch(Exception ex){plugin.getLogger().warning("Grab-XP "+mine+" gegeben, DB-Markierung folgt beim naechsten Join: "+ex);}
-      finally{mine.forEach(payingXp::remove);}
-    });
+    String id=p.getUniqueId().toString();
+    try { HandoutGate.run(id,()->{
+      List<long[]> pay=plugin.tx(c->Handouts.xpToPay(c,owed,Deliveries.marks(plugin,p)));
+      if(pay.isEmpty())return null;
+      int sum=0; List<Long> ids=new ArrayList<>(); List<String> marks=new ArrayList<>();
+      for(long[] g:pay){sum+=(int)g[1];ids.add(g[0]);marks.add(Handouts.xpMark(g[0]));}
+      p.giveExp(sum); for(String m:marks) Deliveries.addMark(plugin,p,m); p.saveData();
+      Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
+        try{plugin.tx(c->{for(long g:ids)GraveStore.xpPaid(c,g);return null;});
+          Bukkit.getScheduler().runTask(plugin,()->{if(!p.isOnline())return;try{HandoutGate.run(id,()->{Deliveries.dropMarks(plugin,p,marks);return null;});}catch(Exception ex){plugin.getLogger().warning("Grab-XP Markierung: "+ex);}});}
+        catch(Exception ex){plugin.getLogger().warning("Grab-XP "+ids+" gegeben, DB-Markierung folgt beim naechsten Join: "+ex);}
+      });
+      return null;
+    }); } catch(Exception ex){plugin.getLogger().warning("Grab-XP: "+ex);}
   }
-  /** Join: settle hand-outs left open by a crash/DB failure on this server (items and grave XP), then pay owed XP. */
+  /**
+   * Join: settle hand-outs a crash/DB failure left open on this server, then pay owed XP. Runs on the main thread
+   * inside the player's HandoutGate and reads the markers there, so it can never race a /abholen or grave hand-out
+   * with a stale marker snapshot (Gatekeeper #170).
+   */
   @EventHandler public void graveXp(PlayerJoinEvent e){
-    Player p=e.getPlayer(); String id=p.getUniqueId().toString(); Set<String> marks=Deliveries.marks(plugin,p);
-    Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
-      try {
-        Set<String> dropItems=plugin.tx(c->Handouts.reconcile(c,id,server,marks));
+    Player p=e.getPlayer(); String id=p.getUniqueId().toString();
+    Bukkit.getScheduler().runTask(plugin,()->{
+      if(!p.isOnline())return;
+      try { HandoutGate.run(id,()->{
+        Set<String> marks=Deliveries.marks(plugin,p);
+        Set<String> drop=new HashSet<>(plugin.tx(c->Handouts.reconcile(c,id,server,marks)));
         Map.Entry<List<long[]>,Set<String>> xp=plugin.tx(c->Handouts.reconcileXp(c,server,id,marks));
-        Bukkit.getScheduler().runTask(plugin,()->{
-          if(!p.isOnline())return;
-          Set<String> drop=new HashSet<>(dropItems); drop.addAll(xp.getValue()); if(!drop.isEmpty())Deliveries.dropMarks(plugin,p,drop);
-          if(!xp.getKey().isEmpty()){payXp(p,xp.getKey()); p.sendMessage("XP aus deinem Grab erhalten.");}
-        });
-      } catch(Exception ex){plugin.getLogger().warning("Uebergaben abgleichen: "+ex);}
+        drop.addAll(xp.getValue()); if(!drop.isEmpty())Deliveries.dropMarks(plugin,p,drop);
+        if(!xp.getKey().isEmpty()){payXp(p,xp.getKey()); p.sendMessage("XP aus deinem Grab erhalten.");}
+        return null;
+      }); } catch(Exception ex){plugin.getLogger().warning("Uebergaben abgleichen: "+ex);}
     });
   }
   void release(long id){Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{try{plugin.tx(c->{plugin.exec(c,"UPDATE graves SET status='OPEN', claiming_at=NULL WHERE id=? AND status='CLAIMING' AND delivered=FALSE",id);return null;});}catch(Exception ex){plugin.getLogger().warning("Grab-Freigabe: "+ex);}});}

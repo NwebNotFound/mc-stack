@@ -93,6 +93,22 @@ final class Handouts {
   }
 
   /**
+   * Inside the player's {@link HandoutGate} section, with markers read in that section: of `owed`, the graves that are
+   * still unpaid in the DB and not already given (an "x:" marker means given and saved, DB update pending). A stale
+   * list (a grave hand-out and a join recovery for the same grave) therefore never pays twice.
+   */
+  static List<long[]> xpToPay(Connection c, List<long[]> owed, Set<String> marks) throws SQLException {
+    List<long[]> out = new ArrayList<>();
+    for (long[] g : owed) {
+      if (g[1] <= 0 || marks.contains(xpMark(g[0]))) continue;
+      try (PreparedStatement q = c.prepareStatement("SELECT 1 FROM graves WHERE id=? AND status='CLAIMED' AND xp_paid=FALSE")) {
+        q.setLong(1, g[0]); try (ResultSet r = q.executeQuery()) { if (r.next()) out.add(g); }
+      }
+    }
+    return out;
+  }
+
+  /**
    * Join on `server`: graves whose XP is still unpaid. Marked ones were given and saved before the DB update
    * failed or the server died: they are only marked paid (no second payment). Returns [id, xp] still to pay,
    * plus (as the second element) the xp markers that may be dropped.
