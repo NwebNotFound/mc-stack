@@ -92,6 +92,14 @@ Empfohlene Task-Einstellungen (Task Scheduler, Benutzer `nilsw`, "Unabhaengig vo
 
 Zusaetzlich den Verlauf der Aufgabenplanung einschalten ("Verlauf aller Aufgaben aktivieren"). Kein AtStartup-Task. Die Scheduler-Aenderungen gehoeren nicht in diesen PR und werden vom Homelab Deployer umgesetzt.
 
+## Watchdog (`tools/watchdog`, fuer Homelab Deployer)
+
+Belebt tote oder haengende Dauerdienste wieder (Allowlist `tools/watchdog/targets.json`, Details `tools/watchdog/README.md`). Einmalig nach dem Merge: `powershell -ExecutionPolicy Bypass -File tools\watchdog\install-task.ps1` (Aufgabe "mc-stack watchdog", alle 2 min). Entfernen: dasselbe mit `-Uninstall`.
+
+- **Deploys:** `backup.ps1 -LeaveStopped` laesst eine Watchdog-Sperre stehen, damit lobby/survival gestoppt bleiben. Nach dem Deploy, wenn die Server wieder laufen: `powershell -File tools\watchdog\pause.ps1 -Resume -Owner backup`. Spaetestens nach 3 h endet die Sperre von selbst.
+- **Manuell pausieren:** `pause.ps1 -Hours 2 -Reason "..."`, fortsetzen mit `pause.ps1 -Resume`.
+- **Status:** `logs\watchdog\status.json` (`needsHuman`: nach 3 Wiederbelebungen pro Stunde gibt der Watchdog auf; nach der Reparatur `pause.ps1 -Reset <ziel>`).
+
 ## VIP-Web-Queue einschalten
 
 `compose.yaml` reicht `MC_INGEST_TOKEN` und `VIP_WEB_QUEUE` (Standard `0` = aus) an `lobby` und `survival` durch. Aktivieren: in `.env` `VIP_WEB_QUEUE=1` setzen (Token steht dort schon), dann Backup (`backup.ps1`) und `docker compose up -d --no-deps lobby survival`; im Lobby-Log nach `VIP-Queue` pruefen. Abschalten: `VIP_WEB_QUEUE=0` und die beiden Services neu erzeugen. Keine Secrets ins Repo.

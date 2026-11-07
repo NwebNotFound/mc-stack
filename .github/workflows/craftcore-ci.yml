@@ -27,3 +27,6 @@ jobs:
       - name: Maintenance script tests (backup.ps1, dev-reset.ps1; mocked docker)
         shell: pwsh
         run: ./tools/test-maintenance.ps1
+      - name: Watchdog tests (tools/watchdog; mocked docker and scheduled tasks)
+        shell: pwsh
+        run: ./tools/test-watchdog.ps1

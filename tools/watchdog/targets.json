@@ -1,0 +1,30 @@
+{
+  "_comment": "Explicit allowlist. Only these targets are ever checked or revived. 'never' is a hard guard: a target matching it is a config error and the watchdog refuses to run.",
+  "hostTasks": [
+    {
+      "name": "pvp-host-service",
+      "task": "mc-stack PvP host service",
+      "portEnv": "PVP_HOST_PORT",
+      "defaultPort": 25599,
+      "statusPath": "/vip/status",
+      "tokenEnv": "VIP_HOST_TOKEN",
+      "tokenHeader": "X-VIP-Token"
+    }
+  ],
+  "compose": [
+    { "service": "velocity" },
+    { "service": "lobby" },
+    { "service": "survival" },
+    { "service": "craftcore-db" },
+    { "service": "bot", "profile": "bot" },
+    { "service": "playit", "profile": "playit" },
+    { "service": "ops-helper", "profile": "ops" },
+    { "service": "docker-socket-filter", "profile": "ops" },
+    { "service": "plugin-builder", "profile": "ops" }
+  ],
+  "never": ["pvp", "pvp-1", "vipworld-*", "hermes-mcp", "cloudflared", "cloudflared-mcp", "hermes-test", "Hermes_Gateway", "AIPanel_*"],
+  "maxRevivesPerHour": 3,
+  "backoffMinutes": [0, 4, 8],
+  "unhealthyChecks": 2,
+  "holdMaxHours": 3
+}
