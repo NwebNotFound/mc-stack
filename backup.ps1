@@ -1,7 +1,9 @@
-param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 0)
+param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 600)
 # Default: online backup, nothing is stopped (RCON save-off, save-all flush, copy, save-on).
 # -StopServers: old behaviour (stop lobby+survival, copy, start). -LeaveStopped implies -StopServers (deploys).
 if($LeaveStopped){ $StopServers=$true }
+# Lock wait 10 min by default: the watchdog (tools/watchdog) holds the maintenance lock while it revives a service
+# (a graceful restart can take 2+ min), and the backup must wait for that instead of failing.
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
 . (Join-Path $PSScriptRoot 'tools/maintenance-common.ps1')

@@ -122,7 +122,7 @@ if ($DryRun) {
 } finally {
     if ($maintLock) {
         # A failed destructive reset leaves Survival stopped for a human: the watchdog must not start it.
-        if ($maintExit -ne 0 -and $destructive) { Set-WatchdogHold $PSScriptRoot 'dev-reset' 'Dev-Reset fehlgeschlagen, Survival bleibt gestoppt' }
+        if ($maintExit -ne 0 -and $destructive) { Set-WatchdogHold $PSScriptRoot 'dev-reset' 'Dev-Reset fehlgeschlagen, Survival bleibt gestoppt: erst pruefen, dann tools/watchdog/pause.ps1 -Resume -Owner dev-reset' -Sticky }
         else { Clear-WatchdogHold $PSScriptRoot 'dev-reset' }
     }
     Exit-MaintLock $maintLock

@@ -1,4 +1,5 @@
-# Watchdog logic (entry: tools/watchdog/watchdog.ps1). Nothing runs at dot-source time, so
+# Watchdog logic (entry: tools/watchdog/watchdog.ps1). Needs tools/maintenance-common.ps1 dot-sourced too
+# (Enter-/Exit-MaintLock); not loaded from here, so backup.ps1 can dot-source both. Nothing runs at dot-source time, so
 # tools/test-watchdog.ps1 can mock `docker` and the Wd* probe functions below.
 #
 # One pass (Invoke-Watchdog): load the allowlist (targets.json), stop if a hold is active
@@ -61,6 +62,8 @@ function Get-WdHolds([string]$Root, [double]$MaxHours) {
     $cap = $f.LastWriteTime.AddHours($MaxHours)
     $until = $cap
     if ($h -and $h.until) { try { $u = [datetime]$h.until; if ($u -lt $cap) { $until = $u } } catch {} }
+    # A sticky hold (failed destructive dev-reset) never expires: only pause.ps1 -Resume -Owner <owner> ends it.
+    if ($h -and $h.sticky) { $active += [pscustomobject]@{ owner = $f.Name.Substring('.watchdog-hold-'.Length); reason = [string]$h.reason; until = 'until cleared'; sticky = $true }; continue }
     if ($until -gt $now) { $active += [pscustomobject]@{ owner = $f.Name.Substring('.watchdog-hold-'.Length); reason = $(if ($h) { [string]$h.reason } else { '' }); until = $until.ToString('o') } }
   }
   $marker = Join-Path $dir '.maintenance.active'
@@ -163,6 +166,7 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
     $checks += [pscustomobject]@{ kind = 'task'; name = $h.name; task = $task; port = $port; url = $url; headers = $headers }
   }
 
+  $pending = @()
   foreach ($t in $checks) {
     $s = $state[$t.name]
     if (-not $s) { $s = [pscustomobject]@{ verdict = ''; unhealthyStreak = 0; revives = @(); lastRevive = $null; needsHuman = $false } }
@@ -189,20 +193,43 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
           if ($n -gt 0 -and $s.lastRevive -and ([datetime]$s.lastRevive).AddMinutes($wait) -gt $Now) {
             Write-WdLog $t.name 'backoff' "$verdict, next revive not before $(([datetime]$s.lastRevive).AddMinutes($wait).ToString('HH:mm'))" 'warn'
           } else {
-            try {
-              Invoke-WdRevive $t $verdict
-              Write-WdLog $t.name 'revived' "$verdict -> revive $($n + 1)/$($cfg.maxRevivesPerHour) this hour" 'warn'
-            } catch {
-              Write-WdLog $t.name 'revive-failed' $_.Exception.Message 'error'
-            }
-            $s.revives = @(@($s.revives) + $Now.ToString('o'))
-            $s.lastRevive = $Now.ToString('o'); $s.unhealthyStreak = 0
+            $pending += [pscustomobject]@{ t = $t; s = $s; verdict = $verdict; n = $n }
           }
         }
       }
     }
     $state[$t.name] = $s
     $status.targets[$t.name] = [ordered]@{ verdict = $s.verdict; lastRevive = $s.lastRevive; revivesLastHour = @($s.revives).Count; needsHuman = [bool]$s.needsHuman }
+  }
+  # Revives only while holding the maintenance lock (backups/.maintenance.lock, tools/maintenance-common.ps1):
+  # backup.ps1/dev-reset.ps1 can't stop servers meanwhile, and the holds are checked again under the lock,
+  # so a maintenance run that started during this pass always wins. Busy lock = maintenance running: skip.
+  if ($pending.Count) {
+    $lock = $null
+    try { $lock = Enter-MaintLock $Root 0 } catch { Write-WdLog '-' 'maintenance-busy' "maintenance lock held: $($pending.Count) revive(s) skipped" 'warn' }
+    if ($lock) {
+      try {
+        $late = @(Get-WdHolds $Root $cfg.holdMaxHours)
+        if ($late.Count) {
+          $status.paused = $late
+          Write-WdLog '-' 'paused' ("hold appeared during the pass, revives skipped: " + (($late | ForEach-Object { $_.owner }) -join ', '))
+        } else {
+          foreach ($p in $pending) {
+            $again = Invoke-WdProbe $p.t   # state may have changed since the first probe
+            if ($again -eq 'ok') { $p.s.verdict = 'ok'; $p.s.unhealthyStreak = 0; continue }
+            try {
+              Invoke-WdRevive $p.t $p.verdict
+              Write-WdLog $p.t.name 'revived' "$($p.verdict) -> revive $($p.n + 1)/$($cfg.maxRevivesPerHour) this hour" 'warn'
+            } catch {
+              Write-WdLog $p.t.name 'revive-failed' $_.Exception.Message 'error'
+            }
+            $p.s.revives = @(@($p.s.revives) + $Now.ToString('o'))
+            $p.s.lastRevive = $Now.ToString('o'); $p.s.unhealthyStreak = 0
+          }
+        }
+      } finally { Exit-MaintLock $lock }
+    }
+    foreach ($p in $pending) { $status.targets[$p.t.name] = [ordered]@{ verdict = $p.s.verdict; lastRevive = $p.s.lastRevive; revivesLastHour = @($p.s.revives).Count; needsHuman = [bool]$p.s.needsHuman } }
   }
   $status.needsHuman = @($status.targets.Keys | Where-Object { $status.targets[$_].needsHuman })
   Write-WdJson $statePath $state
@@ -211,10 +238,10 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
 }
 
 # ---- holds, used by backup.ps1, dev-reset.ps1 and pause.ps1 ----
-function Set-WatchdogHold([string]$Root, [string]$Owner, [string]$Reason, [double]$Hours = 3) {
+function Set-WatchdogHold([string]$Root, [string]$Owner, [string]$Reason, [double]$Hours = 3, [switch]$Sticky) {
   $dir = Join-Path $Root 'backups'
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  $o = [ordered]@{ owner = $Owner; reason = $Reason; since = (Get-Date).ToString('o'); until = (Get-Date).AddHours($Hours).ToString('o') }
+  $o = [ordered]@{ owner = $Owner; reason = $Reason; since = (Get-Date).ToString('o'); until = (Get-Date).AddHours($Hours).ToString('o'); sticky = [bool]$Sticky }
   Set-Content -LiteralPath (Join-Path $dir ".watchdog-hold-$Owner") -Value ($o | ConvertTo-Json -Compress) -Encoding UTF8
 }
 function Clear-WatchdogHold([string]$Root, [string]$Owner) {

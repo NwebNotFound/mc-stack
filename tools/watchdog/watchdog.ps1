@@ -4,6 +4,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $root
+. (Join-Path $root 'tools/maintenance-common.ps1')   # Enter-/Exit-MaintLock: revives happen under the maintenance lock
 . (Join-Path $PSScriptRoot 'watchdog-common.ps1')
 try {
   Invoke-Watchdog $root | Out-Null

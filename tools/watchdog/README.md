@@ -30,15 +30,20 @@ That mark clears by itself once the target is healthy again. You can also clear 
 - There's no chat alert: the repo has no ops alert channel yet, and no new external service is added. `status.json` is the alert path.
 
 ## Pausing (deploys, maintenance)
-The watchdog does nothing while a hold is active:
+**Revives only happen under the maintenance lock** (`backups/.maintenance.lock`, the same exclusive file handle `backup.ps1` and `dev-reset.ps1` use):
+- If the lock is busy, maintenance is running, and the pass revives nothing.
+- After taking the lock, the watchdog checks the holds again and probes each target once more. A backup that started during the pass therefore always wins.
+- While the watchdog holds the lock for a revive (a graceful restart can take 2+ minutes), `backup.ps1` waits for it: `-LockWaitSeconds` now defaults to 600 (it used to be 0).
+
+The watchdog also does nothing while a hold is active:
 
 - **`backup.ps1`** holds while it runs. With **`-LeaveStopped`** the hold stays after it finishes, so lobby and survival stay down for the deploy. End it after the deploy has started the servers again:
   `powershell -File tools\watchdog\pause.ps1 -Resume -Owner backup`
-- **`dev-reset.ps1`** holds while it runs. If a destructive reset fails, the hold stays, so Survival isn't started half-reset.
+- **`dev-reset.ps1`** holds while it runs. If a destructive reset fails, the hold becomes **sticky**: it never expires, so Survival isn't started half-reset. A human checks Survival, then ends it with `pause.ps1 -Resume -Owner dev-reset`.
 - **`backups/.maintenance.active`** (the maintenance marker, once present) also pauses it.
 - **Manual pause:** `pause.ps1 -Hours 2 -Reason "Umbau"`; resume with `pause.ps1 -Resume`. Running `pause.ps1` alone shows the active holds and any target that needs a human.
 
-Every hold ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good.
+Every other hold ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good. Maintenance that is still running after 3 hours is still safe, because it holds the lock.
 
 ## Install / uninstall (Homelab Deployer, after merge)
 ```

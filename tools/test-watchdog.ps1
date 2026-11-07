@@ -6,6 +6,8 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('wd-test-' + [Guid]::NewGuid().ToS
 New-Item -ItemType Directory -Path "$root/backups" | Out-Null
 Set-Content -LiteralPath "$root/.env" -Value "PVP_HOST_PORT=25599`nVIP_HOST_TOKEN=secret-token-value" -Encoding UTF8
 $config = Join-Path $repo 'tools/watchdog/targets.json'
+$global:MaintSleep = { param($s) }   # no real waiting in tests
+. (Join-Path $repo 'tools/maintenance-common.ps1')
 . (Join-Path $repo 'tools/watchdog/watchdog-common.ps1')
 $fails = 0
 function Check($cond, $msg) { if ($cond) { Write-Host "  ok  $msg" } else { Write-Host "  FAIL $msg"; $script:fails++ } }
@@ -17,7 +19,7 @@ function Reset-World { $global:Calls.Clear(); foreach ($s in 'velocity','lobby',
 function global:docker {
   $a = @($args); $global:LASTEXITCODE = 0
   if ($a[0] -eq 'info') { if (-not $global:DockerUp) { $global:LASTEXITCODE = 1 }; return '27.0' }
-  if ($a[0] -eq 'inspect') { $svc = ($a[-1] -replace '^mc-stack-', '' -replace '-1$', ''); if (-not $global:Ct.ContainsKey($svc) -or $global:Ct[$svc] -eq 'missing') { $global:LASTEXITCODE = 1; return 'Error: No such object' }; return $global:Ct[$svc] }
+  if ($a[0] -eq 'inspect') { $svc = ($a[-1] -replace '^mc-stack-', '' -replace '-1$', ''); if ($global:OnInspect) { & $global:OnInspect $svc }; if (-not $global:Ct.ContainsKey($svc) -or $global:Ct[$svc] -eq 'missing') { $global:LASTEXITCODE = 1; return 'Error: No such object' }; return $global:Ct[$svc] }
   $global:Calls.Add('docker ' + ($a -join ' ')); return ''
 }
 function Get-WdTaskState([string]$Task) { $global:Calls.Add("probe-task $Task"); return $global:TaskState }
@@ -86,6 +88,56 @@ Check (@(Get-WdHolds $root 3).Count -eq 0) 'a hold older than holdMaxHours is ig
 Clear-WatchdogHold $root 'manual'
 Pass 34 | Out-Null
 Check ((Revives) -contains 'docker compose up -d --no-deps survival') 'hold gone: revives again'
+
+Write-Host 'race: maintenance starts during a pass (Gatekeeper #174 review)'
+# The pass sees no hold; while it probes, backup.ps1 takes the lock and sets its hold, then stops survival.
+Reset-World; $global:Ct['survival'] = 'exited|'
+$global:BackupLock = $null
+$global:OnInspect = { param($svc) if ($svc -eq 'survival' -and -not $global:BackupLock) { $global:BackupLock = Enter-MaintLock $root 0; Set-WatchdogHold $root 'backup' 'backup.ps1 laeuft' } }
+Pass 60 | Out-Null
+$global:OnInspect = $null
+Check ((Revives).Count -eq 0) 'backup took the lock mid-pass: no revive'
+# backup.ps1 -LeaveStopped finished in between: lock free again, its hold stays -> re-checked under the lock.
+Exit-MaintLock $global:BackupLock; $global:BackupLock = $null
+Clear-WatchdogHold $root 'backup'
+$global:OnInspect = { param($svc) if ($svc -eq 'survival') { Set-WatchdogHold $root 'backup' 'backup.ps1 -LeaveStopped' } }
+Pass 62 | Out-Null
+$global:OnInspect = $null
+Check ((Revives).Count -eq 0) 'hold appeared during the pass: re-checked under the lock, no revive'
+Clear-WatchdogHold $root 'backup'
+# While the watchdog holds the lock for a revive, a backup can't get it (it waits: LockWaitSeconds 600).
+$global:InnerLockFailed = $false
+function Invoke-WdCompose([string]$Profile, [string[]]$Arguments) { $global:Calls.Add('docker compose ' + ($Arguments -join ' ')); try { Exit-MaintLock (Enter-MaintLock $root 0) } catch { $global:InnerLockFailed = $true } }
+Pass 64 | Out-Null
+Check ($global:InnerLockFailed -and ((Revives) -contains 'docker compose up -d --no-deps survival')) 'revive runs while holding the maintenance lock'
+Remove-Item Function:\Invoke-WdCompose
+. (Join-Path $repo 'tools/watchdog/watchdog-common.ps1')
+function Get-WdTaskState([string]$Task) { $global:Calls.Add("probe-task $Task"); return $global:TaskState }
+function Start-WdTask([string]$Task) { $global:Calls.Add("start-task $Task") }
+function Stop-WdTask([string]$Task) { $global:Calls.Add("stop-task $Task") }
+function Test-WdPort([int]$Port) { return $global:PortOpen }
+function Test-WdHttp([string]$Url, [hashtable]$Headers) { $global:HttpHeaders = $Headers; return $global:HttpOk }
+
+Write-Host 'holds that must not expire'
+# Maintenance still running after holdMaxHours: its hold file is old, but the lock is held -> no revive.
+Reset-World; $global:Ct['survival'] = 'exited|'
+Set-WatchdogHold $root 'backup' 'backup.ps1 laeuft'
+(Get-Item -LiteralPath "$root/backups/.watchdog-hold-backup" -Force).LastWriteTime = (Get-Date).AddHours(-5)
+$running = Enter-MaintLock $root 0
+Pass 66 | Out-Null
+Check ((Revives).Count -eq 0) 'maintenance running beyond 3 h (old hold, lock held): no revive'
+Exit-MaintLock $running; Clear-WatchdogHold $root 'backup'
+# Failed destructive dev-reset: sticky hold, 10 h old, still effective until cleared by hand.
+Set-WatchdogHold $root 'dev-reset' 'Dev-Reset fehlgeschlagen' -Sticky
+(Get-Item -LiteralPath "$root/backups/.watchdog-hold-dev-reset" -Force).LastWriteTime = (Get-Date).AddHours(-10)
+$st = Pass 68
+Check ((Revives).Count -eq 0 -and @($st.paused | Where-Object { $_.owner -eq 'dev-reset' -and $_.sticky }).Count -eq 1) 'failed dev-reset hold after 10 h: still paused, nothing started'
+Clear-WatchdogHold $root 'dev-reset'
+Pass 74 | Out-Null
+Check ((Revives) -contains 'docker compose up -d --no-deps survival') 'cleared by hand: revives again'
+$d = Get-Content -LiteralPath (Join-Path $repo 'dev-reset.ps1') -Raw
+Check ($d -match 'Set-WatchdogHold \$PSScriptRoot ''dev-reset'' ''[^'']*'' -Sticky') 'dev-reset.ps1: the failure hold is sticky'
+Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match '\[int\]\$LockWaitSeconds = 600') 'backup.ps1 waits for the lock (watchdog may hold it during a revive)'
 
 Write-Host 'crash loop -> gives up'
 Remove-Item -LiteralPath "$root/logs/watchdog/state.json" -Force
