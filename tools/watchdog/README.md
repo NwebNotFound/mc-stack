@@ -43,7 +43,7 @@ The watchdog also does nothing while a hold is active:
 - **`backups/.maintenance.active`** (the maintenance marker, once present) also pauses it.
 - **Manual pause:** `pause.ps1 -Hours 2 -Reason "Umbau"`; resume with `pause.ps1 -Resume`. Running `pause.ps1` alone shows the active holds and any target that needs a human.
 
-Every other hold (manual pauses, a backup or reset whose process died) ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good. Maintenance that is still running after 3 hours is still safe, because it holds the lock.
+Sticky holds are never replaced or cleared by the next normal backup or dev-reset run; only `pause.ps1 -Resume` ends them. Every other hold (manual pauses, a backup or reset whose process died) ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good. Maintenance that is still running after 3 hours is still safe, because it holds the lock.
 
 ## Install / uninstall (Homelab Deployer, after merge)
 ```

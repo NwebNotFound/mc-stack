@@ -173,6 +173,11 @@ $msg = ''; try { & "$root/backup.ps1" -LeaveStopped -ReadyAttempts 1 } catch { $
 $calls = @($global:DockerCalls)
 Check ($msg -eq '' -and (Idx 'compose stop lobby survival') -ge 0 -and (Idx 'compose up*') -lt 0) "-LeaveStopped leaves lobby/survival stopped ($msg)"
 Check ((Test-Path -LiteralPath $holdFile) -and ((Get-Content -LiteralPath $holdFile -Raw) -like '*LeaveStopped*')) 'and leaves a watchdog hold for the deploy'
+Write-Host 'a scheduled backup during the deploy keeps the sticky deploy hold'
+Reset-Calls
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$h = Get-Content -LiteralPath $holdFile -Raw | ConvertFrom-Json
+Check ((Test-Path -LiteralPath $holdFile) -and $h.sticky -and $h.reason -like '*LeaveStopped*') "normal backup after -LeaveStopped: sticky hold still there ($msg)"
 Remove-Item -LiteralPath $holdFile -Force
 $global:MaintDumpOverride = $null
 

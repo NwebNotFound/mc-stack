@@ -18,9 +18,9 @@ if ($Reset) {
   "'$Reset' reset: the watchdog may revive it again."
   return
 }
-if ($Resume) { Clear-WatchdogHold $root $Owner; "Hold '$Owner' cleared." }
+if ($Resume) { Clear-WatchdogHold $root $Owner -Force | Out-Null; "Hold '$Owner' cleared." }
 elseif ($PSBoundParameters.ContainsKey('Hours') -or $PSBoundParameters.ContainsKey('Reason')) {
-  Set-WatchdogHold $root $Owner $Reason ([Math]::Min($Hours, [double]$cfg.holdMaxHours))
+  Set-WatchdogHold $root $Owner $Reason ([Math]::Min($Hours, [double]$cfg.holdMaxHours)) | Out-Null
   "Watchdog paused ($Owner, $Reason) for $([Math]::Min($Hours, [double]$cfg.holdMaxHours)) h."
 }
 $holds = @(Get-WdHolds $root $cfg.holdMaxHours)

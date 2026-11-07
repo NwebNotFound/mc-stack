@@ -238,13 +238,23 @@ function Invoke-Watchdog([string]$Root, [string]$ConfigPath = (Join-Path $PSScri
 }
 
 # ---- holds, used by backup.ps1, dev-reset.ps1 and pause.ps1 ----
+# A sticky hold (deploy after backup.ps1 -LeaveStopped, failed destructive dev-reset) is never replaced by a
+# normal hold and never cleared by the next backup/dev-reset run of the same owner: only an explicit
+# `pause.ps1 -Resume` (-Force) ends it. Returns $false when an existing sticky hold was kept.
+function Get-WdHoldFile([string]$Root, [string]$Owner) { Join-Path (Join-Path $Root 'backups') ".watchdog-hold-$Owner" }
+function Test-WdStickyHold([string]$Root, [string]$Owner) { $h = Read-WdJson (Get-WdHoldFile $Root $Owner) $null; return [bool]($h -and $h.sticky) }
 function Set-WatchdogHold([string]$Root, [string]$Owner, [string]$Reason, [double]$Hours = 3, [switch]$Sticky) {
   $dir = Join-Path $Root 'backups'
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  if (-not $Sticky -and (Test-WdStickyHold $Root $Owner)) { Write-Host "[watchdog] sticky hold '$Owner' kept (end it with tools/watchdog/pause.ps1 -Resume -Owner $Owner)"; return $false }
   $o = [ordered]@{ owner = $Owner; reason = $Reason; since = (Get-Date).ToString('o'); until = (Get-Date).AddHours($Hours).ToString('o'); sticky = [bool]$Sticky }
-  Set-Content -LiteralPath (Join-Path $dir ".watchdog-hold-$Owner") -Value ($o | ConvertTo-Json -Compress) -Encoding UTF8
+  Set-Content -LiteralPath (Get-WdHoldFile $Root $Owner) -Value ($o | ConvertTo-Json -Compress) -Encoding UTF8
+  return $true
 }
-function Clear-WatchdogHold([string]$Root, [string]$Owner) {
-  $p = Join-Path (Join-Path $Root 'backups') ".watchdog-hold-$Owner"
-  if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+function Clear-WatchdogHold([string]$Root, [string]$Owner, [switch]$Force) {
+  $p = Get-WdHoldFile $Root $Owner
+  if (-not (Test-Path -LiteralPath $p)) { return $true }
+  if (-not $Force -and (Test-WdStickyHold $Root $Owner)) { Write-Host "[watchdog] sticky hold '$Owner' kept (end it with tools/watchdog/pause.ps1 -Resume -Owner $Owner)"; return $false }
+  Remove-Item -LiteralPath $p -Force
+  return $true
 }

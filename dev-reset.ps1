@@ -32,7 +32,7 @@ $maintError = ''
 try {
 # A catch-up run right after a backup waits for the backup's lock (up to 30 min) instead of colliding with it,
 # and only then checks that Docker and craftcore-db answer (05.11., 11:36: both tasks started while the DB was down).
-if (-not $DryRun) { $maintLock = Enter-MaintLock $PSScriptRoot $LockWaitSeconds; Set-WatchdogHold $PSScriptRoot 'dev-reset' 'dev-reset.ps1 laeuft' }
+if (-not $DryRun) { $maintLock = Enter-MaintLock $PSScriptRoot $LockWaitSeconds; Set-WatchdogHold $PSScriptRoot 'dev-reset' 'dev-reset.ps1 laeuft' | Out-Null }
 Wait-MaintReady $ReadyAttempts
 if (-not (Check-Dev)) {
     $online = (Get-ServerMode) -ceq 'online'
@@ -122,8 +122,8 @@ if ($DryRun) {
 } finally {
     if ($maintLock) {
         # A failed destructive reset leaves Survival stopped for a human: the watchdog must not start it.
-        if ($maintExit -ne 0 -and $destructive) { Set-WatchdogHold $PSScriptRoot 'dev-reset' 'Dev-Reset fehlgeschlagen, Survival bleibt gestoppt: erst pruefen, dann tools/watchdog/pause.ps1 -Resume -Owner dev-reset' -Sticky }
-        else { Clear-WatchdogHold $PSScriptRoot 'dev-reset' }
+        if ($maintExit -ne 0 -and $destructive) { Set-WatchdogHold $PSScriptRoot 'dev-reset' 'Dev-Reset fehlgeschlagen, Survival bleibt gestoppt: erst pruefen, dann tools/watchdog/pause.ps1 -Resume -Owner dev-reset' -Sticky | Out-Null }
+        else { Clear-WatchdogHold $PSScriptRoot 'dev-reset' | Out-Null }   # never clears a sticky failure hold
     }
     Exit-MaintLock $maintLock
     Stop-MaintLog $maintExit $maintError

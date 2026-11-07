@@ -19,7 +19,7 @@ $errorText=''
 try {
   $lock=Enter-MaintLock $PSScriptRoot $LockWaitSeconds
   # The watchdog (tools/watchdog) must not revive what a backup stops on purpose.
-  Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 laeuft'
+  Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 laeuft' | Out-Null   # keeps an existing sticky deploy hold
   # Catch-up runs after a reboot used to start before Docker and craftcore-db were up (05.11., 11:36).
   Wait-MaintReady $ReadyAttempts
   $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
@@ -80,8 +80,8 @@ try {
   if($lock){
     # -LeaveStopped: lobby/survival stay down for the deploy. Sticky: the hold never expires, however long the deploy
     # takes; it ends only with `tools/watchdog/pause.ps1 -Resume -Owner backup`.
-    if($LeaveStopped -and $complete){ Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 -LeaveStopped: lobby/survival fuer den Deploy gestoppt' -Sticky }
-    else { Clear-WatchdogHold $PSScriptRoot 'backup' }
+    if($LeaveStopped -and $complete){ Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 -LeaveStopped: lobby/survival fuer den Deploy gestoppt' -Sticky | Out-Null }
+    else { Clear-WatchdogHold $PSScriptRoot 'backup' | Out-Null }   # never clears a sticky deploy hold
   }
   Exit-MaintLock $lock
   Stop-MaintLog $exitCode $errorText

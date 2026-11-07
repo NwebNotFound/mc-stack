@@ -19,7 +19,7 @@ function Reset-World { $global:Calls.Clear(); foreach ($s in 'velocity','lobby',
 function global:docker {
   $a = @($args); $global:LASTEXITCODE = 0
   if ($a[0] -eq 'info') { if (-not $global:DockerUp) { $global:LASTEXITCODE = 1 }; return '27.0' }
-  if ($a[0] -eq 'inspect') { $svc = ($a[-1] -replace '^mc-stack-', '' -replace '-1$', ''); if ($global:OnInspect) { & $global:OnInspect $svc }; if (-not $global:Ct.ContainsKey($svc) -or $global:Ct[$svc] -eq 'missing') { $global:LASTEXITCODE = 1; return 'Error: No such object' }; return $global:Ct[$svc] }
+  if ($a[0] -eq 'inspect') { $svc = ($a[-1] -replace '^mc-stack-', '' -replace '-1$', ''); if ($global:OnInspect) { & $global:OnInspect $svc | Out-Null }; if (-not $global:Ct.ContainsKey($svc) -or $global:Ct[$svc] -eq 'missing') { $global:LASTEXITCODE = 1; return 'Error: No such object' }; return $global:Ct[$svc] }
   $global:Calls.Add('docker ' + ($a -join ' ')); return ''
 }
 function Get-WdTaskState([string]$Task) { $global:Calls.Add("probe-task $Task"); return $global:TaskState }
@@ -132,7 +132,7 @@ Set-WatchdogHold $root 'dev-reset' 'Dev-Reset fehlgeschlagen' -Sticky
 (Get-Item -LiteralPath "$root/backups/.watchdog-hold-dev-reset" -Force).LastWriteTime = (Get-Date).AddHours(-10)
 $st = Pass 68
 Check ((Revives).Count -eq 0 -and @($st.paused | Where-Object { $_.owner -eq 'dev-reset' -and $_.sticky }).Count -eq 1) 'failed dev-reset hold after 10 h: still paused, nothing started'
-Clear-WatchdogHold $root 'dev-reset'
+Clear-WatchdogHold $root 'dev-reset' -Force | Out-Null   # = pause.ps1 -Resume -Owner dev-reset
 Pass 74 | Out-Null
 Check ((Revives) -contains 'docker compose up -d --no-deps survival') 'cleared by hand: revives again'
 # backup.ps1 -LeaveStopped hold: sticky, the lock is free again, 5 h later the deploy may still be running.
@@ -141,12 +141,20 @@ Set-WatchdogHold $root 'backup' 'backup.ps1 -LeaveStopped' -Sticky
 (Get-Item -LiteralPath "$root/backups/.watchdog-hold-backup" -Force).LastWriteTime = (Get-Date).AddHours(-5)
 $st = Pass 90
 Check ((Revives).Count -eq 0 -and @($st.paused | Where-Object { $_.owner -eq 'backup' -and $_.sticky }).Count -eq 1) '-LeaveStopped hold after 5 h, lock free: still paused, lobby/survival not started'
-Clear-WatchdogHold $root 'backup'; $global:Ct['lobby'] = 'running|healthy'; $global:Ct['survival'] = 'running|healthy'
+Clear-WatchdogHold $root 'backup' -Force | Out-Null; $global:Ct['lobby'] = 'running|healthy'; $global:Ct['survival'] = 'running|healthy'
 $d = Get-Content -LiteralPath (Join-Path $repo 'dev-reset.ps1') -Raw
 Check ($d -match 'Set-WatchdogHold \$PSScriptRoot ''dev-reset'' ''[^'']*'' -Sticky') 'dev-reset.ps1: the failure hold is sticky'
-Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match 'if\(\$LeaveStopped -and \$complete\)\{ Set-WatchdogHold [^}]*-Sticky \}') 'backup.ps1: the -LeaveStopped hold is sticky'
+Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match 'if\(\$LeaveStopped -and \$complete\)\{ Set-WatchdogHold [^}]*-Sticky \| Out-Null \}') 'backup.ps1: the -LeaveStopped hold is sticky'
 Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match '\[int\]\$LockWaitSeconds = 600') 'backup.ps1 waits for the lock (watchdog may hold it during a revive)'
 
+Write-Host 'sticky holds survive the next run of the same owner (Gatekeeper #174 review)'
+foreach ($o in 'backup', 'dev-reset') {
+  Set-WatchdogHold $root $o "sticky $o" -Sticky | Out-Null
+  $kept1 = -not (Set-WatchdogHold $root $o "$o.ps1 laeuft")      # next scheduled run starts
+  $kept2 = -not (Clear-WatchdogHold $root $o)                   # and ends normally
+  Check ($kept1 -and $kept2 -and (Test-WdStickyHold $root $o)) "${o}: a normal run neither replaces nor clears the sticky hold"
+  Check ((Clear-WatchdogHold $root $o -Force) -and -not (Test-Path -LiteralPath (Get-WdHoldFile $root $o))) "${o}: pause.ps1 -Resume (-Force) ends it"
+}
 Write-Host 'crash loop -> gives up'
 Remove-Item -LiteralPath "$root/logs/watchdog/state.json" -Force
 Reset-World; $global:Ct['lobby'] = 'exited|'
