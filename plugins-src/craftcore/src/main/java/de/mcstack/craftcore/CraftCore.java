@@ -211,17 +211,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
     if(args==null)args=new Object[0];
     switch(method) {
       case "isEnabled": return isEnabled(); case "getName": return "CraftCore"; case "hasBankSupport": return false;
-      case "fractionalDigits": return 2; case "format": return Money.format(Money.cents((double)args[0]));
+      case "fractionalDigits": return 2; case "format": return Money.format(Money.cents((double)args[0],java.math.RoundingMode.HALF_EVEN));
       case "currencyNamePlural": case "currencyNameSingular": return "CP";
       case "getBanks": return Collections.emptyList();
       case "createBank": case "deleteBank": case "bankBalance": case "bankHas": case "bankWithdraw": case "bankDeposit": case "isBankOwner": case "isBankMember": return new EconomyResponse(0,0,EconomyResponse.ResponseType.NOT_IMPLEMENTED,"Bankkonten nicht unterstützt");
       case "hasAccount": return true;
       case "createPlayerAccount": balance(resolve(args[0]).getUniqueId()); return true;
       case "getBalance": return balance(resolve(args[0]).getUniqueId())/100.0;
-      case "has": { long n=Money.cents((double)args[args.length-1]); return n>=0 && balance(resolve(args[0]).getUniqueId())>=n; }
+      case "has": { long n; try { n=Money.cents((double)args[args.length-1],java.math.RoundingMode.UP); } catch(IllegalArgumentException | ArithmeticException e) { return false; } return n>=0 && balance(resolve(args[0]).getUniqueId())>=n; }
       case "withdrawPlayer": case "depositPlayer": {
         UUID id=resolve(args[0]).getUniqueId(); double amount=(double)args[args.length-1];
-        try { long n=Money.cents(amount); if(n<0)throw new IllegalArgumentException(); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
+        try { long n=Money.vaultCents(amount,method.equals("withdrawPlayer")); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
         catch(IllegalArgumentException | ArithmeticException e) { return new EconomyResponse(0,0,EconomyResponse.ResponseType.FAILURE,"Ungültiger Betrag"); }
       }
       case "toString": return "CraftCore Economy"; case "hashCode": return System.identityHashCode(this); case "equals": return args[0]==economy;
@@ -431,9 +431,17 @@ public final class CraftCore extends JavaPlugin implements Listener {
         if(!ShopBuyDispatch.begin(request)) return;
         getServer().getScheduler().runTaskAsynchronously(this,()->{
           String response=null;
-          try { response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),(item,amount)->{
-            ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item)); stack.setAmount(amount); return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
-          },getConfig().getInt("auction.fee-basis-points",500))); }
+          try {
+            // Read without holding purchase locks while waiting for the main thread.
+            RconItemPreparation.Snapshot snapshot=tx(c->RconItemPreparation.load(c,request));
+            RconPurchase.Remaining remaining=RconItemPreparation.prepare(snapshot,request.qty(),(item,amount)->
+              getServer().getScheduler().callSyncMethod(this,()->{
+                ItemStack stack=ItemStack.deserializeBytes(Base64.getDecoder().decode(item));
+                stack.setAmount(amount);
+                return Base64.getEncoder().encodeToString(stack.serializeAsBytes());
+              }).get(5,java.util.concurrent.TimeUnit.SECONDS));
+            response=tx(c->RconPurchase.buy(c,request,System.currentTimeMillis(),remaining,getConfig().getInt("auction.fee-basis-points",500)));
+          }
           catch(Exception ex){getLogger().warning("RCON Kauf: "+ex);}
           finally { ShopBuyDispatch.finish(request, response); }
         });
