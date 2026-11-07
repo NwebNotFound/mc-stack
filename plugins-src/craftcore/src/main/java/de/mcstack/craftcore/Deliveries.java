@@ -19,21 +19,36 @@ final class Deliveries {
  record Row(String id,String data,int amount,String source){}
  static void collect(CraftCore core,Player p){collect(core,p,null);}
  /** As /abholen; with `only` just those delivery ids (a grave hands out its own items, nothing else). */
- static void collect(CraftCore core,Player p,Set<String> only){try {String player=p.getUniqueId().toString(),server=server();HandoutGate.run(player,()->{
+ static void collect(CraftCore core,Player p,Set<String> only){String player=p.getUniqueId().toString();queue(core).submit(player,()->collectJob(core,p,only));}
+ private static volatile PlayerQueue QUEUE;
+ /** The per-player hand-out queue (PlayerQueue): jobs on Bukkit's async pool, never on the server thread. */
+ static PlayerQueue queue(CraftCore core){PlayerQueue q=QUEUE;if(q==null)synchronized(Deliveries.class){if((q=QUEUE)==null)QUEUE=q=new PlayerQueue(r->Bukkit.getScheduler().runTaskAsynchronously(core,r));}return q;}
+ private static void say(CraftCore core,Player p,String msg)throws Exception{PlayerQueue.onMain(core,()->{if(p.isOnline())p.sendMessage(msg);return null;});}
+ /** Queued job: DB work here (async), player state only in PlayerQueue.onMain hops. */
+ static void collectJob(CraftCore core,Player p,Set<String> only){String player=p.getUniqueId().toString(),server=server();try {
   // first settle hand-outs a crash or DB failure left reserved on this server (Handouts: the player file decides)
-  Set<String> drop=core.tx(c->Handouts.reconcile(c,player,server,marks(core,p)));if(!drop.isEmpty())dropMarks(core,p,drop);
+  Set<String> marks=PlayerQueue.onMain(core,()->p.isOnline()?marks(core,p):null);if(marks==null)return;
+  Set<String> drop=core.tx(c->Handouts.reconcile(c,player,server,marks));
+  if(!drop.isEmpty())PlayerQueue.onMain(core,()->{if(p.isOnline())dropMarks(core,p,drop);return null;});
   List<Row> rows=core.tx(c->{List<Row> out=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT id,item_nbt,amount,source FROM pending_deliveries WHERE player_uuid=? AND status='offen' ORDER BY created_at,id")){q.setString(1,player);try(ResultSet r=q.executeQuery()){while(r.next())out.add(new Row(r.getString(1),r.getString(2),r.getInt(3),r.getString(4)));}}return out;});
   if(only!=null)rows.removeIf(r->!only.contains(r.id()));int delivered=0;
-  for(Row row:rows){ItemStack item=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.data()));int capacity=0;for(ItemStack s:p.getInventory().getStorageContents()){if(s==null||s.getType().isAir())capacity+=item.getMaxStackSize();else if(s.isSimilar(item))capacity+=Math.max(0,s.getMaxStackSize()-s.getAmount());}int count=Math.min(capacity,row.amount());if(count<=0)continue;
-   if(!core.tx(c->Handouts.reserve(c,row.id(),player,count,server)))continue;                       // 1. reserve in the DB
-   item.setAmount(count);Map<Integer,ItemStack> leftovers=p.getInventory().addItem(item);
-   int leftoverCount=DeliveryLeftovers.sum(leftovers.values().stream().map(ItemStack::getAmount).toList());int given=count-leftoverCount;
-   String mark=Handouts.itemMark(row.id(),given);addMark(core,p,mark);p.saveData();                // 2. items + marker in one player-file write
-   try{core.tx(c->Handouts.finish(c,row.id(),given));dropMarks(core,p,List.of(mark));}            // 3. finalise; rest (inventory full) back to the inbox
+  for(Row row:rows){
+   Integer count=PlayerQueue.onMain(core,()->{if(!p.isOnline())return null;ItemStack item=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.data()));int capacity=0;for(ItemStack s:p.getInventory().getStorageContents()){if(s==null||s.getType().isAir())capacity+=item.getMaxStackSize();else if(s.isSimilar(item))capacity+=Math.max(0,s.getMaxStackSize()-s.getAmount());}return Math.min(capacity,row.amount());});
+   if(count==null)break;if(count<=0)continue;
+   if(!core.tx(c->Handouts.reserve(c,row.id(),player,count,server)))continue;                       // 1. reserve in the DB (async)
+   // 2. one main-thread hop: items + marker, saved in one player-file write. Offline meanwhile: nothing given, no
+   //    marker, so the next reconcile puts the row back to 'offen'.
+   int[] res=PlayerQueue.onMain(core,()->{if(!p.isOnline())return null;ItemStack item=ItemStack.deserializeBytes(Base64.getDecoder().decode(row.data()));item.setAmount(count);Map<Integer,ItemStack> leftovers=p.getInventory().addItem(item);
+     int left=DeliveryLeftovers.sum(leftovers.values().stream().map(ItemStack::getAmount).toList());addMark(core,p,Handouts.itemMark(row.id(),count-left));p.saveData();return new int[]{count-left,left};});
+   if(res==null)break;
+   String mark=Handouts.itemMark(row.id(),res[0]);
+   try{core.tx(c->Handouts.finish(c,row.id(),res[0]));PlayerQueue.onMain(core,()->{if(p.isOnline())dropMarks(core,p,List.of(mark));return null;});}   // 3. finalise (async)
    catch(Exception ex){core.getLogger().warning("Abholfach: Abschluss "+row.id()+" folgt beim naechsten Join/abholen: "+ex);}
-   if(leftoverCount>0)p.sendMessage(DeliveryLeftovers.message(leftoverCount));
-   delivered+=given;}
-  DeliveryNotices.rememberOpen(core,p);if(delivered>0)p.sendMessage(delivered+" Items aus dem Abholfach erhalten.");if(!rows.isEmpty()&&delivered<rows.stream().mapToInt(Row::amount).sum())p.sendMessage("Weitere Lieferungen warten auf Inventarplatz: /abholen");else if(rows.isEmpty())p.sendMessage("Keine offenen Lieferungen. /abholen");return null;});}catch(Exception ex){core.getLogger().severe("Abholfach: "+ex);p.sendMessage("Abholfach momentan nicht verfuegbar. Bitte Admin informieren.");}}
+   if(res[1]>0)say(core,p,DeliveryLeftovers.message(res[1]));
+   delivered+=res[0];}
+  final int got=delivered;final boolean more=!rows.isEmpty()&&delivered<rows.stream().mapToInt(Row::amount).sum(),none=rows.isEmpty();
+  PlayerQueue.onMain(core,()->{if(!p.isOnline())return null;DeliveryNotices.rememberOpen(core,p);if(got>0)p.sendMessage(got+" Items aus dem Abholfach erhalten.");if(more)p.sendMessage("Weitere Lieferungen warten auf Inventarplatz: /abholen");else if(none)p.sendMessage("Keine offenen Lieferungen. /abholen");return null;});
+ }catch(Exception ex){core.getLogger().severe("Abholfach: "+ex);try{say(core,p,"Abholfach momentan nicht verfuegbar. Bitte Admin informieren.");}catch(Exception ignored){}}}
  static String server(){return System.getenv().getOrDefault("CRAFTCORE_SERVER","Server");}
  // Hand-out markers in the player's PersistentDataContainer: saved in the same player file as the inventory/XP.
  private static NamespacedKey key(CraftCore core){return new NamespacedKey(core,"handouts");}

@@ -93,7 +93,7 @@ final class Handouts {
   }
 
   /**
-   * Inside the player's {@link HandoutGate} section, with markers read in that section: of `owed`, the graves that are
+   * In the player's queued job (PlayerQueue), with markers read in that job: of `owed`, the graves that are
    * still unpaid in the DB and not already given (an "x:" marker means given and saved, DB update pending). A stale
    * list (a grave hand-out and a join recovery for the same grave) therefore never pays twice.
    */

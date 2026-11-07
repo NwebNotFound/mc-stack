@@ -96,32 +96,53 @@ class HandoutsTest {
     }
   }
   // Gatekeeper #170: a join recovery that overlaps a hand-out must not act on a marker snapshot taken before it.
-  @Test void recoveryWaitsForAHandoutInProgress() throws Exception {
+  @Test void recoveryIsQueuedBehindAHandoutInProgress() throws Exception {
+    ExecutorService pool = Executors.newCachedThreadPool();
     try (Connection c = db("g1")) {
+      PlayerQueue q = new PlayerQueue(pool);
       Set<String> playerFile = ConcurrentHashMap.newKeySet();           // the player's saved markers
-      CountDownLatch reserved = new CountDownLatch(1);
-      Thread[] recovery = new Thread[1]; Object[] dropped = new Object[1]; Throwable[] err = new Throwable[1];
-      Thread handout = new Thread(() -> { try { HandoutGate.run(P, () -> {
-        assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));
-        reserved.countDown();
-        while (recovery[0] == null || recovery[0].getState() != Thread.State.WAITING) Thread.onSpinWait();   // recovery is now blocked on the gate
+      CountDownLatch inHandout = new CountDownLatch(1), release = new CountDownLatch(1);
+      Object[] dropped = new Object[1];
+      CompletableFuture<Void> handout = q.submit(P, () -> { try {
+        assertTrue(Handouts.reserve(c, "d1", P, 5, "survival")); inHandout.countDown(); release.await();
         playerFile.add(Handouts.itemMark("d1", 5));                   // items + marker saved in one write
-        assertTrue(Handouts.finish(c, "d1", 5));
-        return null; }); } catch (Throwable e) { err[0] = e; reserved.countDown(); } });
-      handout.start(); reserved.await();
-      recovery[0] = new Thread(() -> { try { dropped[0] = HandoutGate.run(P, () -> Handouts.reconcile(c, P, "survival", Set.copyOf(playerFile))); } catch (Throwable e) { err[0] = e; } });
-      recovery[0].start(); handout.join(); recovery[0].join();
-      assertNull(err[0], "no failure inside the threads");
+        assertTrue(Handouts.finish(c, "d1", 5)); } catch (Exception e) { throw new CompletionException(e); } });
+      inHandout.await();
+      // the join recovery reads the markers in its own turn, after the hand-out
+      CompletableFuture<Void> recovery = q.submit(P, () -> { try { dropped[0] = Handouts.reconcile(c, P, "survival", Set.copyOf(playerFile)); } catch (Exception e) { throw new CompletionException(e); } });
+      assertFalse(recovery.isDone(), "recovery waits for the running hand-out");
+      release.countDown(); handout.get(5, TimeUnit.SECONDS); recovery.get(5, TimeUnit.SECONDS);
       assertEquals(List.of("geliefert:5:NBT"), rows(c), "delivered once, not reopened");
       assertEquals(Set.of(Handouts.itemMark("d1", 5)), dropped[0]);
-    }
+    } finally { pool.shutdownNow(); }
   }
-  @Test void withoutTheGateAStaleSnapshotWouldReopenAGivenHandout() throws Exception {
+  @Test void aStalledRecoveryDoesNotBlockTheServerThreadOrOtherPlayers() throws Exception {
+    ExecutorService pool = Executors.newCachedThreadPool(), serverThread = Executors.newSingleThreadExecutor();
+    try {
+      PlayerQueue q = new PlayerQueue(pool);
+      CountDownLatch stalled = new CountDownLatch(1), dbBack = new CountDownLatch(1);
+      CompletableFuture<Void> recovery = q.submit(P, () -> { stalled.countDown(); try { dbBack.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } });   // DB lock wait / slow DB
+      stalled.await();
+      assertEquals("tick", serverThread.submit(() -> "tick").get(1, TimeUnit.SECONDS), "the server thread keeps running");
+      CompletableFuture<Void> other = q.submit("other-player", () -> {});
+      other.get(1, TimeUnit.SECONDS);                                   // another player's hand-out isn't held up
+      boolean[] ran = new boolean[1];
+      CompletableFuture<Void> next = q.submit(P, () -> ran[0] = true);
+      assertFalse(next.isDone() || ran[0], "the same player's next job waits for the stalled one");
+      dbBack.countDown(); recovery.get(5, TimeUnit.SECONDS); next.get(5, TimeUnit.SECONDS);
+      assertTrue(ran[0]);
+      CompletableFuture<Void> failing = q.submit(P, () -> { throw new IllegalStateException("db down"); });
+      CompletableFuture<Void> after = q.submit(P, () -> {});
+      after.get(5, TimeUnit.SECONDS);                                   // a failed job doesn't block the queue
+      assertTrue(failing.isCompletedExceptionally());
+    } finally { pool.shutdownNow(); serverThread.shutdownNow(); }
+  }
+  @Test void withoutTheQueueAStaleSnapshotWouldReopenAGivenHandout() throws Exception {
     try (Connection c = db("g2")) {
       Set<String> stale = Set.of();                                     // join captured the markers first ...
       assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));         // ... then /abholen reserved, gave and saved
       Handouts.reconcile(c, P, "survival", stale);                      // ... and the delayed recovery ran
-      assertFalse(Handouts.finish(c, "d1", 5), "the hazard the gate prevents: the given row was reopened");
+      assertFalse(Handouts.finish(c, "d1", 5), "the hazard the queue prevents: the given row was reopened");
       assertEquals(List.of("offen:5:NBT"), rows(c));
     }
   }
@@ -130,13 +151,13 @@ class HandoutsTest {
       Set<String> playerFile = new HashSet<>();
       List<long[]> owed = List.of(new long[]{7, 30});
       // grave hand-out pays, saves the marker; the DB update is still pending
-      List<long[]> first = HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile)));
+      List<long[]> first = Handouts.xpToPay(c, owed, Set.copyOf(playerFile));
       assertEquals(1, first.size()); playerFile.add(Handouts.xpMark(7));
       // a join recovery (or a second hand-out) with the same stale list, in the next gate section: nothing to pay
-      assertTrue(HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile))).isEmpty());
+      assertTrue(Handouts.xpToPay(c, owed, Set.copyOf(playerFile)).isEmpty());
       assertTrue(Handouts.reconcileXp(c, "survival", P, Set.copyOf(playerFile)).getKey().isEmpty(), "recovery marks it paid instead");
       playerFile.clear();                                               // marker dropped after the DB update
-      assertTrue(HandoutGate.run(P, () -> Handouts.xpToPay(c, owed, Set.copyOf(playerFile))).isEmpty(), "paid in the DB: never again");
+      assertTrue(Handouts.xpToPay(c, owed, Set.copyOf(playerFile)).isEmpty(), "paid in the DB: never again");
     }
   }
   @Test void markersRoundTrip() {
