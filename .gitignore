@@ -60,3 +60,7 @@ quarantine/
 # hermes-mcp: local dev state (run index of the dev launcher)
 tools/hermes-mcp/.data/
 data/hermes-mcp/
+
+# Scratch reports and done markers in the repo root
+/craft-*-report.md
+/*.done
