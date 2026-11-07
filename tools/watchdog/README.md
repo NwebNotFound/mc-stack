@@ -37,13 +37,13 @@ That mark clears by itself once the target is healthy again. You can also clear 
 
 The watchdog also does nothing while a hold is active:
 
-- **`backup.ps1`** holds while it runs. With **`-LeaveStopped`** the hold stays after it finishes, so lobby and survival stay down for the deploy. End it after the deploy has started the servers again:
+- **`backup.ps1`** holds while it runs. With **`-LeaveStopped`** the hold stays after it finishes and is **sticky**: it never expires, so lobby and survival stay down however long the deploy takes. End it after the deploy has started the servers again:
   `powershell -File tools\watchdog\pause.ps1 -Resume -Owner backup`
 - **`dev-reset.ps1`** holds while it runs. If a destructive reset fails, the hold becomes **sticky**: it never expires, so Survival isn't started half-reset. A human checks Survival, then ends it with `pause.ps1 -Resume -Owner dev-reset`.
 - **`backups/.maintenance.active`** (the maintenance marker, once present) also pauses it.
 - **Manual pause:** `pause.ps1 -Hours 2 -Reason "Umbau"`; resume with `pause.ps1 -Resume`. Running `pause.ps1` alone shows the active holds and any target that needs a human.
 
-Every other hold ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good. Maintenance that is still running after 3 hours is still safe, because it holds the lock.
+Every other hold (manual pauses, a backup or reset whose process died) ends after **3 hours at the latest** (`holdMaxHours`), so a forgotten hold can't switch the watchdog off for good. Maintenance that is still running after 3 hours is still safe, because it holds the lock.
 
 ## Install / uninstall (Homelab Deployer, after merge)
 ```

@@ -98,7 +98,7 @@ Belebt tote oder haengende Dauerdienste wieder (Allowlist `tools/watchdog/target
 
 - **Sperre:** der Watchdog belebt nur unter `backups/.maintenance.lock` wieder (und prueft die Pausen danach erneut). `backup.ps1` wartet deshalb standardmaessig bis zu 10 min auf die Sperre (`-LockWaitSeconds 600`, vorher 0).
 - **Fehlgeschlagener Dev-Reset:** die Pause bleibt ohne Ablauf stehen, bis jemand Survival geprueft hat: `pause.ps1 -Resume -Owner dev-reset`.
-- **Deploys:** `backup.ps1 -LeaveStopped` laesst eine Watchdog-Sperre stehen, damit lobby/survival gestoppt bleiben. Nach dem Deploy, wenn die Server wieder laufen: `powershell -File tools\watchdog\pause.ps1 -Resume -Owner backup`. Spaetestens nach 3 h endet die Sperre von selbst.
+- **Deploys:** `backup.ps1 -LeaveStopped` laesst eine Watchdog-Sperre stehen, damit lobby/survival gestoppt bleiben. Nach dem Deploy, wenn die Server wieder laufen: `powershell -File tools\watchdog\pause.ps1 -Resume -Owner backup`. Die Sperre laeuft nicht ab: ohne diesen Schritt bleibt der Watchdog aus (sichtbar in `status.json` unter `paused`).
 - **Manuell pausieren:** `pause.ps1 -Hours 2 -Reason "..."`, fortsetzen mit `pause.ps1 -Resume`.
 - **Status:** `logs\watchdog\status.json` (`needsHuman`: nach 3 Wiederbelebungen pro Stunde gibt der Watchdog auf; nach der Reparatur `pause.ps1 -Reset <ziel>`).
 

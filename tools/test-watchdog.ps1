@@ -135,8 +135,16 @@ Check ((Revives).Count -eq 0 -and @($st.paused | Where-Object { $_.owner -eq 'de
 Clear-WatchdogHold $root 'dev-reset'
 Pass 74 | Out-Null
 Check ((Revives) -contains 'docker compose up -d --no-deps survival') 'cleared by hand: revives again'
+# backup.ps1 -LeaveStopped hold: sticky, the lock is free again, 5 h later the deploy may still be running.
+$global:Calls.Clear(); $global:Ct['survival'] = 'exited|'; $global:Ct['lobby'] = 'exited|'
+Set-WatchdogHold $root 'backup' 'backup.ps1 -LeaveStopped' -Sticky
+(Get-Item -LiteralPath "$root/backups/.watchdog-hold-backup" -Force).LastWriteTime = (Get-Date).AddHours(-5)
+$st = Pass 90
+Check ((Revives).Count -eq 0 -and @($st.paused | Where-Object { $_.owner -eq 'backup' -and $_.sticky }).Count -eq 1) '-LeaveStopped hold after 5 h, lock free: still paused, lobby/survival not started'
+Clear-WatchdogHold $root 'backup'; $global:Ct['lobby'] = 'running|healthy'; $global:Ct['survival'] = 'running|healthy'
 $d = Get-Content -LiteralPath (Join-Path $repo 'dev-reset.ps1') -Raw
 Check ($d -match 'Set-WatchdogHold \$PSScriptRoot ''dev-reset'' ''[^'']*'' -Sticky') 'dev-reset.ps1: the failure hold is sticky'
+Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match 'if\(\$LeaveStopped -and \$complete\)\{ Set-WatchdogHold [^}]*-Sticky \}') 'backup.ps1: the -LeaveStopped hold is sticky'
 Check ((Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw) -match '\[int\]\$LockWaitSeconds = 600') 'backup.ps1 waits for the lock (watchdog may hold it during a revive)'
 
 Write-Host 'crash loop -> gives up'

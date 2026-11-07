@@ -78,9 +78,9 @@ try {
     else { Write-MaintLog 'restart' 'info' 'lobby und survival gestartet' }
   }
   if($lock){
-    # -LeaveStopped: lobby/survival stay down for the deploy; the hold ends with `tools/watchdog/pause.ps1 -Resume -Owner backup`
-    # or after holdMaxHours at the latest.
-    if($LeaveStopped -and $complete){ Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 -LeaveStopped: lobby/survival fuer den Deploy gestoppt' }
+    # -LeaveStopped: lobby/survival stay down for the deploy. Sticky: the hold never expires, however long the deploy
+    # takes; it ends only with `tools/watchdog/pause.ps1 -Resume -Owner backup`.
+    if($LeaveStopped -and $complete){ Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 -LeaveStopped: lobby/survival fuer den Deploy gestoppt' -Sticky }
     else { Clear-WatchdogHold $PSScriptRoot 'backup' }
   }
   Exit-MaintLock $lock
