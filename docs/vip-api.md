@@ -241,10 +241,10 @@ These already exist and stay as they are. The website does not call them. The lo
 ### `POST /vip/stop`
 
 ```json
-{ "slot": "vipworld-1" }
+{ "slot": "vipworld-1", "worldId": "<uuid>" }
 ```
 
-`200` `{ "status": "stopping" }`. An unknown slot is `400` `{ "status": "error", "code": "invalid_slot" }`.
+`200` `{ "status": "stopping" }`. An unknown slot is `400` `{ "status": "error", "code": "invalid_slot" }`. `worldId` is optional; when sent, the host stops the slot only if it still runs that world, else `409` `{ "status": "error", "code": "world_mismatch" }`. A malformed `worldId` is `400` `invalid_world_id`.
 
 ### `GET /vip/status`
 

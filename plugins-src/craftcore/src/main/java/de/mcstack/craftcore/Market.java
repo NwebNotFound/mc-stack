@@ -334,8 +334,10 @@ final class Market implements Listener {
   }
   private void sell(Player p, Material m) throws Exception {
     if(!SurvivalItems.obtainable(core.getConfig(), m)) { p.sendMessage("Dieses Item gibt es im Survival nicht."); return; }
+    if(!marketSellEnabled(core.getConfig())) { p.sendMessage("Bankverkauf ist gerade deaktiviert."); return; }
     PlayerInventory inv=p.getInventory(); int slot=-1;
-    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && (eligible(stack) || SatchelItems.tagged(stack))) { slot=i; break; } }
+    // Same item gate as every other bank sale path (market.unsellable, market star, item meta, satchel cap).
+    for(int i=0;i<36;i++) { ItemStack stack=inv.getItem(i); if(stack!=null && stack.getType()==m && canSell(stack)) { slot=i; break; } }
     if(slot<0) { p.sendMessage("Kein geeigneter Artikel im Inventar."); return; }
     ItemStack before=inv.getItem(slot).clone(); ItemStack after=before.clone(); after.setAmount(before.getAmount()-1); inv.setItem(slot,after.getAmount()==0?null:after);
     int damage=before.getItemMeta() instanceof Damageable d ? d.getDamage() : 0;

@@ -95,8 +95,10 @@ final class Shop implements Listener {
       core.exec(c,"CREATE OR REPLACE VIEW v_shop_events AS SELECT e.seq AS event_id,CASE e.event_type WHEN 'gelistet' THEN 'CREATED' WHEN 'verkauft' THEN 'SOLD' WHEN 'zurueckgezogen' THEN 'CANCELLED' ELSE e.event_type END AS type,e.seller_name,p.name AS buyer_name,e.price / 100.0 AS price,e.listing_id FROM shop_events e LEFT JOIN known_players p ON p.uuid=e.actor");return null;});
     new BuyOrders(core).start();
     Bukkit.getPluginManager().registerEvents(this,core);
-    Bukkit.getScheduler().runTaskTimer(core,()->{for(Player p:Bukkit.getOnlinePlayers())notifySales(p);},100,100);
-    core.tx(c->{List<String> pending=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT id FROM shop_journal WHERE status='PENDING' FOR UPDATE");ResultSet r=q.executeQuery()){while(r.next())pending.add(r.getString(1));}for(String id:pending)ShopStore.publish(c,id);return null;});
+    Bukkit.getScheduler().runTaskTimer(core,this::notifySalesOnline,100,100);
+    // PENDING listings are quarantined: the seller's saved inventory may still hold the stack, so they are never published automatically.
+    List<String> pending=core.tx(c->{List<String> out=new ArrayList<>();try(PreparedStatement q=c.prepareStatement("SELECT id,seller,amount,material FROM shop_journal WHERE status='PENDING'");ResultSet r=q.executeQuery()){while(r.next())out.add(r.getString(1)+" seller="+r.getString(2)+" "+r.getInt(3)+"x"+r.getString(4));}return out;});
+    if(!pending.isEmpty())core.getLogger().warning("Shop: "+pending.size()+" PENDING-Angebote in Quarantaene (nicht veroeffentlicht, Admin-Pruefung noetig): "+pending);
   }
   void command(Player p,String[] a)throws Exception {
     if(a.length==0){overview(p,0);return;}
@@ -121,6 +123,7 @@ final class Shop implements Listener {
     ItemStack original=hand.clone(); if(count==hand.getAmount())p.getInventory().setItemInMainHand(null);else{ItemStack remaining=hand.clone();remaining.setAmount(hand.getAmount()-count);p.getInventory().setItemInMainHand(remaining);}
     try {core.tx(c->{core.exec(c,"INSERT INTO shop_journal(id,seller,seller_name,item,price,status,material,amount) VALUES(?,?,?,?,?,'PENDING',?,?)",id,p.getUniqueId().toString(),p.getName(),item,price,copy.getType().name(),copy.getAmount());return null;});}
     catch(Exception ex){p.getInventory().setItemInMainHand(original);throw ex;}
+    p.saveData();
     core.tx(c->{ShopStore.publish(c,id);return null;});p.sendMessage(Component.text("Angebot erstellt: "+Money.format(price)+" ").append(Component.text("[Rueckgaengig]").clickEvent(ClickEvent.runCommand("/shop undo "+id))));
   }
   List<Listing> listings(String filter,boolean cancel)throws Exception{return core.tx(c->{List<Listing> out=new ArrayList<>();String sql="SELECT id,seller,seller_name,price,item FROM shop_journal WHERE status='OPEN'"+(filter==null?"":cancel?" AND seller=?":" AND LOWER(seller_name)=LOWER(?)")+" ORDER BY id";try(PreparedStatement s=c.prepareStatement(sql)){if(filter!=null)s.setString(1,filter);try(ResultSet r=s.executeQuery()){while(r.next())out.add(new Listing(r.getString(1),r.getString(2),r.getString(3),r.getLong(4),r.getString(5)));}}return out;});}
@@ -150,8 +153,9 @@ final class Shop implements Listener {
           int count=Math.min(hand.getAmount(),existing.getMaxStackSize()-existing.getAmount());if(count<=0){p.sendMessage("Der Angebotsstapel ist voll.");return;}
           ItemStack original=hand.clone(),updated=existing.clone();updated.setAmount(existing.getAmount()+count);String encoded=Base64.getEncoder().encodeToString(updated.serializeAsBytes());
           if(count==hand.getAmount())p.getInventory().setItemInMainHand(null);else {ItemStack rest=hand.clone();rest.setAmount(hand.getAmount()-count);p.getInventory().setItemInMainHand(rest);}
+          p.saveData(); // persist the removal before the listing grows, so a crash cannot leave the items in both places
           boolean ok;try{ok=core.tx(c->{try(PreparedStatement q=c.prepareStatement("UPDATE shop_journal SET item=?,amount=? WHERE id=? AND seller=? AND status='OPEN' AND price=? AND BINARY item=BINARY ?")){q.setString(1,encoded);q.setInt(2,updated.getAmount());q.setString(3,row.id());q.setString(4,seller);q.setLong(5,row.price());q.setString(6,row.item());return q.executeUpdate()==1;}});}catch(Exception ex){p.getInventory().setItemInMainHand(original);throw ex;}
-          if(!ok){p.getInventory().setItemInMainHand(original);p.sendMessage("Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}p.sendMessage(count+" Items nachgefuellt; Gesamtpreis bleibt gleich.");edit.row=new Listing(row.id(),seller,row.name(),row.price(),encoded);renderEdit(e.getView().getTopInventory(),edit);
+          if(!ok){p.getInventory().setItemInMainHand(original);p.saveData();p.sendMessage("Angebot wurde inzwischen geaendert.");open(p,seller,edit.page,true);return;}p.sendMessage(count+" Items nachgefuellt; Gesamtpreis bleibt gleich.");edit.row=new Listing(row.id(),seller,row.name(),row.price(),encoded);renderEdit(e.getView().getTopInventory(),edit);
         }
       }catch(Exception ex){core.getLogger().warning("Shopbearbeitung: "+ex);p.sendMessage("Bearbeitung fehlgeschlagen.");}return;
     }
@@ -169,6 +173,21 @@ final class Shop implements Listener {
         try(PreparedStatement s=c.prepareStatement("UPDATE shop_notifications SET delivered=TRUE WHERE id=? AND delivered=FALSE")){for(String id:ids){s.setString(1,id);s.executeUpdate();}}return result;});
       for(long price:prices)p.sendMessage("Dein Shopangebot wurde fuer "+Money.format(price)+" verkauft.");
     } catch(Exception ex){core.getLogger().warning("Shopbenachrichtigungen: "+ex);}
+  }
+  record SaleNote(String id,String seller,long price){}
+  private final java.util.concurrent.atomic.AtomicBoolean notifying=new java.util.concurrent.atomic.AtomicBoolean();
+  /** Timer path of notifySales: one batched query off the main thread, messages back on the main thread. */
+  void notifySalesOnline(){
+    List<String> online=new ArrayList<>();for(Player p:Bukkit.getOnlinePlayers())online.add(p.getUniqueId().toString());
+    if(online.isEmpty()||!notifying.compareAndSet(false,true))return;
+    try{Bukkit.getScheduler().runTaskAsynchronously(core,()->{try{
+      List<SaleNote> notes=core.tx(c->{List<SaleNote> out=new ArrayList<>();
+        try(PreparedStatement s=c.prepareStatement("SELECT id,seller,price FROM shop_notifications WHERE delivered=FALSE AND seller IN ("+String.join(",",Collections.nCopies(online.size(),"?"))+") FOR UPDATE")){for(int i=0;i<online.size();i++)s.setString(i+1,online.get(i));try(ResultSet r=s.executeQuery()){while(r.next())out.add(new SaleNote(r.getString(1),r.getString(2),r.getLong(3)));}}
+        List<SaleNote> marked=new ArrayList<>();
+        try(PreparedStatement s=c.prepareStatement("UPDATE shop_notifications SET delivered=TRUE WHERE id=? AND delivered=FALSE")){for(SaleNote n:out){s.setString(1,n.id());if(s.executeUpdate()==1)marked.add(n);}}return marked;});
+      if(!notes.isEmpty())Bukkit.getScheduler().runTask(core,()->{for(SaleNote n:notes){Player p=Bukkit.getPlayer(UUID.fromString(n.seller()));if(p!=null)p.sendMessage("Dein Shopangebot wurde fuer "+Money.format(n.price())+" verkauft.");}});
+    }catch(Exception ex){core.getLogger().warning("Shopbenachrichtigungen: "+ex);}finally{notifying.set(false);}});}
+    catch(RuntimeException ex){notifying.set(false);throw ex;}
   }
   @EventHandler public void join(PlayerJoinEvent e){notifySales(e.getPlayer());}
 }

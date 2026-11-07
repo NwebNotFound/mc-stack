@@ -366,7 +366,10 @@ def bid_command(b):
     aid, rid, u = str(b.get("auction_id") or ""), str(b.get("request_id") or b.get("id") or ""), norm_uuid(b.get("bidder_uuid"))
     if not KEY_RE.match(aid) or not KEY_RE.match(rid) or not u:
         return None
-    return f"ah bid {aid} {u} {int(b['amount'])} {rid}"
+    amount = int(b["amount"])
+    if amount <= 0:
+        return None  # -> INVALID (#151)
+    return f"ah bid {aid} {u} {amount} {rid}"
 
 
 def handle_bid(db, rcon, host, b):
