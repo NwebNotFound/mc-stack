@@ -58,6 +58,22 @@ export interface OpsConfig {
   actionTimeoutSeconds: number;
   /** Timeout for one throwaway build/test container. */
   buildTimeoutSeconds: number;
+  /**
+   * Bearer token docker-socket-filter requires (OPS_FILTER_TOKEN). Empty = the
+   * helper starts, but every docker call is refused by the filter (401).
+   */
+  filterToken: string;
+  /** Private Docker CLI config dir (tmpfs) that carries the filter token. */
+  dockerConfigDir: string;
+  /**
+   * A `backups/.maintenance.active` marker (written by backup.ps1/dev-reset.ps1
+   * while they hold the maintenance lock) older than this is treated as stale.
+   */
+  maintenanceStaleSeconds: number;
+  /** How long a T2 action waits for a running backup before a restart. */
+  maintenanceWaitSeconds: number;
+  /** Poll interval while waiting for it. */
+  maintenancePollSeconds: number;
   /** Candidates for running the repo's PowerShell backup script (first hit wins). */
   backupInterpreters: string[];
 }
@@ -118,6 +134,11 @@ export function loadConfig(): OpsConfig {
     dockerBin: str("OPS_DOCKER_BIN", "docker"),
     actionTimeoutSeconds: num("OPS_ACTION_TIMEOUT_SECONDS", 120, 5, 3600),
     buildTimeoutSeconds: num("OPS_BUILD_TIMEOUT_SECONDS", 1800, 60, 7200),
+    filterToken: str("OPS_FILTER_TOKEN"),
+    dockerConfigDir: str("OPS_DOCKER_CONFIG_DIR", "/tmp/ops-docker-config"),
+    maintenanceStaleSeconds: num("OPS_MAINTENANCE_STALE_SECONDS", 14400, 600, 86400),
+    maintenanceWaitSeconds: num("OPS_MAINTENANCE_WAIT_SECONDS", 1800, 0, 7200),
+    maintenancePollSeconds: num("OPS_MAINTENANCE_POLL_SECONDS", 15, 1, 300),
     backupInterpreters: str("OPS_BACKUP_INTERPRETERS", "pwsh,powershell")
       .split(",")
       .map((v) => v.trim())
@@ -133,6 +154,7 @@ export function loadConfig(): OpsConfig {
     data_dir: cfg.dataDir,
     artifacts_dir: cfg.artifactsDir,
     artifacts_volume: cfg.artifactsVolume ? "set" : "unset",
+    filter_token: cfg.filterToken ? "set" : "unset",
   });
 
   return cfg;

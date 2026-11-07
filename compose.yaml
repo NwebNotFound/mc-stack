@@ -362,10 +362,15 @@ services:
       HERMES_MCP_ALLOWED_HOSTS: "${HERMES_MCP_ALLOWED_HOSTS:-mcp.nwebnotfound.dev,localhost,127.0.0.1,hermes-mcp}"
       HERMES_MCP_DATA_DIR: "/app/data"
       # Hardening (see tools/hermes-mcp/README.md):
-      # - trust X-Forwarded-For only from these peers (empty = never);
+      # - trust proxy headers only from these peers (IPs/CIDRs, empty = none)
+      #   and from the resolved addresses of the compose services named in
+      #   HERMES_MCP_TRUSTED_PROXY_HOSTS (default: the tunnel container). Behind
+      #   such a peer the brute-force lockout is keyed on CF-Connecting-IP, so one
+      #   tunnel caller can no longer lock everybody out;
       # - cap runs per UTC day and the accepted model/provider/effort overrides;
       # - stop a run that waits for approval, and time out lost (`unknown`) runs.
       HERMES_MCP_TRUSTED_PROXIES: "${HERMES_MCP_TRUSTED_PROXIES:-}"
+      HERMES_MCP_TRUSTED_PROXY_HOSTS: "${HERMES_MCP_TRUSTED_PROXY_HOSTS:-cloudflared-mcp}"
       HERMES_MCP_MAX_RUNS_PER_DAY: "${HERMES_MCP_MAX_RUNS_PER_DAY:-50}"
       HERMES_MCP_LOCKOUT_AFTER: "${HERMES_MCP_LOCKOUT_AFTER:-5}"
       HERMES_MCP_LOCKOUT_SECONDS: "${HERMES_MCP_LOCKOUT_SECONDS:-300}"
@@ -385,17 +390,27 @@ services:
       HERMES_MCP_OPS_TOKEN: "${HERMES_MCP_OPS_TOKEN:-}"
       # Local-only listener. It serves the T2 tools and is published on
       # 127.0.0.1 ONLY (see `ports`). The tunnel must never point at it.
+      # It binds 0.0.0.0 inside the container (the port mapping needs that), so
+      # it enforces "local only" itself: peers that are sibling containers on
+      # hermes-mcp's own networks (cloudflared-mcp, anything else that joins
+      # `mcp`) get 403, and only loopback Host headers are accepted
+      # (HERMES_MCP_OPS_ALLOWED_HOSTS, default localhost,127.0.0.1,::1). If the
+      # host's own requests are refused as `forbidden_peer`, set
+      # HERMES_MCP_OPS_ALLOWED_PEERS to the logged address.
       HERMES_MCP_OPS_PORT: "${HERMES_MCP_OPS_PORT:-8767}"
       HERMES_MCP_OPS_LOCKOUT_AFTER: "${HERMES_MCP_OPS_LOCKOUT_AFTER:-3}"
+      HERMES_MCP_OPS_ALLOWED_PEERS: "${HERMES_MCP_OPS_ALLOWED_PEERS:-}"
+      HERMES_MCP_OPS_ALLOWED_HOSTS: "${HERMES_MCP_OPS_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [mcp, ops]
     ports:
       # Local T2 entry point: loopback only, never routed by cloudflared-mcp.
       - "127.0.0.1:${HERMES_MCP_OPS_PORT:-8767}:${HERMES_MCP_OPS_PORT:-8767}"
+    # Only the tunnel-facing listener is meant for the compose networks; the
+    # ops listener is reached through the 127.0.0.1 port mapping above.
     expose:
       - "8765/tcp"
-      - "${HERMES_MCP_OPS_PORT:-8767}/tcp"
     volumes:
       - ./data/hermes-mcp:/app/data
     read_only: true
@@ -435,8 +450,13 @@ services:
       OPS_ARTIFACTS_DIR: "/artifacts"
       # Docker API access goes through docker-socket-filter (below), never
       # through a raw socket mount. The filter allowlists exact method+path
-      # pairs, so only ps/inspect/logs and a restart of the two T1 names pass.
+      # pairs (ps/inspect/logs and a restart of the exact names on its T1/T2
+      # lists) and requires OPS_FILTER_TOKEN as a bearer token, which the
+      # helper sends with every docker CLI call (private DOCKER_CONFIG on /tmp).
+      # The filter lives on its own network `ops-docker`, shared ONLY with
+      # this service.
       DOCKER_HOST: "tcp://docker-socket-filter:2375"
+      OPS_FILTER_TOKEN: "${OPS_FILTER_TOKEN:-}"
       # Pinned on purpose: with an explicit API version the CLI skips
       # `GET /version`, which the filter refuses (it is not a route). Only
       # `HEAD /_ping` remains as the documented health/negotiation exception.
@@ -480,7 +500,7 @@ services:
       - ops-artifacts:/artifacts
       # The job channel to plugin-builder (jobs in, results back via /artifacts).
       - ops-jobs:/jobs
-    networks: [ops]
+    networks: [ops, ops-docker]
     expose:
       - "8766/tcp"
     read_only: true
@@ -565,11 +585,16 @@ services:
   #
   # Allowed (everything else is 403, including unknown methods and header
   # tricks): HEAD|GET /_ping, GET /containers/json (query: all, filters),
-  # GET /containers/<ref>/json, GET /containers/<ref>/logs (tail <= 300) and
-  # POST /containers/<name>/restart for an EXACT name from
-  # OPS_FILTER_RESTART_ALLOW (no ids, no prefixes, no globs). Game-server names
-  # (lobby/survival/velocity/...) are deliberately absent, so a game-server
-  # restart stays impossible even if the helper asked for one.
+  # GET /containers/<ref>/json, GET /containers/<ref>/logs (tail REQUIRED,
+  # <= 300) and POST /containers/<name>/restart for an EXACT name from
+  # OPS_FILTER_RESTART_ALLOW (T1) or OPS_FILTER_RESTART_ALLOW_T2 (T2, the game
+  # servers lobby/survival/velocity by default) - no ids, no prefixes, no globs.
+  # Every request except /_ping needs `Authorization: Bearer $OPS_FILTER_TOKEN`
+  # (constant-time compare; the filter refuses to start without a token).
+  # The filter sits on its own internal network `ops-docker`, shared only with
+  # ops-helper: hermes-mcp (the tunnel-facing service) cannot reach it at all.
+  # The T1/T2 split, OPS_ARMED, confirm, delay and the backup gate are enforced
+  # in ops-helper; the filter is the last line (token + exact names).
   docker-socket-filter:
     build: ./tools/docker-socket-filter
     profiles: ["ops"]
@@ -577,21 +602,27 @@ services:
     environment:
       OPS_FILTER_PORT: "2375"
       OPS_FILTER_HOST: "0.0.0.0"
+      # Shared bearer token with ops-helper (>= 24 chars, openssl rand -hex 32).
+      # Fail closed: without it the filter exits at startup.
+      OPS_FILTER_TOKEN: "${OPS_FILTER_TOKEN:-}"
       OPS_FILTER_UPSTREAM: "/var/run/docker.sock"
       # Exact container names a restart may target, split by intent:
       #  - OPS_FILTER_RESTART_ALLOW     -> T1, reversible helper services;
       #  - OPS_FILTER_RESTART_ALLOW_T2  -> T2, the game servers.
       # Both apply to the exact `/containers/<name>/restart` path only, and the
       # union is what the filter accepts; the T1/T2 split is enforced by the
-      # helper's own restart_t1 / restart_game lists. The database, the proxy DB,
-      # hermes-test, hermes-mcp and ops-helper are in NEITHER list.
+      # helper's own restart_t1 / restart_game lists (and its OPS_ARMED/confirm/
+      # delay/backup gates). Set OPS_FILTER_RESTART_ALLOW_T2=none in .env to make
+      # game-server restarts impossible at the filter level too (an empty value
+      # falls back to the default). The database, the proxy DB, hermes-test, hermes-mcp and ops-helper
+      # are in NEITHER list.
       OPS_FILTER_RESTART_ALLOW: "${OPS_FILTER_RESTART_ALLOW:-mc-stack-bot-1,mc-stack-cloudflared-mcp-1}"
       OPS_FILTER_RESTART_ALLOW_T2: "${OPS_FILTER_RESTART_ALLOW_T2:-mc-stack-lobby-1,mc-stack-survival-1,mc-stack-velocity-1}"
       # Hard cap on a forwarded response body (logs are the big one).
       OPS_FILTER_MAX_RESPONSE_BYTES: "${OPS_FILTER_MAX_RESPONSE_BYTES:-8388608}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    networks: [ops]
+    networks: [ops-docker]
     expose:
       - "2375/tcp"
     read_only: true
@@ -614,7 +645,11 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-}"
+      # HERMES_MCP_TUNNEL_TOKEN is the name; the old .env.example name
+      # MCP_TUNNEL_TOKEN is still accepted as a fallback. Not `:?` on purpose:
+      # compose interpolates every service, so a required variable here would
+      # break every compose command for setups that never use this profile.
+      TUNNEL_TOKEN: "${HERMES_MCP_TUNNEL_TOKEN:-${MCP_TUNNEL_TOKEN:-}}"
     networks: [mcp]
 
   cloudflared:
@@ -634,13 +669,18 @@ networks:
   # `external: true` wiring is needed.
   mcp:
     name: mcp
-  # Private network between hermes-mcp, ops-helper and docker-socket-filter only.
+  # Private network between hermes-mcp and ops-helper only.
   # `internal: true` means it has no route off the host: the helper cannot reach
-  # the internet, the socket proxy cannot call out, and nothing outside these
-  # three services (in particular NOT cloudflared-mcp, which lives only in `mcp`)
-  # can reach any of them.
+  # the internet, and nothing outside these two services (in particular NOT
+  # cloudflared-mcp, which lives only in `mcp`) can reach either of them here.
   ops:
     name: mc-stack-ops
+    internal: true
+  # Private network between ops-helper and docker-socket-filter ONLY. hermes-mcp
+  # is deliberately not a member, so a compromised hermes-mcp cannot talk to the
+  # socket filter directly (it would also need OPS_FILTER_TOKEN).
+  ops-docker:
+    name: mc-stack-ops-docker
     internal: true
 
 volumes:
