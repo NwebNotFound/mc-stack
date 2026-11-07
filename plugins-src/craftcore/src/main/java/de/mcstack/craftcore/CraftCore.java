@@ -221,7 +221,7 @@ public final class CraftCore extends JavaPlugin implements Listener {
       case "has": { long n; try { n=Money.cents((double)args[args.length-1],java.math.RoundingMode.UP); } catch(IllegalArgumentException | ArithmeticException e) { return false; } return n>=0 && balance(resolve(args[0]).getUniqueId())>=n; }
       case "withdrawPlayer": case "depositPlayer": {
         UUID id=resolve(args[0]).getUniqueId(); double amount=(double)args[args.length-1];
-        try { long n=Money.cents(amount,method.equals("withdrawPlayer")?java.math.RoundingMode.UP:java.math.RoundingMode.DOWN); if(n<0)throw new IllegalArgumentException(); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
+        try { long n=Money.vaultCents(amount,method.equals("withdrawPlayer")); boolean ok=change(id,method.equals("withdrawPlayer")?-n:n); return new EconomyResponse(ok?amount:0,balance(id)/100.0,ok?EconomyResponse.ResponseType.SUCCESS:EconomyResponse.ResponseType.FAILURE,ok?null:"Nicht genug CP"); }
         catch(IllegalArgumentException | ArithmeticException e) { return new EconomyResponse(0,0,EconomyResponse.ResponseType.FAILURE,"Ungültiger Betrag"); }
       }
       case "toString": return "CraftCore Economy"; case "hashCode": return System.identityHashCode(this); case "equals": return args[0]==economy;
