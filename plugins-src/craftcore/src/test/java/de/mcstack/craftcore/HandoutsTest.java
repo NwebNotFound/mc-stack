@@ -160,6 +160,79 @@ class HandoutsTest {
       assertTrue(Handouts.xpToPay(c, owed, Set.copyOf(playerFile)).isEmpty(), "paid in the DB: never again");
     }
   }
+  // Round 6 (Gatekeeper #170): a main-thread hop that runs after its timeout must never give late.
+  private static <T> java.util.function.Function<Callable<T>, Future<T>> on(ExecutorService main) { return main::submit; }
+
+  @Test void stalledItemHopIsCancelledAndTheItemsAreGivenOnce() throws Exception {
+    ExecutorService main = Executors.newSingleThreadExecutor();
+    try (Connection c = db("r6a")) {
+      Set<String> playerFile = ConcurrentHashMap.newKeySet(); int[] given = {0};
+      Callable<Integer> give = () -> { given[0] += 5; playerFile.add(Handouts.itemMark("d1", 5)); return 5; };
+      assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));
+      CountDownLatch busy = new CountDownLatch(1);
+      main.submit(() -> { busy.await(); return null; });                  // the server thread is stalled
+      assertThrows(TimeoutException.class, () -> PlayerQueue.onMain(on(main), give, 50), "timed out and cancelled");
+      busy.countDown(); main.submit(() -> null).get(5, TimeUnit.SECONDS); // the late callback has run now: a no-op
+      assertEquals(0, given[0]); assertTrue(playerFile.isEmpty(), "nothing given, no marker");
+      Handouts.reconcile(c, P, "survival", Set.copyOf(playerFile));       // recovery may reopen: nothing was given
+      assertEquals(List.of("offen:5:NBT"), rows(c));
+      assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));            // the next /abholen hands it out
+      int g = PlayerQueue.onMain(on(main), give, 5_000); assertTrue(Handouts.finish(c, "d1", g));
+      assertEquals(5, given[0], "given exactly once"); assertEquals(List.of("geliefert:5:NBT"), rows(c));
+    } finally { main.shutdownNow(); }
+  }
+  @Test void itemHopAlreadyRunningAtTheTimeoutIsAwaitedNotReopened() throws Exception {
+    ExecutorService main = Executors.newSingleThreadExecutor(), job = Executors.newSingleThreadExecutor();
+    try (Connection c = db("r6b")) {
+      Set<String> playerFile = ConcurrentHashMap.newKeySet(); int[] given = {0};
+      CountDownLatch started = new CountDownLatch(1), finishGive = new CountDownLatch(1);
+      Callable<Integer> give = () -> { started.countDown(); finishGive.await(); given[0] += 5; playerFile.add(Handouts.itemMark("d1", 5)); return 5; };
+      assertTrue(Handouts.reserve(c, "d1", P, 5, "survival"));
+      Future<Integer> hop = job.submit(() -> PlayerQueue.onMain(on(main), give, 50));
+      started.await(); Thread.sleep(200);                                // well past the 50 ms timeout, callback RUNNING
+      assertFalse(hop.isDone(), "the job waits for the running give instead of moving on");
+      finishGive.countDown();
+      int g = hop.get(5, TimeUnit.SECONDS); assertEquals(5, g);
+      assertTrue(Handouts.finish(c, "d1", g));
+      Handouts.reconcile(c, P, "survival", Set.copyOf(playerFile));
+      assertEquals(5, given[0]); assertEquals(List.of("geliefert:5:NBT"), rows(c), "not reopened, not given twice");
+    } finally { main.shutdownNow(); job.shutdownNow(); }
+  }
+  @Test void stalledXpHopIsCancelledAndTheXpIsPaidOnce() throws Exception {
+    ExecutorService main = Executors.newSingleThreadExecutor();
+    try (Connection c = db("r6c")) {
+      Set<String> playerFile = ConcurrentHashMap.newKeySet(); int[] xp = {0};
+      List<long[]> owed = List.of(new long[]{7, 30});
+      Callable<Boolean> give = () -> { xp[0] += 30; playerFile.add(Handouts.xpMark(7)); return true; };
+      assertEquals(1, Handouts.xpToPay(c, owed, Set.copyOf(playerFile)).size());
+      CountDownLatch busy = new CountDownLatch(1);
+      main.submit(() -> { busy.await(); return null; });
+      assertThrows(TimeoutException.class, () -> PlayerQueue.onMain(on(main), give, 50));
+      busy.countDown(); main.submit(() -> null).get(5, TimeUnit.SECONDS);
+      assertEquals(0, xp[0], "late callback gave nothing");
+      // the next join: still owed, no marker -> paid now, then marked paid
+      var r = Handouts.reconcileXp(c, "survival", P, Set.copyOf(playerFile));
+      assertEquals(1, r.getKey().size());
+      assertTrue(PlayerQueue.onMain(on(main), give, 5_000)); assertTrue(GraveStore.xpPaid(c, 7));
+      assertTrue(Handouts.reconcileXp(c, "survival", P, Set.copyOf(playerFile)).getKey().isEmpty());
+      assertEquals(30, xp[0], "XP paid exactly once");
+    } finally { main.shutdownNow(); }
+  }
+  @Test void xpHopRunningAtTheTimeoutIsAwaitedAndNotPaidAgain() throws Exception {
+    ExecutorService main = Executors.newSingleThreadExecutor(), job = Executors.newSingleThreadExecutor();
+    try (Connection c = db("r6d")) {
+      Set<String> playerFile = ConcurrentHashMap.newKeySet(); int[] xp = {0};
+      CountDownLatch started = new CountDownLatch(1), done = new CountDownLatch(1);
+      Callable<Boolean> give = () -> { started.countDown(); done.await(); xp[0] += 30; playerFile.add(Handouts.xpMark(7)); return true; };
+      Future<Boolean> hop = job.submit(() -> PlayerQueue.onMain(on(main), give, 50));
+      started.await(); Thread.sleep(200); done.countDown();
+      assertTrue(hop.get(5, TimeUnit.SECONDS));
+      // the DB update failed (not marked paid): the next join sees the saved marker and does not pay again
+      assertTrue(Handouts.reconcileXp(c, "survival", P, Set.copyOf(playerFile)).getKey().isEmpty());
+      assertTrue(Handouts.xpToPay(c, List.of(new long[]{7, 30}), Set.copyOf(playerFile)).isEmpty());
+      assertEquals(30, xp[0]);
+    } finally { main.shutdownNow(); job.shutdownNow(); }
+  }
   @Test void markersRoundTrip() {
     Set<String> m = Handouts.parse(Handouts.format(new LinkedHashSet<>(List.of(Handouts.itemMark("a-b", 3), Handouts.xpMark(9)))));
     assertEquals(3, Handouts.given(m, "a-b")); assertEquals(-1, Handouts.given(m, "a")); assertTrue(m.contains("x:9"));
