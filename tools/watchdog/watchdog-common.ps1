@@ -67,7 +67,9 @@ function Get-WdHolds([string]$Root, [double]$MaxHours) {
     if ($until -gt $now) { $active += [pscustomobject]@{ owner = $f.Name.Substring('.watchdog-hold-'.Length); reason = $(if ($h) { [string]$h.reason } else { '' }); until = $until.ToString('o') } }
   }
   $marker = Join-Path $dir '.maintenance.active'
-  if ((Test-Path -LiteralPath $marker) -and (Get-Item -LiteralPath $marker -Force).LastWriteTime.AddHours($MaxHours) -gt $now) {
+  # The marker is written by Enter-MaintLock (#173); the watchdog's own lock (this process) is not a hold.
+  $own = $false; if (Test-Path -LiteralPath $marker) { $m = Read-WdJson $marker $null; $own = [bool]($m -and $m.pid -eq $PID) }
+  if (-not $own -and (Test-Path -LiteralPath $marker) -and (Get-Item -LiteralPath $marker -Force).LastWriteTime.AddHours($MaxHours) -gt $now) {
     $active += [pscustomobject]@{ owner = 'maintenance'; reason = 'maintenance lock held'; until = '' }
   }
   return $active

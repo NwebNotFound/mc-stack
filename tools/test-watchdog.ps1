@@ -246,6 +246,14 @@ Check ($msg -eq '' -and $st.docker -eq 'down') "Docker down (stderr, exit 1): re
 $env:PATH = $oldPath
 
 
+Write-Host 'maintenance marker (written by Enter-MaintLock): another process is a hold, our own lock is not'
+$mk = Join-Path $root 'backups/.maintenance.active'
+Set-Content -LiteralPath $mk -Value '{"name":"backup","pid":1}'
+Check (@(Get-WdHolds $root 6 | Where-Object { $_.owner -eq 'maintenance' }).Count -eq 1) 'marker of a running backup (other pid): hold'
+Set-Content -LiteralPath $mk -Value ('{"name":"watchdog","pid":' + $PID + '}')
+Check (@(Get-WdHolds $root 6 | Where-Object { $_.owner -eq 'maintenance' }).Count -eq 0) 'marker of this process (the watchdog holding the lock): no hold'
+Remove-Item -LiteralPath $mk
+
 Write-Host 'backup.ps1 / dev-reset.ps1 holds'
 $b = Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw
 Check ($b -match "Set-WatchdogHold \`$PSScriptRoot 'backup'" -and $b -match 'if\(\$LeaveStopped -and \$complete\)\{ Set-WatchdogHold' -and $b -match "Clear-WatchdogHold \`$PSScriptRoot 'backup'") 'backup.ps1 holds while running, keeps the hold after -LeaveStopped'

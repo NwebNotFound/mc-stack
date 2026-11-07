@@ -1,11 +1,6 @@
-<<<<<<< HEAD
 param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 600)
-# Default: online backup, nothing is stopped (RCON save-off, save-all flush, copy, save-on).
-=======
-param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 0)
 # Default: online backup, nothing is stopped (RCON save-off + save-all flush on every server, dump craftcore and
 # luckperms, copy lobby/survival/pvp/vipworlds, save-on).
->>>>>>> origin/main
 # -StopServers: old behaviour (stop lobby+survival, copy, start). -LeaveStopped implies -StopServers (deploys).
 if($LeaveStopped){ $StopServers=$true }
 # Lock wait 10 min by default: the watchdog (tools/watchdog) holds the maintenance lock while it revives a service
