@@ -29,9 +29,13 @@ Die Profile sind standardmäßig aus. Leere oder nur eingetragene Werte starten 
 docker compose ps
 docker compose logs --tail 100 lobby survival velocity
 python .\scripts\check-local.py
+powershell -File tools\watchdog\pause.ps1 -Hours 2 -Reason "Wartung"   # vor jedem Stop von Hand, sonst startet der Watchdog neu
 docker compose stop
 docker compose up -d
+powershell -File tools\watchdog\pause.ps1 -Resume
 ```
+
+Mit installiertem Watchdog startet ein von Hand gestoppter Server nach spätestens 2 Minuten wieder, deshalb vorher `pause.ps1`. Für lange Arbeiten (Umzug) den Task entfernen (`tools\watchdog\install-task.ps1 -Uninstall`) und danach wieder installieren.
 
 Bei leerem `MINECRAFT_VERSION` kann `LATEST` beim Neustart aktualisieren. Welten vor Versionsupdates bei gestoppten Servern sichern; Anleitung zum Umzug in README. `.env`, `secrets/`, `data/`, Logs und aufgelöste Compose-Konfigurationen privat halten. `.gitignore` schließt diese aus; der Projektordner ist derzeit kein Git-Repository.
 

@@ -5,6 +5,8 @@ $repo = Split-Path $PSScriptRoot -Parent
 $root = Join-Path ([IO.Path]::GetTempPath()) ('maint-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path "$root/tools", "$root/backups", "$root/data/lobby/world", "$root/data/survival/world" | Out-Null
 Copy-Item "$repo/tools/maintenance-common.ps1" "$root/tools/"
+New-Item -ItemType Directory -Path "$root/tools/watchdog" | Out-Null
+Copy-Item "$repo/tools/watchdog/watchdog-common.ps1" "$root/tools/watchdog/"
 Copy-Item "$repo/backup.ps1", "$repo/dev-reset.ps1" "$root/"
 $global:MaintSleep = { param($s) }   # no real waiting in tests
 . "$root/tools/maintenance-common.ps1"
@@ -221,6 +223,21 @@ $msg = ''; try { & "$root/backup.ps1" -StopServers -ReadyAttempts 1 } catch { $m
 $calls = @($global:DockerCalls)
 Check ($msg -eq '' -and (Idx 'compose stop lobby survival') -ge 0 -and (Idx 'compose up -d --no-deps lobby survival') -gt (Idx 'compose stop lobby survival')) "-StopServers stops and starts the servers ($msg)"
 Check ((Idx '*rcon-cli save-off*') -lt 0) '-StopServers does not use save-off'
+$holdFile = "$root/backups/.watchdog-hold-backup"
+Check (-not (Test-Path -LiteralPath $holdFile)) 'watchdog hold cleared after a backup that restarted the servers'
+
+Write-Host '-LeaveStopped keeps the watchdog away from the stopped servers'
+Reset-Calls
+$msg = ''; try { & "$root/backup.ps1" -LeaveStopped -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$calls = @($global:DockerCalls)
+Check ($msg -eq '' -and (Idx 'compose stop lobby survival') -ge 0 -and (Idx 'compose up*') -lt 0) "-LeaveStopped leaves lobby/survival stopped ($msg)"
+Check ((Test-Path -LiteralPath $holdFile) -and ((Get-Content -LiteralPath $holdFile -Raw) -like '*LeaveStopped*')) 'and leaves a watchdog hold for the deploy'
+Write-Host 'a scheduled backup during the deploy keeps the sticky deploy hold'
+Reset-Calls
+$msg = ''; try { & "$root/backup.ps1" -NoWarning -ReadyAttempts 1 } catch { $msg = $_.Exception.Message }
+$h = Get-Content -LiteralPath $holdFile -Raw | ConvertFrom-Json
+Check ((Test-Path -LiteralPath $holdFile) -and $h.sticky -and $h.reason -like '*LeaveStopped*') "normal backup after -LeaveStopped: sticky hold still there ($msg)"
+Remove-Item -LiteralPath $holdFile -Force
 $global:MaintDumpOverride = $null
 
 Remove-Item Function:\docker

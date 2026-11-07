@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 . (Join-Path $PSScriptRoot 'tools/maintenance-common.ps1')
+. (Join-Path $PSScriptRoot 'tools/watchdog/watchdog-common.ps1')
 function Get-ServerMode {
     $sql = "SELECT mode FROM server_status WHERE id=1;"
     $result = $sql | & docker compose exec -T craftcore-db sh -c 'MYSQL_PWD="$MARIADB_PASSWORD" exec mariadb -N -u "$MARIADB_USER" "$MARIADB_DATABASE"' 2>&1
@@ -31,7 +32,7 @@ $maintError = ''
 try {
 # A catch-up run right after a backup waits for the backup's lock (up to 30 min) instead of colliding with it,
 # and only then checks that Docker and craftcore-db answer (05.11., 11:36: both tasks started while the DB was down).
-if (-not $DryRun) { $maintLock = Enter-MaintLock $PSScriptRoot $LockWaitSeconds }
+if (-not $DryRun) { $maintLock = Enter-MaintLock $PSScriptRoot $LockWaitSeconds; Set-WatchdogHold $PSScriptRoot 'dev-reset' 'dev-reset.ps1 laeuft' | Out-Null }
 Wait-MaintReady $ReadyAttempts
 if (-not (Check-Dev)) {
     $online = (Get-ServerMode) -ceq 'online'
@@ -119,6 +120,11 @@ if ($DryRun) {
     Write-MaintLog 'error' 'error' $maintError
     throw
 } finally {
+    if ($maintLock) {
+        # A failed destructive reset leaves Survival stopped for a human: the watchdog must not start it.
+        if ($maintExit -ne 0 -and $destructive) { Set-WatchdogHold $PSScriptRoot 'dev-reset' 'Dev-Reset fehlgeschlagen, Survival bleibt gestoppt: erst pruefen, dann tools/watchdog/pause.ps1 -Resume -Owner dev-reset' -Sticky | Out-Null }
+        else { Clear-WatchdogHold $PSScriptRoot 'dev-reset' | Out-Null }   # never clears a sticky failure hold
+    }
     Exit-MaintLock $maintLock
     Stop-MaintLog $maintExit $maintError
 }

@@ -1,11 +1,14 @@
-param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 0)
+param([switch]$LeaveStopped, [switch]$PreserveBackups, [switch]$StopServers, [switch]$NoWarning, [int]$ReadyAttempts = 12, [int]$LockWaitSeconds = 600)
 # Default: online backup, nothing is stopped (RCON save-off + save-all flush on every server, dump craftcore and
 # luckperms, copy lobby/survival/pvp/vipworlds, save-on).
 # -StopServers: old behaviour (stop lobby+survival, copy, start). -LeaveStopped implies -StopServers (deploys).
 if($LeaveStopped){ $StopServers=$true }
+# Lock wait 10 min by default: the watchdog (tools/watchdog) holds the maintenance lock while it revives a service
+# (a graceful restart can take 2+ min), and the backup must wait for that instead of failing.
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
 . (Join-Path $PSScriptRoot 'tools/maintenance-common.ps1')
+. (Join-Path $PSScriptRoot 'tools/watchdog/watchdog-common.ps1')
 Start-MaintLog 'backup' $PSScriptRoot | Out-Null
 $lock=$null
 $stopped=$false
@@ -17,6 +20,8 @@ $exitCode=0
 $errorText=''
 try {
   $lock=Enter-MaintLock $PSScriptRoot $LockWaitSeconds
+  # The watchdog (tools/watchdog) must not revive what a backup stops on purpose.
+  Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 laeuft' | Out-Null   # keeps an existing sticky deploy hold
   # Catch-up runs after a reboot used to start before Docker and craftcore-db were up (05.11., 11:36).
   Wait-MaintReady $ReadyAttempts
   $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
@@ -125,6 +130,12 @@ try {
     docker compose up -d --no-deps lobby survival
     if($LASTEXITCODE -ne 0){ Write-MaintLog 'restart' 'error' 'Serverstart nach Backup fehlgeschlagen.'; $exitCode=1 }
     else { Write-MaintLog 'restart' 'info' 'lobby und survival gestartet' }
+  }
+  if($lock){
+    # -LeaveStopped: lobby/survival stay down for the deploy. Sticky: the hold never expires, however long the deploy
+    # takes; it ends only with `tools/watchdog/pause.ps1 -Resume -Owner backup`.
+    if($LeaveStopped -and $complete){ Set-WatchdogHold $PSScriptRoot 'backup' 'backup.ps1 -LeaveStopped: lobby/survival fuer den Deploy gestoppt' -Sticky | Out-Null }
+    else { Clear-WatchdogHold $PSScriptRoot 'backup' | Out-Null }   # never clears a sticky deploy hold
   }
   Exit-MaintLock $lock
   Stop-MaintLog $exitCode $errorText
