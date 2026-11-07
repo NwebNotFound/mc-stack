@@ -47,7 +47,7 @@ class VipStoreTest {
 
     @Test void sqlConstantsHaveExpectedParameters() throws Exception {
         Map<String, Integer> expected = Map.ofEntries(
-                Map.entry("COUNT_WORLDS", 1), Map.entry("INSERT_WORLD", 5), Map.entry("LIST_WORLDS", 1),
+                Map.entry("COUNT_WORLDS", 1), Map.entry("INSERT_WORLD", 7), Map.entry("LIST_WORLDS", 1),
                 Map.entry("RENAME_WORLD", 3), Map.entry("SET_STATUS", 3), Map.entry("SET_RUNNING", 3),
                 Map.entry("INSERT_RUN", 3), Map.entry("SET_STOPPED", 1), Map.entry("STOP_RUNS", 2),
                 Map.entry("STOP_IDLE_RUNS", 2), Map.entry("FIND_WORLD", 1), Map.entry("LIST_MEMBERS", 1),
@@ -152,6 +152,44 @@ class VipStoreTest {
             assertTrue(store.invitesSince(guest, invites.get(0).addedAt()).isEmpty(), "told once");
             store.markDeleted(id);
             assertTrue(store.listShared(guest).isEmpty(), "a deleted world is not offered");
+        }
+    }
+
+    @Test void createRespectsTheSlotLimitInsideTheInsert() throws Exception {
+        // Issue #157: count and insert were two statements, so two concurrent creates both passed the check.
+        try (Connection c=database()) {
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID(), other=UUID.randomUUID();
+            assertTrue(store.create(owner,"one","normal",1));
+            assertFalse(store.create(owner,"two","normal",1), "the second world does not fit into one slot");
+            assertEquals(1, store.count(owner));
+            assertTrue(store.create(other,"one","flat",1), "the limit counts per owner");
+            assertTrue(store.markDeleted(store.list(owner).get(0).id()));
+            assertTrue(store.create(owner,"two","void",1), "a deleted world frees its slot");
+            assertEquals(List.of("two"), store.list(owner).stream().map(VipStore.World::name).toList());
+            assertFalse(store.create(owner,"three","normal",0));
+        }
+    }
+
+    @Test void aDeletedWorldGivesItsNameBack() throws Exception {
+        // Issue #158: UNIQUE(owner,name) kept "Insel" taken by the deleted row.
+        try (Connection c=database()) {
+            try (Statement s=c.createStatement()) { s.execute("ALTER TABLE vip_worlds ADD CONSTRAINT owner_name UNIQUE (owner,name)"); }
+            String url=c.getMetaData().getURL();
+            VipStore store=new VipStore(() -> DriverManager.getConnection(url),Clock.fixed(Instant.ofEpochMilli(EPOCH),ZoneOffset.UTC));
+            UUID owner=UUID.randomUUID();
+            store.create(owner,"Insel","normal");
+            String first=store.list(owner).get(0).id();
+            assertTrue(store.markDeleted(first));
+            assertTrue(store.create(owner,"Insel","flat",1), "the name is free again");
+            store.create(owner,"Berg","normal");
+            assertTrue(store.markDeleted(store.find(owner,"Insel").orElseThrow().id()));
+            assertTrue(store.markDeleted(store.find(owner,"Berg").orElseThrow().id()), "several deleted rows never collide");
+            try (Statement s=c.createStatement(); ResultSet r=s.executeQuery("SELECT name FROM vip_worlds WHERE id='"+first+"'")) {
+                assertTrue(r.next()); String name=r.getString(1);
+                assertEquals(24, name.length()); assertFalse(VipNames.validate(name), "a placeholder never clashes with a real name");
+            }
         }
     }
 }

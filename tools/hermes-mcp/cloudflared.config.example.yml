@@ -8,7 +8,7 @@
 # A) Token-managed tunnel (same pattern as the existing `cloudflared` service)
 #    - Create the tunnel in Zero Trust, add public hostname:
 #        mcp.nwebnotfound.dev  ->  http://hermes-mcp:8765
-#    - Put the tunnel token into .env as MCP_TUNNEL_TOKEN=...
+#    - Put the tunnel token into .env as HERMES_MCP_TUNNEL_TOKEN=...
 #    - docker compose --profile mcp --profile mcp-tunnel up -d
 #    - This file is NOT needed in that variant.
 #

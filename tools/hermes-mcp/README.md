@@ -36,10 +36,18 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
   digests, no length leak), are never logged
   and never returned by a tool. Repeated bad tokens from one client IP are
   braked with an exponential lockout (`429` + `Retry-After`), in-memory.
-- `X-Forwarded-For` is only trusted when the direct peer is in
-  `HERMES_MCP_TRUSTED_PROXIES` (default: empty → the socket address is used, so
-  a client cannot spoof its identity). Behind a trusted proxy, the right-most
-  untrusted hop is the client.
+- Proxy headers are only trusted when the direct peer is in
+  `HERMES_MCP_TRUSTED_PROXIES` (IPs/CIDRs, default empty) or is one of the
+  addresses the compose service names in `HERMES_MCP_TRUSTED_PROXY_HOSTS`
+  resolve to (compose default `cloudflared-mcp`, refreshed every 30 s via Docker
+  DNS). Otherwise the socket address is used, so a client cannot spoof its
+  identity. Behind a trusted peer, `CF-Connecting-IP` (set by Cloudflare's edge)
+  is the client; without it, the right-most untrusted `X-Forwarded-For` hop.
+  This matters for the lockout: through the tunnel the socket peer is always the
+  cloudflared container, so without it every internet caller would share one
+  lockout bucket and a few bad tokens would lock out the owner too.
+- Requests that carry **no** `Authorization: Bearer` header get a `401` but do
+  not count toward the lockout; only presented-but-wrong tokens do.
 - The Hermes gateway keys stay in the gateway call: each profile has its own
   profile-scoped `API_SERVER_KEY`. hermes-mcp reads them from
   `HERMES_PROFILE_KEYS` (JSON in `.env`) and never prints them.
@@ -51,7 +59,9 @@ Hermes profiles: cloudflare · discord · homelab · minecraft
   shapes it can recognise: `Bearer …` headers, GitHub PATs (`ghp_…`,
   `github_pat_…`), OpenAI/OpenRouter/Kimi `sk-…` keys, `NAME=value` / `NAME: …`
   assignments whose name looks secret-bearing (`…TOKEN`, `…SECRET`, `…_KEY`,
-  `…PASSWORD`, `…CREDENTIAL`, `…AUTHORIZATION`, `…COOKIE`) and long hex blobs. It
+  `…PASSWORD`, `…CREDENTIAL`, `…AUTHORIZATION`, `…COOKIE`) — the value is
+  redacted up to the end of the line, quotes and backticks included — the MariaDB
+  image's `GENERATED ROOT PASSWORD: …` line, and long hex blobs. It
   is a safety net, not a proof: it normalises known patterns and leaves
   unrecognised secrets alone.
 - `cancel_run` requires `confirm=true`, otherwise `code: confirmation_required`.
@@ -151,7 +161,8 @@ All optional; the defaults are fail-closed.
 | `HERMES_MCP_ALLOWED_MODELS` | `deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5` | models accepted by `start_run(model=…)`; omit `model` for the profile default |
 | `HERMES_MCP_ALLOWED_PROVIDERS` | `openrouter,anthropic` | providers accepted by `start_run(provider=…)` |
 | `HERMES_MCP_ALLOWED_REASONING_EFFORTS` | `minimal,low,medium,high` | `reasoning_effort` accepted (`xhigh`/`none` excluded) |
-| `HERMES_MCP_TRUSTED_PROXIES` | *(empty)* | peers allowed to set `X-Forwarded-For` (exact IP or CIDR) |
+| `HERMES_MCP_TRUSTED_PROXIES` | *(empty)* | peers allowed to set `CF-Connecting-IP` / `X-Forwarded-For` (exact IP or CIDR) |
+| `HERMES_MCP_TRUSTED_PROXY_HOSTS` | *(empty; compose: `cloudflared-mcp`)* | compose service names resolved to trusted proxy addresses |
 | `HERMES_MCP_LOCKOUT_AFTER` | `5` | bad tokens before an IP is locked out |
 | `HERMES_MCP_LOCKOUT_SECONDS` | `300` | exponential lockout cap |
 | `HERMES_MCP_APPROVAL_WAIT_SECONDS` | `900` | a run waiting for approval is stopped after this (hermes-mcp never approves) |
@@ -161,6 +172,8 @@ All optional; the defaults are fail-closed.
 | `OPS_HELPER_TIMEOUT_SECONDS` | `120` | default per-call timeout (builds/deploys raise it to 1800 s) |
 | `HERMES_MCP_OPS_TOKEN` | *(empty)* | the elevated (`ops`) token; empty → T1/T2 are refused for everyone |
 | `HERMES_MCP_OPS_PORT` / `HERMES_MCP_OPS_HOST` | `8767` / `0.0.0.0` | the local-only listener that serves T2 (published as `127.0.0.1:8767`) |
+| `HERMES_MCP_OPS_ALLOWED_PEERS` | *(empty)* | explicit peer allowlist (IP/CIDR) for the local listener; empty = built-in rule (see "The two listeners") |
+| `HERMES_MCP_OPS_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host headers the local listener accepts |
 | `HERMES_MCP_OPS_LOCKOUT_AFTER` | `3` | consecutive bad tokens on the ops listener before that IP is locked out (its own brake) |
 
 ## Ops tools: threat model
@@ -220,6 +233,27 @@ base token, :8765 -> T1/T2 absent      ops token, :8765 -> T1 present, T2 absent
 base token, :8767 -> T1/T2 absent      ops token, :8767 -> T1 + T2 present
 unknown token     -> 401
 ```
+
+The local listener does not rely on the port number alone. It binds `0.0.0.0`
+inside the container (the host port mapping needs that), so any container that
+shares a network with hermes-mcp — `cloudflared-mcp`, or a container of another
+compose project that joins the fixed-name `mcp` network — could otherwise
+connect to `hermes-mcp:8767`, and a single tunnel ingress rule pointing there
+would publish T2. The listener therefore refuses, before auth:
+
+* any peer inside one of the container's own subnets that is not that subnet's
+  gateway (Docker delivers the `127.0.0.1:8767` mapping from the gateway, from
+  loopback or, on Docker Desktop, from a proxy address outside these subnets) →
+  `403 forbidden_peer`, logged with the address;
+* any `Host` header other than `HERMES_MCP_OPS_ALLOWED_HOSTS` (default
+  `localhost,127.0.0.1,::1`), so a request carrying the tunnel hostname is
+  refused → `403 forbidden_host`.
+
+If your own host requests are refused as `forbidden_peer`, set
+`HERMES_MCP_OPS_ALLOWED_PEERS` to the logged address (it then replaces the
+built-in rule; loopback stays allowed). Residual risk: on Docker Desktop a
+container that can reach `host.docker.internal:8767` arrives through the host
+mapping like the host itself; the Host check and the ops token still apply.
 
 The local listener has its own stricter brute-force brake
 (`HERMES_MCP_OPS_LOCKOUT_AFTER`, default 3 consecutive bad tokens), separate from

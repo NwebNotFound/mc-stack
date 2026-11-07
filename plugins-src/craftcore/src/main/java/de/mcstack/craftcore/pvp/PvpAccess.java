@@ -24,4 +24,12 @@ public final class PvpAccess {
     public static GameMode joinMode(boolean builder, boolean assigned) {
         return builder && !assigned ? GameMode.CREATIVE : GameMode.ADVENTURE;
     }
+
+    /** /pvp leave during a match would strand the opponent until the 5 minute draw; the match must be played out. */
+    public static boolean mayLeave(boolean inMatch) { return !inMatch; }
+
+    /** A teleport out of the match world is refused until the match finishes; the cleanup teleports after that. */
+    public static boolean blocksTeleport(String matchWorld, boolean finishing, String fromWorld, String toWorld) {
+        return matchWorld != null && !finishing && matchWorld.equals(fromWorld) && !matchWorld.equals(toWorld);
+    }
 }

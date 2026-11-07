@@ -59,12 +59,14 @@ final class RealAuctions {
   return "OK "+req.auction()+" "+req.amount()+" "+newEnd;
  }
  private static void alert(Connection c,Request r,long now,String reason)throws SQLException {try(PreparedStatement s=c.prepareStatement("INSERT INTO auction_alerts(auction_id,bidder,reason,created_at) VALUES(?,?,?,?)")){s.setLong(1,r.auction());s.setString(2,r.bidder());s.setString(3,reason);s.setLong(4,now);s.executeUpdate();}}
- static void settle(Connection c,long id,long now)throws SQLException {
+ static void settle(Connection c,long id,long now)throws SQLException { settle(c,id,now,300); }
+ static void settle(Connection c,long id,long now,int feeBasisPoints)throws SQLException {
+  if(feeBasisPoints<0||feeBasisPoints>10000)throw new SQLException("Ungueltige Auktionsgebuehr");
   String seller,winner,item;long gross;int amount;
   try(PreparedStatement s=c.prepareStatement("SELECT seller,current_bidder,current_bid,item,amount FROM auctions WHERE id=? AND status='OPEN' AND ends_at<=? FOR UPDATE")){s.setLong(1,id);s.setLong(2,now);try(ResultSet r=s.executeQuery()){if(!r.next())return;seller=r.getString(1);winner=r.getString(2);gross=r.getLong(3);item=r.getString(4);amount=r.getInt(5);}}
   String recipient=winner==null?seller:winner;
   try(PreparedStatement s=c.prepareStatement("INSERT INTO pending_deliveries(id,player_uuid,item_nbt,amount,source,status) VALUES(?,?,?,?,?,'offen')")){s.setString(1,UUID.randomUUID().toString());s.setString(2,recipient);s.setString(3,item);s.setInt(4,amount);s.setString(5,"auction");s.executeUpdate();}
-  if(winner!=null){try(PreparedStatement s=c.prepareStatement("DELETE FROM auction_escrow WHERE auction_id=? AND bidder=? AND amount=?")){s.setLong(1,id);s.setString(2,winner);s.setLong(3,gross);if(s.executeUpdate()!=1)throw new SQLException("escrow mismatch");}try(PreparedStatement s=c.prepareStatement("INSERT IGNORE INTO accounts(uuid,balance) VALUES(?,0)")){s.setString(1,seller);s.executeUpdate();}try(PreparedStatement s=c.prepareStatement("UPDATE accounts SET balance=balance+? WHERE uuid=?")){s.setLong(1,gross-AuctionFee.calculate(gross,300));s.setString(2,seller);s.executeUpdate();}}
+  if(winner!=null){try(PreparedStatement s=c.prepareStatement("DELETE FROM auction_escrow WHERE auction_id=? AND bidder=? AND amount=?")){s.setLong(1,id);s.setString(2,winner);s.setLong(3,gross);if(s.executeUpdate()!=1)throw new SQLException("escrow mismatch");}try(PreparedStatement s=c.prepareStatement("INSERT IGNORE INTO accounts(uuid,balance) VALUES(?,0)")){s.setString(1,seller);s.executeUpdate();}try(PreparedStatement s=c.prepareStatement("UPDATE accounts SET balance=balance+? WHERE uuid=?")){s.setLong(1,gross-AuctionFee.calculate(gross,feeBasisPoints));s.setString(2,seller);s.executeUpdate();}}
   try(PreparedStatement s=c.prepareStatement("UPDATE auctions SET status=? WHERE id=?")){s.setString(1,winner==null?"EXPIRED":"SOLD");s.setLong(2,id);s.executeUpdate();}
  }
  private RealAuctions(){}

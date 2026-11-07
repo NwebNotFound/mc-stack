@@ -21,12 +21,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+  checkBearer,
   classify,
   createFilterServer,
   dechunk,
   DEFAULT_RESTART_ALLOW_T1,
   DEFAULT_RESTART_ALLOW_T2,
   Denied,
+  parseAllow,
   parseHead,
   resolveRestartAllow,
   rewriteResponse,
@@ -34,6 +36,8 @@ import {
   stripInspectEnv,
 } from "../src/filter.mjs";
 
+const TOKEN = "t".repeat(32);
+const AUTH = `Authorization: Bearer ${TOKEN}\r\n`;
 const CFG = { restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: DEFAULT_RESTART_ALLOW_T2 };
 const ID64 = "a".repeat(64);
 
@@ -231,7 +235,10 @@ test("query strings are strictly allowlisted", () => {
   denied("GET", "/containers/mc-stack-bot-1/logs?follow=1", "query_key_not_allowed:follow");
   denied("GET", "/containers/mc-stack-bot-1/logs?tail=301", "tail_too_large");
   denied("GET", "/containers/mc-stack-bot-1/logs?tail=-1", "bad_tail_value");
-  denied("GET", "/containers/mc-stack-bot-1/logs?stdout=2", "bad_stdout_value");
+  denied("GET", "/containers/mc-stack-bot-1/logs?tail=10&stdout=2", "bad_stdout_value");
+  // tail is mandatory: without it the daemon would return the whole log.
+  denied("GET", "/containers/mc-stack-bot-1/logs", "tail_required");
+  denied("GET", "/containers/mc-stack-bot-1/logs?stdout=1&stderr=1", "tail_required");
   denied("GET", "/containers/mc-stack-bot-1/json?foo=bar", "query_key_not_allowed:foo");
   denied("GET", "/containers/json?");
   denied("GET", "/containers/json?=1");
@@ -351,7 +358,7 @@ async function withFilter(run) {
   const dir = mkdtempSync(join(tmpdir(), "dsf-"));
   const socketPath = join(dir, "docker.sock");
   const { server: daemon, hits } = await startFakeDaemon(socketPath);
-  const filter = createFilterServer({ upstreamSocketPath: socketPath, restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: DEFAULT_RESTART_ALLOW_T2, log: () => {} });
+  const filter = createFilterServer({ upstreamSocketPath: socketPath, token: TOKEN, restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: DEFAULT_RESTART_ALLOW_T2, log: () => {} });
   await new Promise((resolve) => filter.listen(0, "127.0.0.1", resolve));
   const port = filter.address().port;
   try {
@@ -365,62 +372,98 @@ async function withFilter(run) {
 
 test("live: allowed requests are forwarded, forbidden ones never reach the daemon", async () => {
   await withFilter(async ({ port, hits }) => {
-    const ps = await rawExchange(port, "GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n\r\n");
+    const ps = await rawExchange(port, `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`);
     assert.equal(statusesOf(ps)[0], 200, ps);
     assert.match(ps, /mc-stack-bot-1/);
 
-    const ping = await rawExchange(port, "HEAD /_ping HTTP/1.1\r\nHost: docker\r\n\r\n");
+    const ping = await rawExchange(port, `HEAD /_ping HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`);
     assert.equal(statusesOf(ping)[0], 200, ping);
     assert.match(ping, /Api-Version: 1\.51/);
 
-    const logs = await rawExchange(port, `GET /containers/${ID64}/logs?stderr=1&stdout=1&tail=200&timestamps=1 HTTP/1.1\r\nHost: docker\r\n\r\n`);
+    const logs = await rawExchange(port, `GET /containers/${ID64}/logs?stderr=1&stdout=1&tail=200&timestamps=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`);
     assert.equal(statusesOf(logs)[0], 200, logs);
     assert.match(logs, /log line 1/);
 
-    const restart = await rawExchange(port, "POST /containers/mc-stack-bot-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    const restart = await rawExchange(port, `POST /containers/mc-stack-bot-1/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(restart)[0], 204, restart);
 
     // A game server is on the T2 list, so it passes (the T1/T2 split is enforced
     // one level up, in the helper's own service lists)...
-    const gameRestart = await rawExchange(port, "POST /containers/mc-stack-lobby-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    const gameRestart = await rawExchange(port, `POST /containers/mc-stack-lobby-1/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(gameRestart)[0], 204, gameRestart);
 
     const before = hits.length;
 
-    const create = await rawExchange(port, "POST /containers/create HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    const create = await rawExchange(port, `POST /containers/create HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(create)[0], 403, create);
     assert.match(create, /route_not_allowed/);
 
     // ...but the database, hermes-mcp, ops-helper and the filter itself are on
     // NEITHER list and must never be restartable.
     for (const name of ["mc-stack-craftcore-db-1", "mc-stack-hermes-mcp-1", "mc-stack-ops-helper-1", "mc-stack-hermes-test-1"]) {
-      const forbidden = await rawExchange(port, `POST /containers/${name}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`);
+      const forbidden = await rawExchange(port, `POST /containers/${name}/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
       assert.equal(statusesOf(forbidden)[0], 403, `${name}: ${forbidden}`);
       assert.match(forbidden, /container_not_restartable/);
     }
 
-    const shield = await rawExchange(port, "POST /containers/mc-stack-velocity-2/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    const shield = await rawExchange(port, `POST /containers/mc-stack-velocity-2/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(shield)[0], 403, shield);
     assert.match(shield, /container_not_restartable/);
 
-    const byId = await rawExchange(port, `POST /containers/${ID64}/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n`);
+    const byId = await rawExchange(port, `POST /containers/${ID64}/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(byId)[0], 403, byId);
 
-    const exec = await rawExchange(port, "POST /exec/abc/start HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    const exec = await rawExchange(port, `POST /exec/abc/start HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`);
     assert.equal(statusesOf(exec)[0], 403, exec);
 
-    const size = await rawExchange(port, "GET /containers/json?all=1&size=1 HTTP/1.1\r\nHost: docker\r\n\r\n");
+    const size = await rawExchange(port, `GET /containers/json?all=1&size=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`);
     assert.equal(statusesOf(size)[0], 403, size);
 
     assert.equal(hits.length, before, "a denied request must never reach the upstream daemon");
   });
 });
 
+test("live: requests without the bearer token are 401 and never reach the daemon", async () => {
+  await withFilter(async ({ port, hits }) => {
+    const restart = await rawExchange(port, "POST /containers/mc-stack-lobby-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n");
+    assert.equal(statusesOf(restart)[0], 401, restart);
+    assert.match(restart, /unauthorized/);
+
+    const wrong = await rawExchange(port, `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\nAuthorization: Bearer ${"x".repeat(32)}\r\n\r\n`);
+    assert.equal(statusesOf(wrong)[0], 401, wrong);
+
+    const basic = await rawExchange(port, `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\nAuthorization: Basic ${TOKEN}\r\n\r\n`);
+    assert.equal(statusesOf(basic)[0], 401, basic);
+
+    const dup = await rawExchange(port, `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}${AUTH}\r\n`);
+    assert.equal(statusesOf(dup)[0], 403, dup);
+
+    const logs = await rawExchange(port, `GET /containers/${ID64}/logs?stdout=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n`);
+    assert.equal(statusesOf(logs)[0], 403, logs);
+    assert.match(logs, /tail_required/);
+
+    assert.equal(hits.length, 0, "an unauthenticated request must never reach the daemon");
+
+    // The read-only health probe is the documented exception.
+    const ping = await rawExchange(port, "HEAD /_ping HTTP/1.1\r\nHost: docker\r\n\r\n");
+    assert.equal(statusesOf(ping)[0], 200, ping);
+  });
+});
+
+test("checkBearer is exact and refuses short/missing tokens", () => {
+  assert.equal(checkBearer(`Bearer ${TOKEN}`, TOKEN), true);
+  assert.equal(checkBearer(`Bearer ${TOKEN}x`, TOKEN), false);
+  assert.equal(checkBearer(`bearer ${TOKEN}`, TOKEN), false);
+  assert.equal(checkBearer(undefined, TOKEN), false);
+  assert.equal(checkBearer("Bearer short", "short"), false, "a too-short configured token never authenticates");
+  assert.throws(() => createFilterServer({ upstreamSocketPath: "/nope", log: () => {} }), /token/);
+});
+
 test("live: pipelined smuggling is answered per request and the smuggled one is 403", async () => {
   await withFilter(async ({ port, hits }) => {
     const raw =
-      "GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n\r\n" +
-      "POST /containers/create HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n";
+      `GET /containers/json?all=1 HTTP/1.1\r\nHost: docker\r\n${AUTH}\r\n` +
+      `POST /containers/create HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 0\r\n\r\n`;
     const text = await rawExchange(port, raw);
     const statuses = statusesOf(text);
     assert.deepEqual(statuses.slice(0, 2), [200, 403], text);
@@ -431,7 +474,7 @@ test("live: pipelined smuggling is answered per request and the smuggled one is 
 
 test("live: a request with a body is refused before it is forwarded", async () => {
   await withFilter(async ({ port, hits }) => {
-    const text = await rawExchange(port, "POST /containers/mc-stack-bot-1/restart HTTP/1.1\r\nHost: docker\r\nContent-Length: 10\r\n\r\n0123456789");
+    const text = await rawExchange(port, `POST /containers/mc-stack-bot-1/restart HTTP/1.1\r\nHost: docker\r\n${AUTH}Content-Length: 10\r\n\r\n0123456789`);
     assert.equal(statusesOf(text)[0], 403, text);
     assert.equal(hits.length, 0);
   });
@@ -496,7 +539,7 @@ test("dechunk decodes chunked bodies and rejects malformed framing", () => {
 test("rewriteResponse removes chunk framing so the client gets valid JSON", () => {
   const json = JSON.stringify([{ Id: "abc", Names: ["/x"], pad: "y".repeat(6000) }]);
   const upstream = Buffer.concat([
-    Buffer.from("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"),
+    Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n`, "latin1"),
     chunkify(json, 2048),
   ]);
   const out = rewriteResponse(upstream, "GET");
@@ -506,7 +549,7 @@ test("rewriteResponse removes chunk framing so the client gets valid JSON", () =
   assert.ok(head.includes(`Content-Length: ${Buffer.byteLength(json)}`));
   assert.doesNotMatch(head, /transfer-encoding/i);
   assert.deepEqual(JSON.parse(body.toString("utf8")), JSON.parse(json));
-  const broken = Buffer.concat([Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"), Buffer.from("zz\r\nbad\r\n0\r\n\r\n")]);
+  const broken = Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n`, "latin1"), Buffer.from("zz\r\nbad\r\n0\r\n\r\n")]);
   assert.equal(rewriteResponse(broken, "GET"), null, "malformed chunking is refused, not forwarded");
 });
 
@@ -518,9 +561,17 @@ test("inspect responses lose Config.Env, other fields stay", () => {
   assert.deepEqual(out.State, { Running: true });
   assert.equal(stripInspectEnv(Buffer.from("not json")), null);
 
-  const raw = Buffer.concat([Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", "latin1"), chunkify(JSON.stringify(inspect), 40)]);
+  const raw = Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n`, "latin1"), chunkify(JSON.stringify(inspect), 40)]);
   const framed = rewriteResponse(raw, "GET", { transformBody: stripInspectEnv });
   const text = framed.subarray(framed.indexOf(Buffer.from("\r\n\r\n")) + 4).toString("utf8");
   assert.ok(!text.includes("secret") && !text.includes("TOKEN=abc"), "no secret value leaves the filter");
-  assert.equal(rewriteResponse(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nnot json", "latin1"), "GET", { transformBody: stripInspectEnv }), null);
+  assert.equal(rewriteResponse(Buffer.from(`HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nnot json`, "latin1"), "GET", { transformBody: stripInspectEnv }), null);
+});
+
+test("restart lists: unset/empty -> default, `none` -> no restart at all", () => {
+  assert.deepEqual(parseAllow(undefined, DEFAULT_RESTART_ALLOW_T2), DEFAULT_RESTART_ALLOW_T2);
+  assert.deepEqual(parseAllow("  ", DEFAULT_RESTART_ALLOW_T2), DEFAULT_RESTART_ALLOW_T2);
+  assert.deepEqual(parseAllow("none", DEFAULT_RESTART_ALLOW_T2), []);
+  assert.deepEqual(parseAllow(" a , b ", DEFAULT_RESTART_ALLOW_T2), ["a", "b"]);
+  denied("POST", "/containers/mc-stack-lobby-1/restart", "container_not_restartable", { restartAllow: DEFAULT_RESTART_ALLOW_T1, restartAllowT2: parseAllow("none", DEFAULT_RESTART_ALLOW_T2) });
 });

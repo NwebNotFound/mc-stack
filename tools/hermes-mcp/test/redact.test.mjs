@@ -44,3 +44,25 @@ test("redactStrings keeps token *counts* but scrubs secret-looking strings", () 
   assert.equal(out.echoed, "Bearer [redacted]");
   assert.equal(out.line, "HERMES_MCP_TOKEN=[redacted]");
 });
+
+test("secret values run to the end of the line, quotes and backticks included (issue #146)", () => {
+  // A value that contains a quote used to stop the match there and leak the rest.
+  assert.equal(redactText('MARIADB_ROOT_PASSWORD=ab"cdefgh`ij kl'), "MARIADB_ROOT_PASSWORD=[redacted]");
+  assert.equal(redactText('PASSWORD: "x"yzsecret'), 'PASSWORD: "[redacted]');
+  assert.equal(redactText("DB_PASSWORD='p@ss\"w0rd'"), "DB_PASSWORD='[redacted]'");
+  // only the line with the secret is touched
+  assert.equal(redactText("API_KEY=abc\"defgh tail\nnext line stays"), "API_KEY=[redacted]\nnext line stays");
+  assert.equal(redactText("API_KEY=abc\"defgh tail\r\nnext"), "API_KEY=[redacted]\r\nnext");
+  // short values (token counts) are left alone
+  assert.equal(redactText("input_tokens: 42"), "input_tokens: 42");
+});
+
+test("the MariaDB generated root password line is redacted whatever it contains", () => {
+  const line = '2026-11-05 23:00:01+00:00 [Note] [Entrypoint]: GENERATED ROOT PASSWORD: "q`W\'e)rty12345';
+  const out = redactText(line);
+  assert.equal(out, "2026-11-05 23:00:01+00:00 [Note] [Entrypoint]: GENERATED ROOT PASSWORD: [redacted]");
+  assert.equal(redactText("GENERATED ROOT PASSWORD: abc"), "GENERATED ROOT PASSWORD: [redacted]");
+  const multi = redactText(`a\n${line}\nb`);
+  assert.ok(!multi.includes("rty12345"));
+  assert.ok(multi.startsWith("a\n") && multi.endsWith("\nb"));
+});

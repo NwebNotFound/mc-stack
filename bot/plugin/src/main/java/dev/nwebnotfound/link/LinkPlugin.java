@@ -8,6 +8,7 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.command.RemoteConsoleCommandSender;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -18,7 +19,7 @@ public final class LinkPlugin extends JavaPlugin implements Listener {
     @Override public void onEnable() { getServer().getPluginManager().registerEvents(this, this); }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof ConsoleCommandSender) || args.length != 2 || !(args[0].equals("add") || args[0].equals("remove"))) {
+        if (!(sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender) || args.length != 2 || !(args[0].equals("add") || args[0].equals("remove"))) {
             sender.sendMessage("LINK_ERROR"); return true;
         }
         try {
@@ -39,7 +40,7 @@ public final class LinkPlugin extends JavaPlugin implements Listener {
             String[] values = Files.readString(path).trim().split("\\|");
             if (values.length == 2 && Long.parseLong(values[1]) > System.currentTimeMillis() / 1000) {
                 event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
-                    "\u00a7a\u00a7lDiscord-Verkn\u00fcpfung\n\n\u00a77Dein Code:\n\u00a7e\u00a7l" + values[0].substring(0, 4) + " " + values[0].substring(4) + "\n\n\u00a7fSchick diesen Code Creepy auf Discord\n\u00a77(einfach in die DM an Creepy, danach bist du auf der Whitelist)");
+                    "\u00a7a\u00a7lDiscord-Verkn\u00fcpfung\n\n\u00a77Dein Code:\n\u00a7e\u00a7l" + values[0].substring(0, 4) + " " + values[0].substring(4) + "\n\n\u00a7fSchick diesen Code Creepy auf Discord\n\u00a77(einfach in die DM an Creepy, danach bist du auf der Whitelist)\n\n\u00a7cGib den Code nur dem Bot, niemals einer anderen Person.");
             }
         } catch (Exception ex) { getLogger().warning("Verknüpfung konnte nicht gelesen werden: " + ex.getClass().getSimpleName()); }
     }

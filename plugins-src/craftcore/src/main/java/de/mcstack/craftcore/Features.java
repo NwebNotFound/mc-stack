@@ -33,6 +33,8 @@ final class Features implements Listener {
     plugin.tx(c->{HomeSlots.start(c);return null;});
     plugin.tx(c->{try(Statement s=c.createStatement()) {
       s.execute("ALTER TABLE graves ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'OPEN', ADD COLUMN IF NOT EXISTS delivered BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN IF NOT EXISTS claiming_at BIGINT NULL");
+      // claimed_by + xp_paid: XP owed after a crash/disconnect is paid on the next join (DEFAULT TRUE: older claims are settled)
+      s.execute("ALTER TABLE graves ADD COLUMN IF NOT EXISTS claimed_by CHAR(36) NULL, ADD COLUMN IF NOT EXISTS xp_paid BOOLEAN NOT NULL DEFAULT TRUE");
       try (ResultSet r=c.getMetaData().getIndexInfo(c.getCatalog(),null,"graves",false,false)) {
         boolean unique=false; while(r.next()) if("grave_location".equalsIgnoreCase(r.getString("INDEX_NAME")) && !r.getBoolean("NON_UNIQUE")) unique=true;
         if(unique) try(Statement alter=c.createStatement()){alter.execute("ALTER TABLE graves DROP INDEX grave_location, ADD INDEX grave_location(server,world,x,y,z)");}
@@ -132,18 +134,67 @@ final class Features implements Listener {
           if(!p.isOnline()){release(claim.id());return;}
           List<ItemStack> items;
           try {items=decode(claim.items());} catch(Exception ex){plugin.getLogger().warning("Grabdaten unlesbar: "+ex);release(claim.id());p.sendMessage("Grab konnte nicht gelesen werden.");return;}
-          for(ItemStack item:items) if(item!=null) for(ItemStack excess:p.getInventory().addItem(item).values()) p.getWorld().dropItemNaturally(p.getLocation(),excess);
-          p.giveExp(claim.xp());
+          // Serialise on the main thread; close-out, inbox rows and the XP debt then commit in one transaction
+          // (GraveStore.finish), and everything is handed out from that durable state (Gatekeeper #170).
+          final List<GraveStore.Loot> loot=new ArrayList<>();
+          for(ItemStack item:items) if(item!=null && !item.getType().isAir()) loot.add(new GraveStore.Loot(Base64.getEncoder().encodeToString(item.serializeAsBytes()),item.getAmount()));
+          final String claimer=playerId.toString();
           Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
-            try {plugin.tx(c->{GraveStore.finish(c,claim.id());return null;});
-              Bukkit.getScheduler().runTask(plugin,()->{graveLocations.remove(graveKey(world,x,y,z));if(b.getType()==Material.PLAYER_HEAD || b.getType()==Material.BARREL)b.setType(Material.AIR);if(p.isOnline())p.sendMessage("Grab geleert.");});
-            } catch(Exception ex){plugin.getLogger().severe("Grab "+claim.id()+" ausgegeben, DB-Abschluss fehlgeschlagen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab ausgegeben; Datenbankabschluss fehlgeschlagen. Bitte Admin informieren.");});}
+            List<String> ids;
+            try {ids=plugin.tx(c->GraveStore.finish(c,claim.id(),claimer,loot,claim.xp()));}
+            catch(Exception ex){plugin.getLogger().warning("Grab "+claim.id()+" DB-Abschluss fehlgeschlagen, nichts ausgegeben: "+ex);release(claim.id());Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geoeffnet werden. Bitte erneut versuchen.");});return;}
+            Bukkit.getScheduler().runTask(plugin,()->{
+              graveLocations.remove(graveKey(world,x,y,z));if(b.getType()==Material.PLAYER_HEAD || b.getType()==Material.BARREL)b.setType(Material.AIR);
+              if(!p.isOnline())return;   // items wait in the pickup inbox, the XP is paid on the next join
+              if(!ids.isEmpty())Deliveries.collect(plugin,p,new HashSet<>(ids));   // what does not fit stays in /abholen
+              payXp(p,List.<long[]>of(new long[]{claim.id(),claim.xp()}));
+              p.sendMessage("Grab geleert.");
+            });
           });
         });
       } catch(Exception ex){plugin.getLogger().warning("Grab oeffnen: "+ex);Bukkit.getScheduler().runTask(plugin,()->{if(p.isOnline())p.sendMessage("Grab konnte nicht geoeffnet werden.");});}
     });
   }
   record GraveClaim(long id,String items,int xp) {}
+  /**
+   * Queued per player (PlayerQueue, Gatekeeper #170): pay only what the DB still owes and no saved marker already
+   * covers (Handouts.xpToPay, async), give it with "x:<grave>" markers in one main-thread hop (one saveData), then
+   * mark it paid (async) and drop the markers. A DB failure or crash leaves the marker: the next join marks it paid.
+   */
+  void payXp(Player p,List<long[]> owed){
+    String id=p.getUniqueId().toString();
+    Deliveries.queue(plugin).submit(id,()->{
+      try {
+        Set<String> marks=PlayerQueue.onMain(plugin,()->p.isOnline()?Deliveries.marks(plugin,p):null); if(marks==null)return;
+        List<long[]> pay=plugin.tx(c->Handouts.xpToPay(c,owed,marks)); if(pay.isEmpty())return;
+        List<Long> ids=new ArrayList<>(); List<String> mk=new ArrayList<>(); int sum=0;
+        for(long[] g:pay){sum+=(int)g[1];ids.add(g[0]);mk.add(Handouts.xpMark(g[0]));}
+        final int xp=sum;
+        Boolean given=PlayerQueue.onMain(plugin,()->{if(!p.isOnline())return false;p.giveExp(xp);for(String m:mk)Deliveries.addMark(plugin,p,m);p.saveData();p.sendMessage(xp+" XP aus deinem Grab erhalten.");return true;});
+        if(!Boolean.TRUE.equals(given))return;   // left meanwhile: nothing given, still owed for the next join
+        try{plugin.tx(c->{for(long g:ids)GraveStore.xpPaid(c,g);return null;});PlayerQueue.onMain(plugin,()->{if(p.isOnline())Deliveries.dropMarks(plugin,p,mk);return null;});}
+        catch(Exception ex){plugin.getLogger().warning("Grab-XP "+ids+" gegeben, DB-Markierung folgt beim naechsten Join: "+ex);}
+      } catch(Exception ex){plugin.getLogger().warning("Grab-XP: "+ex);}
+    });
+  }
+  /**
+   * Join: settle hand-outs a crash/DB failure left open on this server, then pay owed XP. Queued per player, so it
+   * reads the markers in its own turn (never a stale snapshot next to a running hand-out) and its DB work never
+   * runs on the server thread (Gatekeeper #170).
+   */
+  @EventHandler public void graveXp(PlayerJoinEvent e){
+    Player p=e.getPlayer(); String id=p.getUniqueId().toString();
+    Deliveries.queue(plugin).submit(id,()->{
+      try {
+        Set<String> marks=PlayerQueue.onMain(plugin,()->p.isOnline()?Deliveries.marks(plugin,p):null); if(marks==null)return;
+        Set<String> drop=new HashSet<>(plugin.tx(c->Handouts.reconcile(c,id,server,marks)));
+        Map.Entry<List<long[]>,Set<String>> xp=plugin.tx(c->Handouts.reconcileXp(c,server,id,marks));
+        drop.addAll(xp.getValue());
+        if(!drop.isEmpty())PlayerQueue.onMain(plugin,()->{if(p.isOnline())Deliveries.dropMarks(plugin,p,drop);return null;});
+        if(!xp.getKey().isEmpty())payXp(p,xp.getKey());   // its own queued job right after this one
+      } catch(Exception ex){plugin.getLogger().warning("Uebergaben abgleichen: "+ex);}
+    });
+  }
   void release(long id){Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{try{plugin.tx(c->{plugin.exec(c,"UPDATE graves SET status='OPEN', claiming_at=NULL WHERE id=? AND status='CLAIMING' AND delivered=FALSE",id);return null;});}catch(Exception ex){plugin.getLogger().warning("Grab-Freigabe: "+ex);}});}
   @EventHandler(ignoreCancelled=true) public void entityInteract(PlayerInteractEntityEvent e) {
     if (!can(e.getPlayer(), e.getRightClicked().getLocation())) e.setCancelled(true);

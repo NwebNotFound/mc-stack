@@ -16,6 +16,12 @@ jobs:
           gradle-version: '9.8.2'
       - run: gradle clean build --no-daemon
         working-directory: plugins-src/craftcore
+      # DiscordLink plugin (bot/plugin, Maven, Paper API from repo.papermc.io): was never compiled in CI
+      # (audit #165). ParkourBridge needs jars that exist only on the server (data/lobby), so it is
+      # built on the host before deploy, not here.
+      - name: Build DiscordLink plugin
+        run: mvn -B -q package
+        working-directory: bot/plugin
   db-credentials:
     runs-on: ubuntu-latest
     steps:

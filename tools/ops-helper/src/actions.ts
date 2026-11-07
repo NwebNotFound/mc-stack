@@ -13,13 +13,16 @@ import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   statfsSync,
   writeFileSync,
 } from "node:fs";
+import { join, sep } from "node:path";
 import type { ActionSpec, Allowlist, Impl, ServiceList } from "./allowlist.js";
 import { actionOf } from "./allowlist.js";
 import type { AuditLog } from "./audit.js";
@@ -55,6 +58,59 @@ const SHA256_RE = /^[a-f0-9]{64}$/;
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * Helper-only locations (issue #143). The artifact volume is shared with
+ * plugin-builder, which runs repo build/test code and is the untrusted
+ * component, so nothing the helper later TRUSTS may live there:
+ *  - deploy/build state  -> <dataDir>/state     (./data/ops-helper, helper only)
+ *  - verified build jars -> <dataDir>/jars
+ *  - rollback jars       -> <dataDir>/rollback
+ */
+export function helperStateDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "state");
+}
+export function helperArtifactsDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "jars");
+}
+export function helperRollbackDir(cfg: Pick<OpsConfig, "dataDir">): string {
+  return join(cfg.dataDir, "rollback");
+}
+
+/**
+ * The real path of `path` if it is a regular file whose realpath lies strictly
+ * under the realpath of `root` (symlinks are resolved, so a link pointing out of
+ * the directory is refused); null otherwise.
+ */
+export function confinedFile(path: string, root: string): string | null {
+  if (typeof path !== "string" || path === "" || !path.startsWith("/")) return null;
+  try {
+    const realRoot = realpathSync(root);
+    const real = realpathSync(path);
+    if (!real.startsWith(realRoot + sep)) return null;
+    if (!lstatSync(real).isFile()) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+type JarCheck = { ok: true; path: string; sha256: string } | { ok: false; reason: string };
+
+/**
+ * A rollback jar is only restored when it lies in the helper-only rollback
+ * directory AND still has the sha256 recorded when it was saved.
+ */
+function verifiedRollbackJar(deps: ActionDeps, prev: Record<string, unknown> | undefined): JarCheck {
+  const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
+  const sha = prev && typeof prev.sha256 === "string" ? prev.sha256 : null;
+  if (!kept || !sha) return { ok: false, reason: "no previous jar was recorded" };
+  if (!SHA256_RE.test(sha)) return { ok: false, reason: "the recorded sha256 is malformed" };
+  const real = confinedFile(kept, helperRollbackDir(deps.cfg));
+  if (!real) return { ok: false, reason: "the recorded jar is missing or outside the helper's rollback directory" };
+  if (sha256File(real) !== sha) return { ok: false, reason: "the rollback jar no longer matches its recorded sha256" };
+  return { ok: true, path: real, sha256: sha };
 }
 
 function redactCap(text: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -352,6 +408,38 @@ export async function handleOp(rawAction: unknown, rawParams: unknown, deps: Act
     };
   }
 
+  // T2 serialisation (issue #144): one T2 action at a time, and none while a
+  // backup / dev-reset holds the maintenance lock. Refused BEFORE the cooldown
+  // starts, so a busy answer can simply be retried later.
+  if (action.tier === "T2") {
+    const holder = deps.state.t2Busy();
+    const maintenance = holder === null ? maintenanceActive(deps) : null;
+    if (holder !== null || maintenance !== null || !deps.state.tryAcquireT2(actionName)) {
+      const code = holder !== null ? "t2_busy" : "maintenance_in_progress";
+      const message =
+        holder !== null
+          ? `another T2 action (${holder}) is running; retry when it has finished`
+          : `a backup or dev-reset is running (${deps.allow.paths.backups}/${MAINTENANCE_MARKER}); retry when it has finished`;
+      const auditId = deps.audit.append({
+        action: actionName,
+        tier: action.tier,
+        impl: action.impl,
+        decision: "deny",
+        code,
+        params: validation.params,
+      });
+      return {
+        ok: false,
+        code,
+        message,
+        result: maintenance ?? undefined,
+        tier: action.tier,
+        impl: action.impl,
+        audit_id: auditId,
+      };
+    }
+  }
+
   // Gates passed: the cooldown starts now, even if the action itself fails, so a
   // broken action cannot be hammered.
   deps.state.recordRun(actionName, started);
@@ -367,6 +455,8 @@ export async function handleOp(rawAction: unknown, rawParams: unknown, deps: Act
       code: isDocker ? (exc as DockerError).code : "internal_error",
       message: redactText(err.message ?? "unknown error").slice(0, 500),
     };
+  } finally {
+    if (action.tier === "T2") deps.state.releaseT2();
   }
 
   const auditId = deps.audit.append({
@@ -565,6 +655,7 @@ function readBackupEntries(dir: string): Array<Record<string, unknown>> {
         created_at: mtime,
         complete: existsSync(`${full}/COMPLETE.txt`),
         has_sql_dump: existsSync(`${full}/craftcore.sql`),
+        has_luckperms_dump: existsSync(`${full}/luckperms.sql`),
       };
     })
     .sort((a, b) => String(b.name).localeCompare(String(a.name)));
@@ -729,9 +820,20 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       result: { build_id: job.id, ref: job.ref, tests, ...dirty, output_tail: output.text, truncated },
     };
   }
+  // The path comes from the (untrusted) builder: it must resolve to a regular
+  // file under <artifacts>/artifacts/, never to anything else on the helper.
+  const confined = confinedFile(artifactPath, join(deps.cfg.artifactsDir, "artifacts"));
+  if (!confined) {
+    return {
+      ok: false,
+      code: "artifact_path_not_allowed",
+      message: "the builder reported an artifact path outside the artifact directory",
+      result: { build_id: job.id, ref: job.ref },
+    };
+  }
   // Re-hash in the helper's own process: the artifact volume is shared, so the
   // hash the builder recorded is not trusted on its own.
-  if (sha256File(artifactPath) !== sha) {
+  if (sha256File(confined) !== sha) {
     return {
       ok: false,
       code: "artifact_hash_mismatch",
@@ -739,19 +841,34 @@ async function opBuildPlugin(deps: ActionDeps): Promise<OpResult> {
       result: { build_id: job.id, ref: job.ref, artifact, ...dirty },
     };
   }
-  const size = statSync(artifactPath).size;
+  // Keep a helper-only copy: the deploy installs THIS file, which the builder
+  // cannot touch, and re-checks its hash again.
+  const keptDir = helperArtifactsDir(deps.cfg);
+  mkdirSync(keptDir, { recursive: true, mode: 0o700 });
+  const keptPath = join(keptDir, `craftcore-${sha.slice(0, 12)}.jar`);
+  copyFileSync(confined, keptPath);
+  if (sha256File(keptPath) !== sha) {
+    return {
+      ok: false,
+      code: "artifact_hash_mismatch",
+      message: "the artifact changed while it was being copied out of the artifact volume",
+      result: { build_id: job.id, ref: job.ref },
+    };
+  }
+  const size = statSync(keptPath).size;
   const record = {
     build_id: job.id,
     sha256: sha,
     size_bytes: size,
-    artifact_path: artifactPath,
+    artifact_path: keptPath,
+    builder_artifact_path: confined,
     source: spec.source,
     ref: job.ref,
     tests,
     ...dirty,
     at: new Date(deps.now()).toISOString(),
   };
-  writeJson(`${deps.cfg.artifactsDir}/state/last-build.json`, record);
+  writeJson(join(helperStateDir(deps.cfg), "last-build.json"), record);
 
   return {
     ok: true,
@@ -838,9 +955,14 @@ function findFreshBackup(deps: ActionDeps): Record<string, unknown> | null {
 }
 
 /** Newest complete backup with its age, or null when there is none. */
+/**
+ * Newest backup that can actually be restored (issue #145): COMPLETE.txt plus
+ * BOTH database dumps. A backup without the LuckPerms dump cannot restore ranks
+ * or purchased VIP permissions, so it does not satisfy the T2 backup gate.
+ */
 export function newestCompleteBackup(deps: Pick<ActionDeps, "allow" | "now">): Record<string, unknown> | null {
   const entries = readBackupEntries(deps.allow.paths.backups);
-  const fresh = entries.find((entry) => entry.complete === true);
+  const fresh = entries.find((entry) => entry.complete === true && entry.has_sql_dump === true && entry.has_luckperms_dump === true);
   if (!fresh) return null;
   const createdAt = fresh.created_at ? Date.parse(String(fresh.created_at)) : NaN;
   if (!Number.isFinite(createdAt)) return { ...fresh, age_seconds: null, age_hours: null };
@@ -866,7 +988,7 @@ function ensureRecentBackup(deps: ActionDeps): BackupCheck {
     return {
       ok: false,
       code: "no_recent_backup",
-      message: `no complete backup found under ${deps.allow.paths.backups}; run backup.ps1 on the host first (a T2 action needs one younger than ${maxAgeHours}h)`,
+      message: `no complete backup (COMPLETE.txt + craftcore.sql + luckperms.sql) found under ${deps.allow.paths.backups}; run backup.ps1 on the host first (a T2 action needs one younger than ${maxAgeHours}h)`,
       result: { mode: "recent_only", latest: latest ?? null, max_age_hours: maxAgeHours },
     };
   }
@@ -998,6 +1120,67 @@ async function waitForHealthy(deps: ActionDeps, service: string): Promise<{ heal
 }
 
 /**
+ * Maintenance marker (issue #144). backup.ps1 / dev-reset.ps1 take an exclusive
+ * Windows file lock on `backups/.maintenance.lock`; that lock is not visible to
+ * a Linux process through the Docker Desktop bind mount, so while they hold it
+ * they also write `backups/.maintenance.active` and remove it when they release
+ * the lock. A marker older than OPS_MAINTENANCE_STALE_SECONDS (a killed script)
+ * is ignored.
+ */
+export const MAINTENANCE_MARKER = ".maintenance.active";
+
+export function maintenanceActive(deps: Pick<ActionDeps, "allow" | "cfg" | "now">): Record<string, unknown> | null {
+  const path = join(deps.allow.paths.backups, MAINTENANCE_MARKER);
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+  const ageSeconds = Math.max(0, Math.round((deps.now() - mtimeMs) / 1000));
+  const staleAfter = deps.cfg.maintenanceStaleSeconds ?? 14400;
+  if (ageSeconds > staleAfter) {
+    logger.warn("ignoring a stale maintenance marker", { path, age_seconds: ageSeconds });
+    return null;
+  }
+  let info: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) info = parsed as Record<string, unknown>;
+  } catch {
+    // content is informational only
+  }
+  return {
+    maintenance: typeof info.name === "string" ? info.name.slice(0, 40) : "unknown",
+    started: typeof info.started === "string" ? info.started.slice(0, 40) : null,
+    age_seconds: ageSeconds,
+  };
+}
+
+/**
+ * Called right before a T2 step touches a game server (after the delay, which
+ * can be long): wait for a backup that started in the meantime to finish,
+ * bounded by OPS_MAINTENANCE_WAIT_SECONDS, then refuse.
+ */
+async function waitForMaintenanceIdle(deps: ActionDeps): Promise<void> {
+  const waitMs = (deps.cfg.maintenanceWaitSeconds ?? 1800) * 1000;
+  const pollMs = (deps.cfg.maintenancePollSeconds ?? 15) * 1000;
+  const deadline = deps.now() + waitMs;
+  for (;;) {
+    const active = maintenanceActive(deps);
+    if (!active) return;
+    if (deps.now() >= deadline) {
+      throw new DockerError(
+        "maintenance_in_progress",
+        `a backup or dev-reset is still running after ${deps.cfg.maintenanceWaitSeconds ?? 1800}s; nothing was restarted`,
+      );
+    }
+    logger.info("waiting for maintenance to finish before a T2 step", active);
+    await deps.sleep(pollMs);
+  }
+}
+
+/**
  * Restart one compose service by its exact container NAME and return the name.
  * The socket filter allowlists names for `/containers/<name>/restart`, so a
  * restart by id (a 12-hex id is not a name) would be a 403.
@@ -1020,6 +1203,7 @@ async function opRestartGame(params: Record<string, unknown>, deps: ActionDeps):
   }
   const announcement = announcementStatus(service, delay);
   await deps.sleep(delay * 1000);
+  await waitForMaintenanceIdle(deps);
   await deps.docker.restartByName(name, (deps.cfg.actionTimeoutSeconds + 60) * 1000);
   const health = await waitForHealthy(deps, service);
   if (!health.healthy) {
@@ -1061,7 +1245,7 @@ function writeJson(path: string, value: unknown): void {
 async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const sha = params.artifact_sha256 as string;
   const delay = params.delay_seconds as number;
-  const last = readJson(`${deps.cfg.artifactsDir}/state/last-build.json`);
+  const last = readJson(join(helperStateDir(deps.cfg), "last-build.json"));
   if (!last || typeof last.sha256 !== "string") {
     return { ok: false, code: "no_build_artifact", message: "no ops_build_plugin artifact recorded yet" };
   }
@@ -1073,9 +1257,12 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
       result: { expected: last.sha256 },
     };
   }
-  const artifactPath = typeof last.artifact_path === "string" ? last.artifact_path : "";
-  if (!artifactPath || !existsSync(artifactPath)) {
+  const artifactPath = confinedFile(typeof last.artifact_path === "string" ? last.artifact_path : "", helperArtifactsDir(deps.cfg));
+  if (!artifactPath) {
     return { ok: false, code: "artifact_missing", message: "the recorded artifact file is gone; rebuild first" };
+  }
+  if (sha256File(artifactPath) !== sha) {
+    return { ok: false, code: "artifact_hash_mismatch", message: "the kept artifact no longer matches artifact_sha256; rebuild first" };
   }
 
   const backup = ensureRecentBackup(deps);
@@ -1083,32 +1270,50 @@ async function opDeployPlugin(params: Record<string, unknown>, deps: ActionDeps)
     return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
   }
 
-  const rollbackDir = `${deps.cfg.artifactsDir}/rollback`;
-  mkdirSync(rollbackDir, { recursive: true, mode: 0o777 });
+  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
+  await deps.sleep(delay * 1000);
+
+  // The previous jars and the deploy record are captured only now, after the
+  // lead time, so they describe what is really installed when the deploy starts.
+  const rollbackDir = helperRollbackDir(deps.cfg);
+  mkdirSync(rollbackDir, { recursive: true, mode: 0o700 });
   const previous: Record<string, Record<string, unknown>> = {};
   for (const service of deps.allow.deploy.order) {
     const jar = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
     const oldSha = existsSync(jar) ? sha256File(jar) : null;
     let kept: string | null = null;
     if (oldSha) {
-      kept = `${rollbackDir}/${service}-craftcore-${oldSha.slice(0, 12)}.jar`;
+      kept = join(rollbackDir, `${service}-craftcore-${oldSha.slice(0, 12)}.jar`);
       copyFileSync(jar, kept);
+      if (sha256File(kept) !== oldSha) {
+        return { ok: false, code: "rollback_copy_failed", message: `could not keep a verified copy of the current ${service} jar` };
+      }
     }
     previous[service] = { sha256: oldSha, jar: kept };
   }
-  writeJson(`${deps.cfg.artifactsDir}/state/last-deploy.json`, {
+  writeJson(join(helperStateDir(deps.cfg), "last-deploy.json"), {
     at: new Date(deps.now()).toISOString(),
     artifact_sha256: sha,
     artifact_path: artifactPath,
     previous,
   });
 
-  const announcement = announcementStatus(deps.allow.deploy.order[0], delay);
-  await deps.sleep(delay * 1000);
-
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
     if (index > 0) await deps.sleep(delay * 1000);
+    try {
+      await waitForMaintenanceIdle(deps);
+    } catch (exc) {
+      const rolled = steps.length > 0 ? await rollbackServices(deps, previous, steps) : [];
+      const pending = rolled.filter((entry) => entry.restart_pending).map((entry) => entry.service);
+      return {
+        ok: false,
+        code: "maintenance_in_progress",
+        message: redactText((exc as Error).message).slice(0, 300) +
+          (pending.length > 0 ? `; previous jars restored on disk, restart still needed for: ${pending.join(", ")} (they run the new jar until then)` : ""),
+        result: { service, steps, rollback: rolled, restart_pending: pending, mixed_state: pending.length > 0 },
+      };
+    }
     const jar = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
     copyFileSync(artifactPath, jar);
     const written = sha256File(jar);
@@ -1166,17 +1371,25 @@ async function rollbackServices(
 ): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
   for (const service of [...deps.allow.deploy.order].reverse()) {
-    const prev = previous[service];
-    const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
-    if (!kept || !existsSync(kept)) {
-      out.push({ service, restored: false, reason: "no previous jar was recorded" });
+    const check = verifiedRollbackJar(deps, previous[service]);
+    if (!check.ok) {
+      out.push({ service, restored: false, reason: check.reason });
       continue;
     }
     try {
-      copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
+      const target = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
+      copyFileSync(check.path, target);
+      if (sha256File(target) !== check.sha256) throw new Error("the restored jar does not match its recorded sha256");
+      // Never restart a game server while backup.ps1 / dev-reset.ps1 holds the marker (#144 scenario B, Gatekeeper
+      // #173): the old jar is back on disk, the restart is left for later and reported as pending.
+      const active = maintenanceActive(deps);
+      if (active) {
+        out.push({ service, restored: true, restarted: false, restart_pending: true, reason: "maintenance_in_progress", maintenance: active.maintenance });
+        continue;
+      }
       await restartServiceByName(deps, service);
       const health = await waitForHealthy(deps, service);
-      out.push({ service, restored: true, healthy: health.healthy, state: health.state });
+      out.push({ service, restored: true, restarted: true, healthy: health.healthy, state: health.state });
     } catch (exc) {
       out.push({ service, restored: false, reason: redactText((exc as Error).message).slice(0, 200) });
     }
@@ -1187,11 +1400,23 @@ async function rollbackServices(
 
 async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDeps): Promise<OpResult> {
   const delay = params.delay_seconds as number;
-  const record = readJson(`${deps.cfg.artifactsDir}/state/last-deploy.json`);
+  const record = readJson(join(helperStateDir(deps.cfg), "last-deploy.json"));
   if (!record || typeof record.previous !== "object" || record.previous === null) {
     return { ok: false, code: "no_rollback_available", message: "no recorded deploy to roll back" };
   }
   const previous = record.previous as Record<string, Record<string, unknown>>;
+  // Verify every jar BEFORE anything is touched: a rollback that would restore
+  // a tampered or unverifiable jar is refused as a whole.
+  const checks = new Map<string, JarCheck>();
+  for (const service of deps.allow.deploy.order) checks.set(service, verifiedRollbackJar(deps, previous[service]));
+  const bad = [...checks.entries()].filter(([, c]) => !c.ok && c.reason !== "no previous jar was recorded");
+  if (bad.length > 0) {
+    return {
+      ok: false,
+      code: "rollback_jar_untrusted",
+      message: `refusing to roll back: ${bad.map(([svc, c]) => `${svc}: ${(c as { reason: string }).reason}`).join("; ")}`,
+    };
+  }
   const backup = ensureRecentBackup(deps);
   if (!backup.ok) {
     return { ok: false, code: backup.code ?? "no_recent_backup", message: backup.message ?? "no recent backup", result: backup.result };
@@ -1201,24 +1426,34 @@ async function opRollbackPlugin(params: Record<string, unknown>, deps: ActionDep
   const steps: Array<Record<string, unknown>> = [];
   for (const [index, service] of deps.allow.deploy.order.entries()) {
     if (index > 0) await deps.sleep(delay * 1000);
-    const prev = previous[service];
-    const kept = prev && typeof prev.jar === "string" ? prev.jar : null;
-    if (!kept || !existsSync(kept)) {
-      steps.push({ service, restored: false, reason: "no previous jar was recorded" });
+    await waitForMaintenanceIdle(deps);
+    // Re-verify right before the copy (the delay above can be long).
+    const check = verifiedRollbackJar(deps, previous[service]);
+    if (!check.ok) {
+      steps.push({ service, restored: false, reason: check.reason });
       continue;
     }
-    copyFileSync(kept, `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`);
+    const target = `${pluginDir(deps.allow, service)}/${deps.allow.paths.pluginJar}`;
+    copyFileSync(check.path, target);
+    if (sha256File(target) !== check.sha256) {
+      steps.push({ service, restored: false, reason: "the restored jar does not match its recorded sha256" });
+      continue;
+    }
     await restartServiceByName(deps, service);
     const health = await waitForHealthy(deps, service);
     steps.push({ service, restored: true, healthy: health.healthy, state: health.state });
   }
-  const failed = steps.filter((step) => step.restored === true && step.healthy !== true);
+  const failed = steps.filter(
+    (step) =>
+      (step.restored === true && step.healthy !== true) ||
+      (step.restored === false && step.reason !== "no previous jar was recorded"),
+  );
   const result = { rolled_back_from: record.artifact_sha256 ?? null, announcement, delay_seconds: delay, steps };
   if (failed.length > 0) {
     return {
       ok: false,
       code: "health_check_failed",
-      message: `${failed.map((s) => s.service).join(", ")} did not become healthy after the rollback`,
+      message: `${failed.map((s) => s.service).join(", ")} did not come back healthy (or could not be restored) after the rollback`,
       result,
     };
   }

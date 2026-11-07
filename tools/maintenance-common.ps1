@@ -58,6 +58,7 @@ function Enter-MaintLock([string]$Root = $PSScriptRoot, [int]$WaitSeconds = 0, [
   while ($true) {
     try {
       $stream = [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+      Set-MaintMarker $dir
       Write-MaintLog 'lock' 'info' 'Wartungssperre erhalten'
       return $stream
     } catch [IO.IOException] {
@@ -67,7 +68,24 @@ function Enter-MaintLock([string]$Root = $PSScriptRoot, [int]$WaitSeconds = 0, [
     }
   }
 }
-function Exit-MaintLock($Stream) { if ($Stream) { $Stream.Dispose() } }
+function Exit-MaintLock($Stream) {
+  if ($Stream) {
+    # Marker first, while the lock is still held, so a waiting run never loses its own marker.
+    $marker = Join-Path (Split-Path -Parent $Stream.Name) '.maintenance.active'
+    try { if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force } } catch { Write-MaintLog 'lock' 'warn' "Marker nicht entfernt: $($_.Exception.Message)" }
+    $Stream.Dispose()
+  }
+}
+
+# ops-helper runs in a Linux container and cannot see this Windows file lock through the bind mount. While the lock
+# is held, backups/.maintenance.active tells it "maintenance running": it refuses or defers T2 restarts/deploys
+# (issue #144). A marker left behind by a killed run is ignored by ops-helper after 4 h and replaced by the next run.
+function Set-MaintMarker([string]$Dir) {
+  $name = if ($script:MaintRun) { $script:MaintRun -replace '-\d{8}-\d{6}-\d{3}$', '' } else { 'maintenance' }
+  $info = [ordered]@{ name = $name; started = (Get-Date).ToString('o'); pid = $PID } | ConvertTo-Json -Compress
+  try { Set-Content -LiteralPath (Join-Path $Dir '.maintenance.active') -Value $info -Encoding UTF8 }
+  catch { Write-MaintLog 'lock' 'warn' "Marker nicht geschrieben: $($_.Exception.Message)" }
+}
 
 # A backup without COMPLETE.txt never looks valid: write FAILED.txt with the reason and rename the folder to
 # <name>-FAILED. Nothing is deleted.
@@ -97,14 +115,40 @@ function Get-DevResetCandidates([string]$BackupDir, [int]$Keep = 7) {
 }
 
 # One RCON command on a running Minecraft service (rcon-cli in the itzg image). -Optional only logs a failure.
-function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional) {
+# -AllProfiles: the optional servers (pvp, vipworld-1..3) live in compose profiles; without them compose does not
+# resolve those services.
+function Invoke-MaintRcon([string]$Server, [string]$Command, [switch]$Optional, [switch]$AllProfiles) {
   $ErrorActionPreference = 'Continue'  # PS 5.1: stderr via 2>&1 would throw under 'Stop'; only the exit code decides
-  $out = & docker compose exec -T $Server rcon-cli $Command 2>&1
+  $profiles = @(); if ($AllProfiles) { $profiles = @(Get-MaintOptionalProfiles) }
+  $out = & docker compose @profiles exec -T $Server rcon-cli $Command 2>&1
   if ($LASTEXITCODE -ne 0) {
     $msg = "RCON $Server '$Command' fehlgeschlagen: $(($out | Out-String).Trim())"
     if ($Optional) { Write-MaintLog 'rcon' 'warn' $msg; return }
     throw $msg
   }
+}
+
+function Get-MaintOptionalProfiles { @('--profile', 'pvp', '--profile', 'vip', '--profile', 'vip3') }
+
+# Compose services that have a running container right now (best effort: empty on any error; -Strict throws instead,
+# for callers that must not read "docker did not answer" as "stopped").
+function Get-MaintRunningServices([switch]$Strict) {
+  $ErrorActionPreference = 'Continue'
+  $profiles = Get-MaintOptionalProfiles
+  $out = & docker compose @profiles ps --status running --services 2>$null
+  if ($LASTEXITCODE -ne 0) { if ($Strict) { throw "docker compose ps fehlgeschlagen (exit $LASTEXITCODE)" }; return @() }
+  @($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+# True only when docker answered and the service has no running container (an error is "unknown", not "stopped").
+function Test-MaintStopped([string]$Server) {
+  try { return -not (@(Get-MaintRunningServices -Strict) -contains $Server) } catch { return $false }
+}
+
+# World folders of one server data dir: world, world_*, or anything with a level.dat.
+function Get-MaintWorlds([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return @() }
+  @(Get-ChildItem -LiteralPath $Dir -Directory | Where-Object { $_.Name -match '^world($|_)' -or (Test-Path -LiteralPath (Join-Path $_.FullName 'level.dat')) })
 }
 
 # Copies one world folder; session.lock is skipped (held by the running server, not needed for a restore).

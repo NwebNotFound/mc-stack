@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { handleOp } from "../dist/actions.js";
 import { ALLOWLIST_PATH, CONTAINER_ID, CONTAINER_NAME, advancingClock, dockerRunner, enabledAllowlist, FakeJobClient, makeDeps, tmpDir } from "./helpers.mjs";
@@ -13,11 +13,19 @@ function ensureFreshMtime(path, when) {
   utimesSync(path, when, when);
 }
 
+/** A restorable backup: COMPLETE.txt plus both database dumps (issue #145). */
+function writeCompleteBackup(dir) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(`${dir}/craftcore.sql`, "dump");
+  writeFileSync(`${dir}/luckperms.sql`, "dump");
+  writeFileSync(`${dir}/COMPLETE.txt`, "ok");
+}
+
 /** Create a complete backup fixture and return its directory. */
 function backupFixture() {
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   return backups;
 }
 
@@ -189,7 +197,7 @@ test("ops_restart_game (T2) restarts and reports a missing announcement honestly
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   // Real clock: the backup fixture was just created, so it is genuinely fresh.
   const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
@@ -216,7 +224,7 @@ test("ops_restart_game (T2) demands the no-announcement acknowledgement", async 
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
   const out = await handleOp("ops_restart_game", { service: "lobby", confirm: true, delay_seconds: 60 }, deps);
@@ -236,7 +244,7 @@ test("ops_restart_game (T2) refuses without a recent backup and never restarts",
 
   // A backup older than tiers.T2.backup_max_age_hours is refused too.
   mkdirSync(`${backups}/daily-20260101-000000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20260101-000000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20260101-000000`);
   const aged = new Date(Date.now() - 13 * 3600 * 1000);
   ensureFreshMtime(`${backups}/daily-20260101-000000`, aged);
   const staleDeps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
@@ -339,9 +347,27 @@ test("ops_build_plugin verifies the artifact hash itself and does not deploy", a
   assert.deepEqual(out.result.tests, { tests: 441, failures: 0, errors: 0, skipped: 13 });
   assert.equal(out.result.deployed, false);
   assert.equal(out.result.dirty, null, "a builder that could not inspect the tree reports null, not false");
-  assert.ok(existsSync(out.result.artifact_path), "the artifact must stay in the artifact volume");
-  const state = JSON.parse(readFileSync(`${dir}/artifacts/state/last-build.json`, "utf8"));
+  assert.ok(existsSync(out.result.artifact_path), "the verified artifact is kept");
+  assert.ok(out.result.artifact_path.startsWith(`${dir}/jars/craftcore-`), "kept in the helper-only data dir, not in the shared volume");
+  assert.equal(readFileSync(out.result.artifact_path).equals(jarBytes), true);
+  const state = JSON.parse(readFileSync(`${dir}/state/last-build.json`, "utf8"));
   assert.equal(state.sha256, sha);
+  assert.equal(existsSync(`${dir}/artifacts/state/last-build.json`), false, "no state in the builder-writable volume");
+
+  // A path outside <artifacts>/artifacts (e.g. a planted symlink or ../) is refused.
+  const outside = `${dir}/elsewhere.jar`;
+  writeFileSync(outside, jarBytes);
+  for (const path of [outside, `${dir}/artifacts/artifacts/../../elsewhere.jar`]) {
+    const escJobs = new FakeJobClient({ result: builderResult({ artifact: { path, sha256: sha, size_bytes: jarBytes.length } }) });
+    const esc = await handleOp("ops_build_plugin", {}, makeDeps({ jobs: escJobs, dataDir: dir }));
+    assert.equal(esc.ok, false);
+    assert.equal(esc.code, "artifact_path_not_allowed", path);
+  }
+  const link = `${dir}/artifacts/artifacts/link.jar`;
+  symlinkSync(outside, link);
+  const linkJobs = new FakeJobClient({ result: builderResult({ artifact: { path: link, sha256: sha, size_bytes: jarBytes.length } }) });
+  const linked = await handleOp("ops_build_plugin", {}, makeDeps({ jobs: linkJobs, dataDir: dir }));
+  assert.equal(linked.code, "artifact_path_not_allowed", "a symlink out of the artifact dir is refused");
 
   // A tampered artefact (hash does not match the file) is refused, not deployed.
   const badJobs = new FakeJobClient({
@@ -380,16 +406,25 @@ test("ops_deploy_plugin refuses without a build, without the arm switch and with
   const again = await handleOp("ops_deploy_plugin", params("a".repeat(64)), noBuildDeps);
   assert.equal(again.code, "cooldown_active");
 
-  const jar = `${dir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${dir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "jar");
   const sha = createHash("sha256").update("jar").digest("hex");
-  mkdirSync(`${dir}/artifacts/state`, { recursive: true });
-  writeFileSync(`${dir}/artifacts/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const mismatchDeps = mk();
   const mismatch = await handleOp("ops_deploy_plugin", params("b".repeat(64)), mismatchDeps);
   assert.equal(mismatch.code, "artifact_mismatch");
+
+  // A last-build record that points into the builder-writable volume is refused.
+  const sharedJar = `${dir}/artifacts/artifacts/craftcore-x.jar`;
+  mkdirSync(`${dir}/artifacts/artifacts`, { recursive: true });
+  writeFileSync(sharedJar, "jar");
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: sharedJar }));
+  const sharedOut = await handleOp("ops_deploy_plugin", params(sha), mk());
+  assert.equal(sharedOut.code, "artifact_missing");
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const noBackupDeps = mk();
   const noBackup = await handleOp("ops_deploy_plugin", params(sha), noBackupDeps);
@@ -409,7 +444,7 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -418,12 +453,12 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
 
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
-  const jar = `${deps.cfg.artifactsDir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "new-jar-bytes");
   const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
-  writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, true, out.message);
@@ -432,9 +467,11 @@ test("ops_deploy_plugin rolls out with a delay, keeps a rollback jar and checks 
   assert.equal(out.result.steps.length, 2);
   assert.equal(out.result.steps.every((step) => step.healthy === true), true);
   assert.equal(deps.sleeps.filter((ms) => ms === 60_000).length, 2, "lead time + one delay between the services");
-  const rollback = JSON.parse(readFileSync(`${deps.cfg.artifactsDir}/state/last-deploy.json`, "utf8"));
+  const rollback = JSON.parse(readFileSync(`${dir}/state/last-deploy.json`, "utf8"));
   assert.ok(existsSync(rollback.previous.lobby.jar), "the previous jar must be kept for the rollback");
+  assert.ok(rollback.previous.lobby.jar.startsWith(`${dir}/rollback/`), "rollback jars live in the helper-only data dir");
   assert.equal(readFileSync(rollback.previous.lobby.jar, "utf8"), "old-lobby-jar");
+  assert.equal(rollback.previous.lobby.sha256, createHash("sha256").update("old-lobby-jar").digest("hex"));
 });
 
 test("ops_deploy_plugin rolls back automatically when a service does not come up healthy", async () => {
@@ -443,7 +480,7 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
@@ -463,12 +500,12 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   });
 
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true }, runner, now: advancingClock() });
-  const jar = `${deps.cfg.artifactsDir}/artifacts/craftcore-aaaa.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/artifacts`, { recursive: true });
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
   writeFileSync(jar, "new-jar-bytes");
   const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
-  writeFileSync(`${deps.cfg.artifactsDir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
 
   const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
   assert.equal(out.ok, false);
@@ -478,32 +515,75 @@ test("ops_deploy_plugin rolls back automatically when a service does not come up
   assert.equal(out.result.rollback.length, 2);
 });
 
+test("a deploy that gives up waiting for a backup rolls the jars back but restarts nothing during it (Gatekeeper #173)", async () => {
+  const repoAllow = enabledAllowlist();
+  const dir = tmpDir();
+  repoAllow.paths.repo = REPO_ROOT;
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
+  repoAllow.paths.backups = backups;
+  const marker = `${backups}/.maintenance.active`;
+  const pluginLobby = tmpDir("ops-helper-lobby-");
+  const pluginSurvival = tmpDir("ops-helper-survival-");
+  writeFileSync(`${pluginLobby}/craftcore.jar`, "old-lobby-jar");
+  writeFileSync(`${pluginSurvival}/craftcore.jar`, "old-survival-jar");
+  repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
+
+  const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true, maintenanceWaitSeconds: 0 }, now: () => Date.now() });
+  let calls = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    calls += 1;
+    if (calls === 2) writeFileSync(marker, JSON.stringify({ name: "backup" })); // backup.ps1 starts after lobby was deployed
+  };
+  const jar = `${dir}/jars/craftcore-aaaa.jar`;
+  mkdirSync(`${dir}/jars`, { recursive: true });
+  writeFileSync(jar, "new-jar-bytes");
+  const sha = createHash("sha256").update("new-jar-bytes").digest("hex");
+  mkdirSync(`${dir}/state`, { recursive: true });
+  writeFileSync(`${dir}/state/last-build.json`, JSON.stringify({ sha256: sha, artifact_path: jar }));
+
+  const out = await handleOp("ops_deploy_plugin", { confirm: true, delay_seconds: 60, artifact_sha256: sha, acknowledge_no_announce: true }, deps);
+  rmSync(marker);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "maintenance_in_progress");
+  assert.equal(deps.runner.argvs().filter((argv) => argv[1] === "restart").length, 1, "only the deploy restart of lobby, none during the backup");
+  assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "old-lobby-jar", "the previous lobby jar is back on disk");
+  assert.equal(readFileSync(`${pluginSurvival}/craftcore.jar`, "utf8"), "old-survival-jar");
+  assert.equal(out.result.mixed_state, true);
+  assert.ok(out.result.restart_pending.includes("lobby"), JSON.stringify(out.result.rollback));
+  assert.equal(out.result.rollback.every((entry) => entry.restarted !== true), true);
+  assert.match(out.message, /restart still needed for: .*lobby/);
+});
+
 test("ops_rollback_plugin restores the recorded jars", async () => {
   const repoAllow = enabledAllowlist();
   const dir = tmpDir();
   repoAllow.paths.repo = REPO_ROOT;
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
   repoAllow.paths.backups = backups;
   const pluginLobby = tmpDir("ops-helper-lobby-");
   const pluginSurvival = tmpDir("ops-helper-survival-");
   repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
   const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
 
-  const keptLobby = `${deps.cfg.artifactsDir}/rollback/lobby-craftcore-old.jar`;
-  const keptSurvival = `${deps.cfg.artifactsDir}/rollback/survival-craftcore-old.jar`;
-  mkdirSync(`${deps.cfg.artifactsDir}/rollback`, { recursive: true });
+  const keptLobby = `${dir}/rollback/lobby-craftcore-old.jar`;
+  const keptSurvival = `${dir}/rollback/survival-craftcore-old.jar`;
+  mkdirSync(`${dir}/rollback`, { recursive: true });
   writeFileSync(keptLobby, "old-lobby-jar");
   writeFileSync(keptSurvival, "old-survival-jar");
   writeFileSync(`${pluginLobby}/craftcore.jar`, "broken-jar");
   writeFileSync(`${pluginSurvival}/craftcore.jar`, "broken-jar");
-  mkdirSync(`${deps.cfg.artifactsDir}/state`, { recursive: true });
+  const h = (text) => createHash("sha256").update(text).digest("hex");
+  mkdirSync(`${dir}/state`, { recursive: true });
   writeFileSync(
-    `${deps.cfg.artifactsDir}/state/last-deploy.json`,
+    `${dir}/state/last-deploy.json`,
     JSON.stringify({
       artifact_sha256: "c".repeat(64),
-      previous: { lobby: { sha256: "a".repeat(64), jar: keptLobby }, survival: { sha256: "b".repeat(64), jar: keptSurvival } },
+      previous: { lobby: { sha256: h("old-lobby-jar"), jar: keptLobby }, survival: { sha256: h("old-survival-jar"), jar: keptSurvival } },
     }),
   );
 
@@ -514,11 +594,70 @@ test("ops_rollback_plugin restores the recorded jars", async () => {
   assert.equal(out.result.steps.length, 2);
 });
 
+test("ops_rollback_plugin refuses tampered, unhashed or out-of-tree jars and ignores the shared volume", async () => {
+  const repoAllow = enabledAllowlist();
+  repoAllow.paths.repo = REPO_ROOT;
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
+  repoAllow.paths.backups = backups;
+  const pluginLobby = tmpDir("ops-helper-lobby-");
+  const pluginSurvival = tmpDir("ops-helper-survival-");
+  repoAllow.deploy.pluginDirs = { lobby: pluginLobby, survival: pluginSurvival };
+  const h = (text) => createHash("sha256").update(text).digest("hex");
+
+  const scenario = async (setup) => {
+    const dir = tmpDir();
+    const deps = makeDeps({ allow: repoAllow, dataDir: dir, cfg: { armed: true } });
+    writeFileSync(`${pluginLobby}/craftcore.jar`, "current-jar");
+    writeFileSync(`${pluginSurvival}/craftcore.jar`, "current-jar");
+    mkdirSync(`${dir}/rollback`, { recursive: true });
+    mkdirSync(`${dir}/state`, { recursive: true });
+    setup(dir);
+    return { deps, out: await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps) };
+  };
+
+  // 1. the builder rewrote the OLD (shared-volume) state file: it is not read any more
+  const shared = await scenario((dir) => {
+    const evil = `${dir}/artifacts/evil.jar`;
+    mkdirSync(`${dir}/artifacts/state`, { recursive: true });
+    writeFileSync(evil, "evil");
+    writeFileSync(`${dir}/artifacts/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("evil"), jar: evil } } }));
+  });
+  assert.equal(shared.out.code, "no_rollback_available");
+
+  // 2. the jar was swapped after it was recorded
+  const swapped = await scenario((dir) => {
+    writeFileSync(`${dir}/rollback/lobby.jar`, "evil");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("old"), jar: `${dir}/rollback/lobby.jar` } } }));
+  });
+  assert.equal(swapped.out.code, "rollback_jar_untrusted");
+
+  // 3. a jar outside the helper's rollback directory, even with a matching hash
+  const outside = await scenario((dir) => {
+    writeFileSync(`${dir}/evil.jar`, "evil");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: h("evil"), jar: `${dir}/rollback/../evil.jar` } } }));
+  });
+  assert.equal(outside.out.code, "rollback_jar_untrusted");
+
+  // 4. no recorded hash at all
+  const unhashed = await scenario((dir) => {
+    writeFileSync(`${dir}/rollback/lobby.jar`, "old");
+    writeFileSync(`${dir}/state/last-deploy.json`, JSON.stringify({ previous: { lobby: { sha256: "zz", jar: `${dir}/rollback/lobby.jar` } } }));
+  });
+  assert.equal(unhashed.out.code, "rollback_jar_untrusted");
+
+  for (const { deps } of [shared, swapped, outside, unhashed]) {
+    assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined, "nothing is restarted");
+  }
+  assert.equal(readFileSync(`${pluginLobby}/craftcore.jar`, "utf8"), "current-jar", "nothing is installed");
+});
+
 test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo", async () => {
   const repoAllow = enabledAllowlist();
   const backups = tmpDir("ops-helper-backups-");
   mkdirSync(`${backups}/daily-20261102-010101`, { recursive: true });
-  writeFileSync(`${backups}/daily-20261102-010101/COMPLETE.txt`, "ok");
+  writeCompleteBackup(`${backups}/daily-20261102-010101`);
   writeFileSync(`${backups}/daily-20261102-010101/craftcore.sql`, "dump");
   repoAllow.paths.backups = backups;
   const deps = makeDeps({ allow: repoAllow });
@@ -528,6 +667,7 @@ test("ops_backups_list and ops_disk stay read-only and tolerate a missing repo",
   assert.equal(list.result.count, 1);
   assert.equal(list.result.backups[0].complete, true);
   assert.equal(list.result.last_complete, "daily-20261102-010101");
+  assert.equal(list.result.backups[0].has_luckperms_dump, true);
 
   const disk = await handleOp("ops_disk", {}, deps);
   assert.equal(disk.ok, true);
@@ -638,4 +778,138 @@ test("a paused action returns action_disabled with its reason and never reaches 
     assert.match(out.message, /paused/, `${name} message must explain itself`);
     assert.equal(deps.runner.calls.length, 0, `${name} must not reach docker`);
   }
+});
+
+function freshBackupAllow() {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeCompleteBackup(`${backups}/daily-20261103-120000`);
+  repoAllow.paths.backups = backups;
+  return repoAllow;
+}
+
+const GAME = { service: "survival", confirm: true, delay_seconds: 60, acknowledge_no_announce: true };
+
+test("only one T2 action runs at a time; a second one is refused as t2_busy and the lock is released", async () => {
+  const repoAllow = freshBackupAllow();
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let sleeping = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    sleeping += 1;
+    await gate;
+  };
+
+  const first = handleOp("ops_restart_game", GAME, deps);
+  while (sleeping === 0) await new Promise((r) => setImmediate(r));
+
+  const busy = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps);
+  assert.equal(busy.ok, false);
+  assert.equal(busy.code, "t2_busy");
+  assert.match(busy.message, /ops_restart_game/);
+  // A busy refusal does not start the cooldown of the refused action.
+  assert.equal(deps.state.cooldownRemaining("ops_rollback_plugin", 1800, Date.now()), 0);
+  // T0 keeps working while T2 runs.
+  const status = await handleOp("ops_status", {}, deps);
+  assert.equal(status.ok, true);
+
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.message);
+  assert.equal(deps.state.t2Busy(), null, "the T2 lock is released after the action");
+
+  const after = await handleOp("ops_rollback_plugin", { confirm: true, delay_seconds: 60, acknowledge_no_announce: true }, deps);
+  assert.equal(after.code, "no_rollback_available", "the next T2 action gets past the lock");
+});
+
+test("the T2 lock is released when the action throws", async () => {
+  const repoAllow = freshBackupAllow();
+  const runner = dockerRunner();
+  runner.responses.unshift({ match: (argv) => argv[1] === "restart", reply: { ok: false, code: 1, stderr: "boom" } });
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, runner, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.ok, false);
+  assert.equal(deps.state.t2Busy(), null);
+});
+
+test("T2 is refused while backup.ps1 holds the maintenance marker, a stale marker is ignored", async () => {
+  const repoAllow = freshBackupAllow();
+  const marker = `${repoAllow.paths.backups}/.maintenance.active`;
+  writeFileSync(marker, "﻿" + JSON.stringify({ name: "backup", started: "2026-11-06T03:00:00+01:00", pid: 42 }));
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.code, "maintenance_in_progress");
+  assert.equal(out.result.maintenance, "backup");
+  assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined);
+  assert.equal(deps.state.cooldownRemaining("ops_restart_game", 1800, Date.now()), 0);
+
+  const old = (Date.now() - 6 * 3600 * 1000) / 1000;
+  utimesSync(marker, old, old);
+  const staleDeps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const ok = await handleOp("ops_restart_game", GAME, staleDeps);
+  assert.equal(ok.ok, true, ok.message);
+});
+
+test("a backup that starts during the T2 delay is waited for before the restart", async () => {
+  const repoAllow = freshBackupAllow();
+  const marker = `${repoAllow.paths.backups}/.maintenance.active`;
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  let calls = 0;
+  deps.sleep = async (ms) => {
+    deps.sleeps.push(ms);
+    calls += 1;
+    if (calls === 1) writeFileSync(marker, "{}"); // backup starts during the lead time
+    if (calls === 3) rmSync(marker); // ...and finishes two polls later
+  };
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.ok, true, out.message);
+  assert.deepEqual(deps.sleeps, [60_000, 15_000, 15_000], "lead time, then two maintenance polls");
+
+  // ...and if it never finishes within the wait budget, nothing is restarted.
+  const stuck = makeDeps({ allow: repoAllow, cfg: { armed: true, maintenanceWaitSeconds: 0 }, now: () => Date.now() });
+  stuck.sleep = async (ms) => {
+    stuck.sleeps.push(ms);
+    writeFileSync(marker, "{}");
+  };
+  const refused = await handleOp("ops_restart_game", GAME, stuck);
+  assert.equal(refused.code, "maintenance_in_progress");
+  assert.equal(stuck.runner.find((argv) => argv[1] === "restart"), undefined, "no restart during a backup");
+  assert.equal(stuck.state.t2Busy(), null);
+  rmSync(marker);
+});
+
+test("a COMPLETE backup without the LuckPerms dump does not satisfy the T2 backup gate", async () => {
+  const repoAllow = enabledAllowlist();
+  const backups = tmpDir("ops-helper-backups-");
+  mkdirSync(`${backups}/daily-20261103-120000`, { recursive: true });
+  writeFileSync(`${backups}/daily-20261103-120000/COMPLETE.txt`, "ok");
+  writeFileSync(`${backups}/daily-20261103-120000/craftcore.sql`, "dump");
+  repoAllow.paths.backups = backups;
+  const deps = makeDeps({ allow: repoAllow, cfg: { armed: true }, now: () => Date.now() });
+  const out = await handleOp("ops_restart_game", GAME, deps);
+  assert.equal(out.code, "no_recent_backup");
+  assert.match(out.message, /luckperms\.sql/);
+  assert.equal(deps.runner.find((argv) => argv[1] === "restart"), undefined);
+});
+
+test("ops_logs never returns the MariaDB generated root password (issue #146)", async () => {
+  const pw = 'Zq"8`k)L;p\'w0rd-tail';
+  const logs = [
+    "2026-11-05T23:00:00.000000000Z 2026-11-05 23:00:00+00:00 [Note] [Entrypoint]: Entrypoint script for MariaDB Server started.",
+    `2026-11-05T23:00:01.000000000Z 2026-11-05 23:00:01+00:00 [Note] [Entrypoint]: GENERATED ROOT PASSWORD: ${pw}`,
+    "2026-11-05T23:00:02.000000000Z 2026-11-05 23:00:02 0 [Note] mariadbd: ready for connections.",
+  ].join("\n");
+  const deps = makeDeps({ runner: dockerRunner({ logs }) });
+  const out = await handleOp("ops_logs", { service: "craftcore-db", tail: 50 }, deps);
+  assert.equal(out.ok, true, out.message);
+  const text = out.result.lines.join("\n");
+  assert.ok(!text.includes("Zq") && !text.includes("w0rd-tail"), text);
+  assert.match(text, /GENERATED ROOT PASSWORD: \[redacted\]/);
+  assert.match(text, /ready for connections/);
+  assert.equal(out.result.redacted, true);
 });

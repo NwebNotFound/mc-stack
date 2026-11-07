@@ -201,7 +201,14 @@ async def sync_loop(bot):
 
 
 def allowed(bot, member):
-    return bot.role(member, "ADMIN_ROLE_ID") or bot.role(member, "PLAYER_ROLE_ID")
+    """Admins oder verknuepfte Spieler. Die Minecraft-Rolle allein reicht nicht: sie ist per Button
+    selbst vergebbar (#149). Verlangt wird ein aktiver links-Eintrag plus die Rolle (ohne Rolle baut
+    reconcile() den Link ohnehin ab)."""
+    if bot.role(member, "ADMIN_ROLE_ID"):
+        return True
+    if not bot.role(member, "PLAYER_ROLE_ID"):
+        return False
+    return bot.db.execute("SELECT 1 FROM links WHERE discord_id=? AND state='active'", (member.id,)).fetchone() is not None
 
 
 def invite_embed(url, expires, open_count):
@@ -251,7 +258,7 @@ async def create(bot, interaction):
     if guild is None:
         return await interaction.response.send_message("Das geht nur auf dem Discord-Server.", ephemeral=True)
     if not allowed(bot, interaction.user):
-        return await interaction.response.send_message("Einladen k\u00f6nnen nur Spieler mit der **Minecraft**-Rolle. Verkn\u00fcpf zuerst dein Konto mit `/link`.", ephemeral=True)
+        return await interaction.response.send_message("Einladen k\u00f6nnen nur verkn\u00fcpfte Spieler. Verkn\u00fcpf zuerst dein Minecraft-Konto mit `/link`.", ephemeral=True)
     opened = open_invites(bot.db, interaction.user.id)
     if len(opened) >= MAX_OPEN_INVITES and not bot.role(interaction.user, "ADMIN_ROLE_ID"):
         e = list_embed(bot.db, interaction.user.id)

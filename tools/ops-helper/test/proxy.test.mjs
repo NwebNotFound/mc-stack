@@ -91,9 +91,26 @@ test("docker-socket-filter is the only socket holder and has no host port", () =
   assert.ok(mountsSocket(block), "the filter must mount the socket");
   assert.equal(hasHostPorts(block), false, "the filter must not publish a host port");
   assert.ok(
-    block.some((line) => /^ {4}networks: \[ops\]\s*$/.test(line)),
-    "the filter must live only in the internal `ops` network",
+    block.some((line) => /^ {4}networks: \[ops-docker\]\s*$/.test(line)),
+    "the filter must live only in the internal `ops-docker` network",
   );
+});
+
+test("only ops-helper shares a network with the filter (hermes-mcp cannot reach it)", () => {
+  const members = [...BLOCKS.entries()]
+    .filter(([, block]) => block.some((line) => /^ {4}networks: \[.*\bops-docker\b.*\]\s*$/.test(line)))
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(members, ["docker-socket-filter", "ops-helper"]);
+  const net = topBlock("ops-docker");
+  assert.ok(net.some((line) => /internal: true/.test(line)), "ops-docker must be internal");
+  const hermes = blockOf("hermes-mcp");
+  assert.ok(!hermes.some((line) => /ops-docker/.test(line)), "hermes-mcp must not join ops-docker");
+});
+
+test("filter and helper share OPS_FILTER_TOKEN", () => {
+  assert.equal(envOf(blockOf("docker-socket-filter")).OPS_FILTER_TOKEN, "${OPS_FILTER_TOKEN:-}");
+  assert.equal(envOf(blockOf("ops-helper")).OPS_FILTER_TOKEN, "${OPS_FILTER_TOKEN:-}");
 });
 
 test("the ops network is internal", () => {

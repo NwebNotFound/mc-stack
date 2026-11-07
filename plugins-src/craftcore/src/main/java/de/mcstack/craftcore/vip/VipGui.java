@@ -75,8 +75,8 @@ public final class VipGui implements Listener {
     private final Map<UUID, String> waiting = queue.waiting;
     /** Players that already left this server, so a connect retry does not bounce them again. */
     private final Set<UUID> transferred = ConcurrentHashMap.newKeySet();
-    /** Bumped when the player chooses another server; a pending wait or auto-connect of an older generation is dropped. */
-    private final Map<UUID, Integer> generation = queue.generation;
+    /** Owners whose /vw create is running, so a macro cannot fire a second one in parallel. */
+    private final Set<UUID> creating = ConcurrentHashMap.newKeySet();
     private final Map<UUID, String> sentSlot = queue.sentSlot;
     private final Map<UUID, Long> sentAt = queue.sentAt;
 
@@ -251,7 +251,7 @@ public final class VipGui implements Listener {
                 case CONNECT -> {
                     if (d.staleRow()) store.status(id, "running", d.slot());
                     message(player, "Die Welt laeuft schon, du wirst verbunden ...");
-                    retryConnect(player, d.slot(), generation.getOrDefault(player.getUniqueId(), 0));
+                    retryConnect(player, d.slot(), queue.generation(player.getUniqueId()));
                 }
                 case WAIT -> {
                     if (d.staleRow()) store.status(id, "starting", d.slot());
@@ -275,7 +275,7 @@ public final class VipGui implements Listener {
             switch (decision.kind()) {
                 case RUNNING -> {
                     if (!"running".equals(entry.status()) || !decision.slot().equals(entry.slot())) store.status(id, "running", decision.slot());
-                    retryConnect(player, decision.slot(), generation.getOrDefault(player.getUniqueId(), 0));
+                    retryConnect(player, decision.slot(), queue.generation(player.getUniqueId()));
                 }
                 case STARTING -> {
                     if (!decision.slot().equals(entry.slot())) store.status(id, "starting", decision.slot());
@@ -312,7 +312,16 @@ public final class VipGui implements Listener {
             if (entry == null) { message(player, "Diese VIP-Welt wurde nicht gefunden."); return; }
             if (!mayManage(player, entry)) { message(player, "Du darfst diese Welt nicht verwalten."); return; }
             if (!VipRules.canStop(entry.status(), entry.slot())) { message(player, "Die VIP-Welt laeuft nicht."); return; }
-            if (host.stop(entry.slot()).outcome() != VipHostClient.Outcome.STOPPED) {
+            // Never trust the slot of the row: after an idle stop it may host another owner's world by now.
+            List<VipReconcile.Slot> slots = host.slots();
+            if (slots == null) { message(player, "VIP-Host nicht erreichbar, bitte spaeter erneut versuchen."); return; }
+            String live = VipReconcile.liveSlot(entry.id(), slots);
+            if (live == null) {
+                store.idleStopped(id);
+                message(player, "VIP-Welt gestoppt.");
+                return;
+            }
+            if (host.stop(live, entry.id()).outcome() != VipHostClient.Outcome.STOPPED) {
                 message(player, "VIP-Welt konnte nicht gestoppt werden."); return;
             }
             store.stopped(id);
@@ -328,13 +337,17 @@ public final class VipGui implements Listener {
         }
         String kind = type == null ? "normal" : type.toLowerCase(Locale.ROOT);
         if (!List.of("normal", "flat", "void").contains(kind)) { message(player, "Welttyp: normal, flat oder void."); return; }
+        UUID owner = player.getUniqueId();
+        // One create per owner at a time on this server; the insert itself re-checks the limit across servers.
+        if (!creating.add(owner)) { message(player, "Deine VIP-Welt wird gerade erstellt ..."); return; }
         async(() -> {
-            int slots = slotsFor(player);
-            if (!VipRules.canCreate(store.count(player.getUniqueId()), slots)) {
-                message(player, slots == 0 ? "Du hast keinen VIP-Rang." : "Du hast keinen freien VIP-Weltplatz.");
-                return;
-            }
-            store.create(player.getUniqueId(), clean, kind);
+            try {
+                int slots = slotsFor(player);
+                if (!VipRules.canCreate(store.count(owner), slots) || !store.create(owner, clean, kind, slots)) {
+                    message(player, slots == 0 ? "Du hast keinen VIP-Rang." : "Du hast keinen freien VIP-Weltplatz.");
+                    return;
+                }
+            } finally { creating.remove(owner); }
             message(player, "VIP-Welt erstellt.");
             openHub(player);
         }, error -> {
@@ -425,13 +438,13 @@ public final class VipGui implements Listener {
 
     private void waitFor(Player player, VipStore.Entry entry) {
         UUID id = player.getUniqueId();
-        int gen = generation.getOrDefault(id, 0);
+        int gen = queue.generation(id);
         waiting.put(id, entry.id());
         bars.wait(player, entry.id());
         message(player, "Deine Welt startet ... du wirst automatisch verbunden.");
         CompletableFuture<VipStartCoordinator.Outcome> future = coordinator.join(entry.id(), id);
         future.whenComplete((outcome, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-            if (generation.getOrDefault(id, 0) != gen) return; // the player chose another server meanwhile
+            if (!queue.current(id, gen)) return; // the player chose another server meanwhile, or left
             waiting.remove(id);
             bars.clear(id);
             if (outcome == null || !outcome.ok()) {
@@ -477,7 +490,7 @@ public final class VipGui implements Listener {
     }
 
     private boolean stillHere(Player player, UUID id, int gen) {
-        return player.isOnline() && !transferred.contains(id) && generation.getOrDefault(id, 0) == gen;
+        return player.isOnline() && !transferred.contains(id) && queue.current(id, gen);
     }
 
     // ---------------------------------------------------------------- clicks
@@ -580,8 +593,7 @@ public final class VipGui implements Listener {
         String world = waiting.remove(id);
         if (world != null) coordinator.leave(world, id);
         bars.clear(id);
-        sentSlot.remove(id);
-        sentAt.remove(id);
+        queue.forget(id);
     }
 
     @EventHandler

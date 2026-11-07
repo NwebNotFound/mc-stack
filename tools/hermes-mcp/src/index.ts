@@ -10,13 +10,17 @@
  *    points at. It never advertises T2 tools, so a caller that reaches this
  *    server through the public tunnel can never restart a game server;
  *  - the LOCAL listener (HERMES_MCP_OPS_PORT, 8767) is published only on
- *    127.0.0.1 on the host. It is the only place where T2 tools exist.
+ *    127.0.0.1 on the host. It is the only place where T2 tools exist. It
+ *    refuses peers that are sibling containers on hermes-mcp's own networks
+ *    (e.g. cloudflared-mcp) and any Host header but the loopback names, so a
+ *    tunnel ingress pointed at hermes-mcp:8767 does not expose it.
  *
  * The container itself publishes no public port; it is reachable from the
  * compose networks and, for the main listener, through the tunnel.
  */
 import { randomUUID } from "node:crypto";
 import http from "node:http";
+import { networkInterfaces } from "node:os";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -25,7 +29,15 @@ import { loadConfig, type Config } from "./config.js";
 import { GatewayClient } from "./hermes.js";
 import { logger } from "./logger.js";
 import { RunManager } from "./runner.js";
-import { BruteForceGuard, resolveClientIp } from "./security.js";
+import { lookup } from "node:dns/promises";
+import {
+  BruteForceGuard,
+  opsHostAllowed,
+  opsPeerAllowed,
+  ProxyHostResolver,
+  resolveClientIp,
+  type LocalAddress,
+} from "./security.js";
 import { RunStore, type RunStore as RunStoreType } from "./store.js";
 import { registerTools } from "./tools.js";
 
@@ -59,6 +71,8 @@ interface ServerDeps {
   allowT2: boolean;
   /** Per-listener brute-force brake (the ops listener has its own, stricter one). */
   bruteForce: BruteForceGuard;
+  /** Resolved addresses of the trusted proxy containers (cloudflared-mcp). */
+  proxyHosts: ProxyHostResolver;
 }
 
 function buildServer(
@@ -87,6 +101,30 @@ function createApp(deps: ServerDeps): Express {
   // Only a configured trusted proxy may set X-Forwarded-For; otherwise Express
   // (and resolveClientIp) fall back to the socket address.
   app.set("trust proxy", cfg.trustedProxies.length > 0 ? cfg.trustedProxies : false);
+
+  // Local (T2) listener: refuse anything that does not come through the host's
+  // 127.0.0.1 port mapping - in particular cloudflared-mcp or any other
+  // container on the shared `mcp` network, and any request carrying a public
+  // Host such as the tunnel hostname. Runs before body parsing and auth.
+  if (deps.allowT2) {
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const peer = req.socket?.remoteAddress ?? "";
+      const locals = Object.values(networkInterfaces())
+        .flat()
+        .filter((a): a is NonNullable<typeof a> => Boolean(a)) as LocalAddress[];
+      if (!opsPeerAllowed(peer, locals, cfg.opsAllowedPeers)) {
+        logger.warn("ops listener: rejected peer", { remote: peer, hint: "set HERMES_MCP_OPS_ALLOWED_PEERS if this is the host" });
+        res.status(403).json({ error: "forbidden_peer" });
+        return;
+      }
+      if (!opsHostAllowed(req.headers.host, cfg.opsAllowedHosts)) {
+        logger.warn("ops listener: rejected Host header", { host: String(req.headers.host ?? "").slice(0, 100) });
+        res.status(403).json({ error: "forbidden_host" });
+        return;
+      }
+      next();
+    });
+  }
   app.use(express.json({ limit: "512kb" }));
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -120,7 +158,10 @@ function createApp(deps: ServerDeps): Express {
   const allowToken = rateLimiter(120);
 
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
-    const clientIp = resolveClientIp(req, cfg.trustedProxies);
+    // Through the tunnel the socket peer is always cloudflared-mcp; keying the
+    // lockout on it would let one caller lock out everyone (issue #142). The
+    // per-client key is CF-Connecting-IP when the peer is a trusted proxy.
+    const clientIp = resolveClientIp(req, cfg.trustedProxies, deps.proxyHosts.addresses());
     const bruteForce = deps.bruteForce;
 
     const lockout = bruteForce.check(clientIp);
@@ -139,7 +180,9 @@ function createApp(deps: ServerDeps): Express {
     const header = req.headers.authorization ?? "";
     const match = /^Bearer\s+(.+)$/i.exec(header);
     if (!match) {
-      bruteForce.failure(clientIp);
+      // A request without any bearer token is not a guess: it is not counted
+      // toward the lockout (a crawler or a mis-configured client must not be
+      // able to lock the owner out).
       res
         .status(401)
         .setHeader("WWW-Authenticate", `Bearer realm="hermes-mcp"`)
@@ -242,7 +285,10 @@ async function main(): Promise<void> {
     windowSeconds: Math.max(900, cfg.lockoutMaxSeconds),
   });
 
-  const shared = { cfg, client, runs, store };
+  const proxyHosts = new ProxyHostResolver(cfg.trustedProxyHosts, (host) => lookup(host, { all: true }));
+  proxyHosts.start();
+
+  const shared = { cfg, client, runs, store, proxyHosts };
   const mainApp = createApp({ ...shared, allowT2: false, bruteForce: mainBruteForce });
   const opsApp = createApp({ ...shared, allowT2: true, bruteForce: opsBruteForce });
 

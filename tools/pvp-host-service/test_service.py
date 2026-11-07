@@ -95,6 +95,21 @@ ram:
             self.assertEqual((200, {"status": "stopping"}), self.vip("POST", "/vip/stop", {"slot": "vipworld-2"}))
             self.assertEqual(["docker", "stop", "mc-stack-vipworld-2-1"], run.call_args.args[0])
 
+    def test_vip_stop_checks_the_running_world(self):
+        other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        with patch("service.subprocess.run") as run:
+            self.assertEqual(400, self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": "../bad"})[0])
+            run.assert_not_called()
+            run.return_value = self.docker_result("running", other)
+            self.assertEqual((409, {"status": "error", "code": "world_mismatch"}),
+                             self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": self.WORLD}))
+            self.assertNotIn(["docker", "stop", "mc-stack-vipworld-1-1"], [c.args[0] for c in run.call_args_list])
+            run.reset_mock()
+            run.return_value = self.docker_result("running", self.WORLD.upper())
+            self.assertEqual((200, {"status": "stopping"}),
+                             self.vip("POST", "/vip/stop", {"slot": "vipworld-1", "worldId": self.WORLD}))
+            self.assertEqual(["docker", "stop", "mc-stack-vipworld-1-1"], run.call_args.args[0])
+
     def test_world_directory_created_and_existing_kept(self):
         base = self.root / "data" / "vipworlds"
         new_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -184,3 +199,36 @@ ram:
         from subprocess import CompletedProcess
         with patch("service.subprocess.run", return_value=CompletedProcess([], 1, "", "Error: No such object")):
             self.assertEqual("offline", service.inspect_slot("vipworld-1")["status"])
+
+    def test_every_docker_call_has_a_timeout(self):
+        import subprocess
+        with patch("service.subprocess.run") as run:
+            run.side_effect = [self.docker_result("running", "other"), self.docker_result(), self.docker_result(), self.docker_result()]
+            self.assertEqual(202, self.vip("POST", "/vip/start", {"worldId": self.WORLD})[0])
+            self.assertTrue(all(c.kwargs.get("timeout") for c in run.call_args_list), run.call_args_list)
+            self.assertEqual(service.COMPOSE_UP_TIMEOUT, run.call_args.kwargs["timeout"])
+            run.side_effect = None
+            run.return_value = self.docker_result()
+            self.vip("POST", "/vip/stop", {"slot": "vipworld-2"})
+            self.assertEqual(service.STOP_TIMEOUT, run.call_args.kwargs["timeout"])
+        with patch("service.subprocess.run") as run:
+            run.return_value.stdout = "running\n"
+            for method, path in [("POST", "/start"), ("POST", "/stop"), ("GET", "/status")]:
+                self.request(method, path, "test")
+            self.assertEqual([service.START_TIMEOUT, service.STOP_TIMEOUT, service.INSPECT_TIMEOUT], [c.kwargs["timeout"] for c in run.call_args_list])
+
+    def test_hung_docker_is_503_and_releases_the_lock(self):
+        import subprocess
+        with patch("service.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 30)):
+            self.assertEqual((503, {"status": "error", "code": "docker_timeout"}), self.vip("GET", "/vip/status"))
+            self.assertEqual(503, self.request("GET", "/status", "test")[0])
+        self.assertFalse(service.VIP_LOCK.locked(), "a timed-out call must not keep VIP_LOCK")
+
+    def test_busy_lock_is_503_not_a_hang(self):
+        with patch("service.VIP_LOCK_TIMEOUT", 0.2), patch("service.subprocess.run") as run:
+            service.VIP_LOCK.acquire()
+            try:
+                self.assertEqual((503, {"status": "error", "code": "busy"}), self.vip("GET", "/vip/status"))
+            finally:
+                service.VIP_LOCK.release()
+            run.assert_not_called()
