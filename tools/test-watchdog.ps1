@@ -252,7 +252,7 @@ Set-Content -LiteralPath $mk -Value '{"name":"backup","pid":1}'
 Check (@(Get-WdHolds $root 6 | Where-Object { $_.owner -eq 'maintenance' }).Count -eq 1) 'marker of a running backup (other pid): hold'
 Set-Content -LiteralPath $mk -Value ('{"name":"watchdog","pid":' + $PID + '}')
 Check (@(Get-WdHolds $root 6 | Where-Object { $_.owner -eq 'maintenance' }).Count -eq 0) 'marker of this process (the watchdog holding the lock): no hold'
-Remove-Item -LiteralPath $mk
+Remove-Item -LiteralPath $mk -Force
 
 Write-Host 'backup.ps1 / dev-reset.ps1 holds'
 $b = Get-Content -LiteralPath (Join-Path $repo 'backup.ps1') -Raw
