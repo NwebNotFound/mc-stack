@@ -68,5 +68,17 @@ class HistoryIncrementalTests(unittest.TestCase):
         self.assertGreaterEqual(min(r["hour_ts"] for c in sent2 for r in c), saved, "never again from 0 / 90 days")
 
 
+
+class IngestHashTests(unittest.TestCase):
+    def test_the_last_accepted_payload_hash_survives_a_restart(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ingest, "INGEST_HASH_FILE", Path(d) / "ingest-hash.json"):
+            ingest._rate.update(last_hash=None, hash_loaded=False)
+            self.assertIsNone(ingest._last_hash())
+            ingest._save_hash("abc")
+            ingest._rate.update(last_hash=None, hash_loaded=False)   # restart
+            self.assertEqual(ingest._last_hash(), "abc", "an unchanged payload is not re-sent after a restart")
+            ingest._rate.update(last_hash=None, hash_loaded=False)
+
+
 if __name__ == "__main__":
     unittest.main()

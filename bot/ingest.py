@@ -36,6 +36,31 @@ _rate = {"last_post": 0.0, "backoff_until": 0.0, "fails": 0, "last_hash": None}
 VOLATILE = ("uptime_seconds", "tps")
 
 
+INGEST_HASH_FILE = Path(os.getenv("INGEST_HASH_FILE", "/app/data/ingest-hash.json"))
+
+
+def _last_hash():
+    """Hash des letzten angenommenen Ingest-Pushs, auch ueber einen Neustart (sonst schickt der erste Push alles neu)."""
+    if _rate["last_hash"] is None and not _rate.get("hash_loaded"):
+        _rate["hash_loaded"] = True
+        try:
+            _rate["last_hash"] = json.loads(INGEST_HASH_FILE.read_text(encoding="utf-8")).get("hash")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return _rate["last_hash"]
+
+
+def _save_hash(h):
+    _rate["last_hash"] = h
+    try:
+        INGEST_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = INGEST_HASH_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"hash": h}), encoding="utf-8")
+        tmp.replace(INGEST_HASH_FILE)
+    except OSError as e:
+        log.warning("Ingest-Hash nicht gespeichert (%s)", e)
+
+
 def payload_hash(payload):
     """Hash ohne fluechtige Server-Felder (Uptime/TPS), damit unveraenderte Daten nicht neu gesendet werden."""
     p = dict(payload)
@@ -872,13 +897,13 @@ async def push_once(bot, session=None):
     own = session is None
     session = session or aiohttp.ClientSession()
     try:
-        if h == _rate["last_hash"]:
+        if h == _last_hash():
             log.debug("Ingest-Push uebersprungen: unveraendert")
             result = None
         else:
             result = await _post(session, token, payload, "Ingest-Push")
             if result and result[0] < 300:
-                _rate["last_hash"] = h
+                _save_hash(h)
                 await maybe_push_history(session, token)
         return result
     finally:
