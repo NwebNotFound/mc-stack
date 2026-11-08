@@ -1,6 +1,6 @@
 ﻿Projekt: C:\Users\nilsw\mc-stack (Docker: Velocity, Paper lobby + survival, playit, Discord-Bot in bot\). Lies STATUS.md, STATUS-bot.md, README zuerst. Regeln: keine kostenpflichtigen Plugins, keine Portfreigaben, keine Secrets ausgeben, keine Welten ohne Backup löschen. Schreibe Plan+Fortschritt in TASK4.md, Ergebnis in STATUS.md / STATUS-bot.md.
 
-0) Voice: in config/survival-plugins/voicechat/voicechat-server.properties voice_host=malls-constants.tun.ply.gg:42132 setzen, survival neu erstellen, pruefen. NwebNotFound muss auf Whitelist + OP auf lobby und survival sein (pruefen/fixen).
+0) Voice: in config/survival-plugins/voicechat/voicechat-server.properties voice_host=<playit voice endpoint, see .env VOICE_HOST> setzen, survival neu erstellen, pruefen. NwebNotFound muss auf Whitelist + OP auf lobby und survival sein (pruefen/fixen).
 
 1) Lobby: Superflat-Welt (Backup der alten Lobby vorher), Spawnplattform, Nether-Portal-artiges Portal (oder Druckplatte/Portalblock-Region) das Spieler per Velocity auf survival schickt. Keine Mobs, kein Schaden, kein Abbauen in Lobby fuer Nicht-OPs.
 
