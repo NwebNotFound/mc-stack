@@ -136,6 +136,21 @@ class DeltaTests(unittest.TestCase):
         go()
         self.assertEqual(sent, ["Ingest-Push"])
 
+    def test_state_advances_per_accepted_chunk_and_requests_are_capped(self):
+        many = [("I%d" % k, H - i * 3600, 1.0, 1.0, 1.0, 1) for i in range(40) for k in range(300)]   # 12000 rows, 40 hours
+        calls = []
+
+        async def post(session, token, payload, label):
+            calls.append(payload["market_history"])
+            return (200, "{}") if len(calls) <= 2 else (500, "boom")
+        with mock.patch.dict(os.environ, {"INGEST_HISTORY_FULL": "1"}),              mock.patch.object(ingest, "fetch_rows", lambda v: (COLS, many)), mock.patch.object(ingest, "_post", post):
+            asyncio.run(ingest.push_history(object(), "t", now=NOW))
+        self.assertTrue(all(len(c) <= 5000 for c in calls))
+        self.assertEqual(len(calls), 3)                    # third chunk failed
+        saved = json.load(open(self.path))["hist_since"]
+        self.assertEqual(saved, calls[1][-1]["hour_ts"])   # state sits after the 2nd accepted chunk, not at the end
+        self.assertLess(saved, H)
+
 
 if __name__ == "__main__":
     unittest.main()

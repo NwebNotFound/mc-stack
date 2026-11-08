@@ -370,7 +370,7 @@ def parse_details(raw):
 # ---------- Markt (Phase 4) ----------
 MARKET_FIELDS = ("buy_price", "sell_price", "base_price", "volume_24h_qty", "volume_24h_cp", "trades_24h", "change_24h_pct", "updated_at")
 HIST_FIELDS = ("avg_price", "min_price", "max_price", "volume_qty")
-HIST_MAX_ROWS = 60000
+HIST_MAX_ROWS = 5000   # pro Request: kleine Teile = kleiner Schaden bei Fehlern (D1 Free Tier)
 MAX_BYTES = 7_500_000  # Puffer unter 8 MB
 BACKFILL_S = 90 * 86400
 _hist_state = {"since": None}  # Stundenbeginn des letzten erfolgreichen History-Pushs
@@ -1088,6 +1088,11 @@ async def push_history(session, token, now=None):
         if st >= 300:
             ok = False
             break
+        # Teile sind nach Zeit sortiert: alles bis zur letzten Stunde dieses Teils ist angekommen. Der Stand rueckt
+        # pro akzeptiertem Teil vor, ein Fehler oder Neustart mittendrin schickt nicht alles noch einmal.
+        ack = max(_hist_state["since"] or 0, chunk[-1]["hour_ts"])
+        _hist_state["since"] = _state["hist_since"] = ack
+        save_state()
     if ok:
         if since == 0:
             _hist_run["full_done"] = True
