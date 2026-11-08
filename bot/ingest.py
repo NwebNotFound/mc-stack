@@ -1,5 +1,6 @@
 """Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
 import asyncio, datetime, hashlib, json, logging, os, time
+from pathlib import Path
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
@@ -334,10 +335,39 @@ def parse_details(raw):
 # ---------- Markt (Phase 4) ----------
 MARKET_FIELDS = ("buy_price", "sell_price", "base_price", "volume_24h_qty", "volume_24h_cp", "trades_24h", "change_24h_pct", "updated_at")
 HIST_FIELDS = ("avg_price", "min_price", "max_price", "volume_qty")
-HIST_MAX_ROWS = 60000
+HIST_MAX_ROWS = 5000   # pro Request; die Website schreibt in D1 (Free Tier: 100k Zeilen/Tag), kleine Teile = kleiner Schaden bei Fehlern
 MAX_BYTES = 7_500_000  # Puffer unter 8 MB
 BACKFILL_S = 90 * 86400
-_hist_state = {"since": None}  # Stundenbeginn des letzten erfolgreichen History-Pushs
+# Erster Lauf ohne gespeicherten Stand: nur die letzten HIST_BACKFILL_HOURS (die Website hat die aeltere Historie schon).
+# Fuer eine leere Website-DB einmal HIST_BACKFILL_HOURS=2160 (90 T) setzen.
+HIST_BACKFILL_S = _env_int("HIST_BACKFILL_HOURS", 48) * 3600
+HIST_STATE = Path(os.getenv("HIST_STATE_FILE", "/app/data/history-since.json"))
+_hist_state = {"since": None, "loaded": False}  # Stundenbeginn bis zu dem die Website alles hat (ueberlebt Neustarts)
+
+
+def _hist_load(now):
+    """Gespeicherten Stand lesen; ohne Datei: jetzt - HIST_BACKFILL_S (nie wieder 90 Tage nach einem Neustart)."""
+    if not _hist_state["loaded"]:
+        _hist_state["loaded"] = True
+        try:
+            v = json.loads(HIST_STATE.read_text(encoding="utf-8")).get("since")
+            _hist_state["since"] = int(v) if v is not None else None
+        except (OSError, ValueError, TypeError, AttributeError):
+            _hist_state["since"] = None
+    if _hist_state["since"] is None:
+        _hist_state["since"] = now - now % 3600 - HIST_BACKFILL_S
+    return _hist_state["since"]
+
+
+def _hist_save(since):
+    _hist_state["since"] = since
+    try:
+        HIST_STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HIST_STATE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"since": since}), encoding="utf-8")
+        tmp.replace(HIST_STATE)
+    except OSError as e:
+        log.warning("History-Stand nicht gespeichert (%s); gilt bis zum Neustart", e)
 
 
 def _item(v):
@@ -1012,22 +1042,23 @@ async def push_pvp(session, token):
 
 
 async def push_history(session, token, now=None):
-    """Erster Lauf: Backfill 90 T in Teilen; danach nur Stunden seit letztem Erfolg inkl. laufender Stunde."""
+    """Nur Stunden ab dem gespeicherten Stand (inkl. laufender Stunde). Der Stand rueckt nach jedem erfolgreichen
+    Teil vor und ueberlebt Neustarts: ein Fehler oder Neustart schickt nie wieder die ganze Historie (D1-Budget)."""
     hist = await asyncio.to_thread(fetch_rows, "v_market_history")
     if not hist:
         return None
     now = int(now or time.time())
-    since = _hist_state["since"] if _hist_state["since"] is not None else 0
+    since = _hist_load(now)
     entries = build_history(*hist, since, now)
-    ok = True
     for i, chunk in enumerate(chunk_history(entries)):
         st, _ = await _post(session, token, {"market_history": chunk}, "Markt-History %d" % (i + 1))
         if st >= 300:
-            ok = False
-            break
-    if ok:
-        _hist_state["since"] = now - now % 3600
-    return ok
+            return False
+        # Teile sind nach Zeit sortiert: alles vor der letzten Stunde dieses Teils ist angekommen (die letzte Stunde
+        # kann im naechsten Teil weitergehen und wird darum noch einmal geschickt; idempotent)
+        _hist_save(max(since, chunk[-1]["hour_ts"]))
+    _hist_save(now - now % 3600)
+    return True
 
 SERVERS_INTERVAL = 60
 
