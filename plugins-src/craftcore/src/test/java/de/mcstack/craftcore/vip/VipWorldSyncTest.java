@@ -169,6 +169,27 @@ class VipWorldSyncTest {
         reply = 401;
         assertThrows(IllegalStateException.class, () -> sync.maybeSend(1_000L));
         reply = 200;
-        assertTrue(sync.maybeSend(2_000L), "a failed send does not count as sent");
+        assertFalse(sync.maybeSend(2_000L), "backing off: no new post right after a failure");
+        assertTrue(sync.maybeSend(1_000L + VipWorldSync.BACKOFF_MIN_MILLIS), "a failed send does not count as sent; retried after the backoff");
+    }
+
+    @Test void repeatedFailuresBackOffExponentiallyUpToFiveMinutesAndResetOnSuccess() throws Exception {
+        VipWorldSync sync = sync();
+        reply = 500;   // the website's D1 is out of its daily write budget
+        long t = 0; int posted = 0;
+        java.util.List<Long> gaps = new java.util.ArrayList<>(); long last = -1;
+        for (; t < 3_600_000L; t += 5_000L) {   // the runner calls every 5 s for an hour
+            int before = posts.size();
+            try { sync.maybeSend(t); } catch (IllegalStateException expected) { }
+            if (posts.size() > before) { posted++; if (last >= 0) gaps.add(t - last); last = t; }
+        }
+        assertTrue(posted <= 20, "an hour of 500s costs at most ~20 posts, not 720: " + posted);
+        assertEquals(VipWorldSync.BACKOFF_MIN_MILLIS, gaps.get(0), "first retry after 5 s");
+        assertEquals(VipWorldSync.BACKOFF_MAX_MILLIS, gaps.get(gaps.size() - 1), "capped at 5 min");
+        reply = 200;
+        long next = last + VipWorldSync.BACKOFF_MAX_MILLIS;
+        assertTrue(sync.maybeSend(next), "recovers once the website answers again");
+        exec("UPDATE vip_worlds SET name='Danach' WHERE id='" + W1 + "'");
+        assertTrue(sync.maybeSend(next + 5_000L), "after a success the next change goes out on the next round again");
     }
 }
