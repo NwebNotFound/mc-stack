@@ -105,10 +105,10 @@ class RealtimeTests(unittest.TestCase):
         self.assertNotEqual(ingest.payload_hash(a), ingest.payload_hash(c))
 
     def test_backoff(self):
-        self.assertEqual(ingest.note_status(429, now=100), 5)
-        self.assertEqual(ingest.note_status(503, now=100), 10)
-        self.assertEqual(ingest.note_status(500, retry_after="60", now=100), 60)
-        self.assertEqual(ingest._rate["backoff_until"], 160)
+        self.assertEqual(ingest.note_status(429, now=100), 30)
+        self.assertEqual(ingest.note_status(503, now=100), 60)
+        self.assertEqual(ingest.note_status(500, retry_after="120", now=100), 120)
+        self.assertEqual(ingest._rate["backoff_until"], 220)
         ingest.note_status(200)
         self.assertEqual(ingest._rate["fails"], 0)
         self.assertEqual(ingest._rate["backoff_until"], 0)

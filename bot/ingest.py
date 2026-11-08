@@ -1,6 +1,5 @@
 """Push von Verknuepfungen und Spieler-Stats an https://nwebnotfound.dev/api/mc-ingest."""
 import asyncio, datetime, hashlib, json, logging, os, time
-from pathlib import Path
 import aiohttp
 
 log = logging.getLogger("creepy.ingest")
@@ -32,33 +31,9 @@ def _env_int(name, default, lo=5):
 
 INTERVAL = _env_int("INGEST_INTERVAL_SEC", 30)
 MIN_GAP = 3.0  # max. 1 POST pro 3 s
+BACKOFF_START, BACKOFF_MAX = 30.0, 900.0
 _rate = {"last_post": 0.0, "backoff_until": 0.0, "fails": 0, "last_hash": None}
 VOLATILE = ("uptime_seconds", "tps")
-
-
-INGEST_HASH_FILE = Path(os.getenv("INGEST_HASH_FILE", "/app/data/ingest-hash.json"))
-
-
-def _last_hash():
-    """Hash des letzten angenommenen Ingest-Pushs, auch ueber einen Neustart (sonst schickt der erste Push alles neu)."""
-    if _rate["last_hash"] is None and not _rate.get("hash_loaded"):
-        _rate["hash_loaded"] = True
-        try:
-            _rate["last_hash"] = json.loads(INGEST_HASH_FILE.read_text(encoding="utf-8")).get("hash")
-        except (OSError, ValueError, AttributeError):
-            pass
-    return _rate["last_hash"]
-
-
-def _save_hash(h):
-    _rate["last_hash"] = h
-    try:
-        INGEST_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = INGEST_HASH_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"hash": h}), encoding="utf-8")
-        tmp.replace(INGEST_HASH_FILE)
-    except OSError as e:
-        log.warning("Ingest-Hash nicht gespeichert (%s)", e)
 
 
 def payload_hash(payload):
@@ -71,24 +46,59 @@ def payload_hash(payload):
 
 
 def note_status(status, retry_after=None, now=None):
-    """429/5xx -> exponentielles Backoff (5 s .. 300 s, Retry-After wird beachtet); Erfolg setzt zurueck."""
+    """429/5xx -> exponentielles Backoff (30 s .. 15 min, Retry-After wird beachtet); Erfolg setzt zurueck.
+    Pro Stufe wird genau einmal geloggt."""
     now = now if now is not None else time.monotonic()
     if status == 429 or status >= 500:
         _rate["fails"] += 1
-        wait = min(300.0, 5.0 * 2 ** (_rate["fails"] - 1))
+        wait = min(BACKOFF_MAX, BACKOFF_START * 2 ** (_rate["fails"] - 1))
         try:
-            wait = max(wait, min(300.0, float(retry_after)))
+            wait = max(wait, min(BACKOFF_MAX, float(retry_after)))
         except (TypeError, ValueError):
             pass
         _rate["backoff_until"] = now + wait
+        log.warning("Ingest HTTP %s: Backoff Stufe %d, naechster Versuch in %.0f s", status, _rate["fails"], wait)
         return wait
     if status < 300:
         _rate["fails"] = 0
         _rate["backoff_until"] = 0.0
     return 0.0
+
+
+# ---------- persistent state (survives bot restarts; keeps D1 writes low) ----------
+STATE_PATH = os.getenv("INGEST_STATE_FILE", "/app/data/ingest-state.json")
+_state = {"loaded": False, "hist_since": None, "hash": None}
+
+
+def load_state(path=None):
+    """Einmal pro Prozess: letzter bestaetigter History-Stundenbeginn und letzter Ingest-Hash."""
+    if _state["loaded"]:
+        return
+    _state["loaded"] = True
+    try:
+        with open(path or STATE_PATH, encoding="utf8") as f:
+            d = json.load(f)
+        if isinstance(d.get("hist_since"), int):
+            _state["hist_since"] = d["hist_since"]
+        if isinstance(d.get("hash"), str):
+            _state["hash"] = _rate["last_hash"] = d["hash"]
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def save_state(path=None):
+    try:
+        p = path or STATE_PATH
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf8") as f:
+            json.dump({"hist_since": _state["hist_since"], "hash": _state["hash"]}, f)
+        os.replace(tmp, p)
+    except OSError as e:
+        log.warning("Ingest-State nicht gespeichert (%s)", type(e).__name__)
+
+
 STAT_FIELDS = ("money", "playtime_s", "kills", "deaths", "blocks_mined")
 RENAME = {"playtime_s": "playtime"}
-
 
 def build_links(rows, has_role):
     """rows: (discord_id, uuid, name, state); has_role: callable(discord_id)->bool"""
@@ -360,39 +370,10 @@ def parse_details(raw):
 # ---------- Markt (Phase 4) ----------
 MARKET_FIELDS = ("buy_price", "sell_price", "base_price", "volume_24h_qty", "volume_24h_cp", "trades_24h", "change_24h_pct", "updated_at")
 HIST_FIELDS = ("avg_price", "min_price", "max_price", "volume_qty")
-HIST_MAX_ROWS = 5000   # pro Request; die Website schreibt in D1 (Free Tier: 100k Zeilen/Tag), kleine Teile = kleiner Schaden bei Fehlern
+HIST_MAX_ROWS = 5000   # pro Request: kleine Teile = kleiner Schaden bei Fehlern (D1 Free Tier)
 MAX_BYTES = 7_500_000  # Puffer unter 8 MB
 BACKFILL_S = 90 * 86400
-# Erster Lauf ohne gespeicherten Stand: nur die letzten HIST_BACKFILL_HOURS (die Website hat die aeltere Historie schon).
-# Fuer eine leere Website-DB einmal HIST_BACKFILL_HOURS=2160 (90 T) setzen.
-HIST_BACKFILL_S = _env_int("HIST_BACKFILL_HOURS", 48) * 3600
-HIST_STATE = Path(os.getenv("HIST_STATE_FILE", "/app/data/history-since.json"))
-_hist_state = {"since": None, "loaded": False}  # Stundenbeginn bis zu dem die Website alles hat (ueberlebt Neustarts)
-
-
-def _hist_load(now):
-    """Gespeicherten Stand lesen; ohne Datei: jetzt - HIST_BACKFILL_S (nie wieder 90 Tage nach einem Neustart)."""
-    if not _hist_state["loaded"]:
-        _hist_state["loaded"] = True
-        try:
-            v = json.loads(HIST_STATE.read_text(encoding="utf-8")).get("since")
-            _hist_state["since"] = int(v) if v is not None else None
-        except (OSError, ValueError, TypeError, AttributeError):
-            _hist_state["since"] = None
-    if _hist_state["since"] is None:
-        _hist_state["since"] = now - now % 3600 - HIST_BACKFILL_S
-    return _hist_state["since"]
-
-
-def _hist_save(since):
-    _hist_state["since"] = since
-    try:
-        HIST_STATE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = HIST_STATE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"since": since}), encoding="utf-8")
-        tmp.replace(HIST_STATE)
-    except OSError as e:
-        log.warning("History-Stand nicht gespeichert (%s); gilt bis zum Neustart", e)
+_hist_state = {"since": None}  # Stundenbeginn des letzten erfolgreichen History-Pushs
 
 
 def _item(v):
@@ -894,16 +875,20 @@ async def push_once(bot, session=None):
         payload["parkour"] = build_parkour(*pk, meta=parkour.course_meta(*pc) if pc else None,
                                            hidden=parkour.hidden_slugs(*pc) if pc else None)
     h = payload_hash(payload)
+    load_state()
     own = session is None
     session = session or aiohttp.ClientSession()
     try:
-        if h == _last_hash():
+        if h == _rate["last_hash"]:
             log.debug("Ingest-Push uebersprungen: unveraendert")
             result = None
         else:
             result = await _post(session, token, payload, "Ingest-Push")
             if result and result[0] < 300:
-                _save_hash(h)
+                _rate["last_hash"] = h
+                if _state["hash"] != h:
+                    _state["hash"] = h
+                    save_state()
                 await maybe_push_history(session, token)
         return result
     finally:
@@ -914,7 +899,9 @@ async def push_once(bot, session=None):
 async def _post(session, token, payload, label):
     now = time.monotonic()
     if now < _rate["backoff_until"]:
-        log.info("%s uebersprungen: Backoff noch %.0f s", label, _rate["backoff_until"] - now)
+        if _rate.get("skip_logged") != _rate["backoff_until"]:   # einmal pro Backoff-Stufe
+            _rate["skip_logged"] = _rate["backoff_until"]
+            log.info("%s uebersprungen: Backoff noch %.0f s", label, _rate["backoff_until"] - now)
         return 0, "backoff"
     wait = _rate["last_post"] + MIN_GAP - now
     if wait > 0:
@@ -1066,24 +1053,54 @@ async def push_pvp(session, token):
     return st < 300
 
 
+HISTORY_RECENT_S = 48 * 3600   # kein State: nur die letzten 48 h (der Server hat den Rest schon)
+_hist_run = {"full_done": False, "hash": None}
+
+
+def history_since(now):
+    """Ab wann gepusht wird: nach Neustart nur Stunden nach der letzten bestaetigten (plus vorherige und laufende
+    Stunde, die sich noch aendern koennen). 90 Tage nur per Flag INGEST_HISTORY_FULL=1 (einmalig je Prozess)."""
+    load_state()
+    if os.getenv("INGEST_HISTORY_FULL") == "1" and not _hist_run["full_done"]:
+        return 0
+    last = _hist_state["since"] if _hist_state["since"] is not None else _state["hist_since"]
+    if last is None:
+        return now - HISTORY_RECENT_S
+    return last - 3600
+
+
 async def push_history(session, token, now=None):
-    """Nur Stunden ab dem gespeicherten Stand (inkl. laufender Stunde). Der Stand rueckt nach jedem erfolgreichen
-    Teil vor und ueberlebt Neustarts: ein Fehler oder Neustart schickt nie wieder die ganze Historie (D1-Budget)."""
+    """Nur neue Stunden seit dem letzten Erfolg (persistent), unveraenderte Fenster werden uebersprungen."""
     hist = await asyncio.to_thread(fetch_rows, "v_market_history")
     if not hist:
         return None
     now = int(now or time.time())
-    since = _hist_load(now)
+    since = history_since(now)
     entries = build_history(*hist, since, now)
+    if not entries:
+        return True
+    wh = hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if since != 0 and wh == _hist_run["hash"]:
+        return True   # gleiches Fenster wie beim letzten Erfolg: nichts zu senden
+    ok = True
     for i, chunk in enumerate(chunk_history(entries)):
         st, _ = await _post(session, token, {"market_history": chunk}, "Markt-History %d" % (i + 1))
         if st >= 300:
-            return False
-        # Teile sind nach Zeit sortiert: alles vor der letzten Stunde dieses Teils ist angekommen (die letzte Stunde
-        # kann im naechsten Teil weitergehen und wird darum noch einmal geschickt; idempotent)
-        _hist_save(max(since, chunk[-1]["hour_ts"]))
-    _hist_save(now - now % 3600)
-    return True
+            ok = False
+            break
+        # Teile sind nach Zeit sortiert: alles bis zur letzten Stunde dieses Teils ist angekommen. Der Stand rueckt
+        # pro akzeptiertem Teil vor, ein Fehler oder Neustart mittendrin schickt nicht alles noch einmal.
+        ack = max(_hist_state["since"] or 0, chunk[-1]["hour_ts"])
+        _hist_state["since"] = _state["hist_since"] = ack
+        save_state()
+    if ok:
+        if since == 0:
+            _hist_run["full_done"] = True
+        _hist_run["hash"] = wh
+        _hist_state["since"] = now - now % 3600
+        _state["hist_since"] = _hist_state["since"]
+        save_state()
+    return ok
 
 SERVERS_INTERVAL = 60
 
