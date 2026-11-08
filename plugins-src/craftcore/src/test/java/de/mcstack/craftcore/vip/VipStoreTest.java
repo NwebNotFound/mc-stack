@@ -58,7 +58,7 @@ class VipStoreTest {
                 Map.entry("LIST_SHARED", 1), Map.entry("NEW_INVITES", 2),
                 Map.entry("SET_SETTINGS", 2), Map.entry("FIND_SETTINGS", 1), Map.entry("SET_VISIBILITY", 2),
                 Map.entry("DELETE_WORLD", 2), Map.entry("INSERT_AUDIT", 8), Map.entry("SYNC_WORLDS", 0),
-                Map.entry("SYNC_MEMBERS", 0), Map.entry("SYNC_ADDONS", 0), Map.entry("SYNC_ONLINE", 0), Map.entry("COUNT_LIVE", 0));
+                Map.entry("SYNC_MEMBERS", 0), Map.entry("SYNC_ADDONS", 0), Map.entry("SYNC_ONLINE", 0), Map.entry("COUNT_LIVE", 0), Map.entry("LIST_ACTIVE", 0));
         assertTrue(VipStore.INSERT_WORLD.toLowerCase(Locale.ROOT).contains("created_at"));
         try (Connection c = database()) {
             int found = 0;

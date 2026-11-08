@@ -25,6 +25,7 @@ class VipWebCommandsTest {
     private final List<String> hostStarts = new ArrayList<>();
     private final List<String> hostStops = new ArrayList<>();
     private VipHostClient.Outcome stopOutcome = VipHostClient.Outcome.STOPPED;
+    private List<VipReconcile.Slot> hostSlots = List.of();   // reachable host, runs nothing
 
     private void database() throws SQLException {
         url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
@@ -99,6 +100,7 @@ class VipWebCommandsTest {
             new VipWebCommands.Host() {
                 public VipHostClient.Result start(String id) { hostStarts.add(id); return new VipHostClient.Result(VipHostClient.Outcome.ONLINE, "vipworld-1"); }
                 public VipHostClient.Result stop(String slot) { hostStops.add(slot); return new VipHostClient.Result(stopOutcome, null); }
+                public List<VipReconcile.Slot> slots() { return hostSlots; }
             },
             ranks::get, () -> DriverManager.getConnection(url), 3, true);
     }
@@ -185,6 +187,36 @@ class VipWebCommandsTest {
         VipWebQueue.Outcome out = commands().apply(command("start", "100000000000000002", null));
         assertEquals("done", out.status(), out.reason());
         assertEquals(List.of(WORLD), hostStarts);
+        assertEquals("running", status());
+    }
+
+    // Homelab Deployer 08.11.: rows left on "running" after the container exited; /vip "start" acked done and did nothing.
+    @Test void staleRunningRowStartsTheWorldAgain() throws Exception {
+        database();
+        world(OWNER, "running", "vipworld-2");
+        VipWebQueue.Outcome out = commands().apply(command("start", "100000000000000001", null));
+        assertEquals("done", out.status(), out.reason());
+        assertEquals(List.of(WORLD), hostStarts, "the host runs it nowhere: start it");
+        assertEquals("running", status());
+    }
+
+    @Test void reallyRunningWorldIsNotStartedTwice() throws Exception {
+        database();
+        world(OWNER, "running", "vipworld-2");
+        hostSlots = List.of(new VipReconcile.Slot("vipworld-2", "online", WORLD));
+        VipWebQueue.Outcome out = commands().apply(command("start", "100000000000000001", null));
+        assertEquals("done", out.status());
+        assertTrue(hostStarts.isEmpty());
+    }
+
+    @Test void runningRowWithUnreachableHostIsNotGuessed() throws Exception {
+        database();
+        world(OWNER, "running", "vipworld-2");
+        hostSlots = null;
+        VipWebQueue.Outcome out = commands().apply(command("start", "100000000000000001", null));
+        assertEquals("failed", out.status());
+        assertEquals("host_unavailable", out.reason());
+        assertTrue(hostStarts.isEmpty());
         assertEquals("running", status());
     }
 

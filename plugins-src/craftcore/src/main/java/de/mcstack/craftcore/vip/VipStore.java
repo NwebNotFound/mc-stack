@@ -40,6 +40,7 @@ public final class VipStore {
      * so UNIQUE(owner,name) lets the owner reuse the name for a new world.
      */
     static final String MARK_DELETED = "UPDATE vip_worlds SET status='deleted',slot=NULL,name=CONCAT('#',LEFT(REPLACE(id,'-',''),23)) WHERE id=? AND status IN ('stopped','error')";
+    static final String LIST_ACTIVE = "SELECT id,status,slot FROM vip_worlds WHERE status IN ('running','starting') LIMIT 500";
     static final String SET_STOPPED = "UPDATE vip_worlds SET status='stopped',slot=NULL WHERE id=? AND status<>'deleted'";
     static final String STOP_RUNS = "UPDATE vip_world_runs SET stopped_at=?,stop_reason='owner' WHERE world_id=? AND stopped_at IS NULL";
 
@@ -248,6 +249,14 @@ public final class VipStore {
         } catch(SQLException e) { c.rollback(); throw e; } }
     }
     public void stopped(String id) throws SQLException { stop(id,STOP_RUNS); }
+    /** Worlds the database says run or start (the reconcile compares them with the host). */
+    public java.util.List<VipReconcile.Row> active() throws SQLException {
+        java.util.List<VipReconcile.Row> rows=new java.util.ArrayList<>();
+        try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(LIST_ACTIVE); ResultSet r=s.executeQuery()) {
+            while (r.next()) rows.add(new VipReconcile.Row(r.getString(1),r.getString(2),r.getString(3)));
+        }
+        return rows;
+    }
     /** Soft delete of a stopped world; false when it is running, starting or already deleted. */
     public boolean markDeleted(String id) throws SQLException {
         try (Connection c=source.open(); PreparedStatement s=c.prepareStatement(MARK_DELETED)) { s.setString(1,id); return s.executeUpdate()==1; }

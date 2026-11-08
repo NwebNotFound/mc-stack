@@ -20,6 +20,7 @@ public final class LobbyVip implements CommandExecutor {
     private final VipModule module;
     private final VipGui gui;
     private final VipWebRunner webQueue;
+    private final VipStatusReconciler reconciler;
     private final VipStore.ConnectionSource source;
 
     public LobbyVip(JavaPlugin plugin, VipStore.ConnectionSource source) {
@@ -29,6 +30,7 @@ public final class LobbyVip implements CommandExecutor {
         this.module = new VipModule(plugin, source, new Connector(), false, null);
         this.gui = module.gui();
         this.webQueue = new VipWebRunner(plugin);
+        this.reconciler = new VipStatusReconciler(plugin, store, new VipHostClient());
     }
 
     public void start() {
@@ -37,9 +39,10 @@ public final class LobbyVip implements CommandExecutor {
         module.start();
         // Web-Queue nur mit VIP_WEB_QUEUE=1; ohne Flag pollt hier nichts.
         webQueue.start(source, new VipHostClient(), VipConfig.load());
+        reconciler.start();
     }
 
-    public void shutdown() { webQueue.shutdown(); module.shutdown(); }
+    public void shutdown() { reconciler.shutdown(); webQueue.shutdown(); module.shutdown(); }
 
     public VipGui gui() { return gui; }
 
