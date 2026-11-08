@@ -1,7 +1,7 @@
 # Startet den PvP-Host-Dienst mit PVP_HOST_* und VIP_HOST_TOKEN aus ..\..\.env (Token wird nie ausgegeben).
 # Stop-ScheduledTask beendet nur diese PowerShell, nicht ihr Kind python.exe (Port 25599 blieb belegt). Darum:
-#  1. Beim Start: ein noch laufender Prozess mit unserer service.py-Kommandozeile (auch einer, der den Port haelt)
-#     wird beendet und im Log vermerkt. Fremde Prozesse werden nie angefasst.
+#  1. Beim Start: nur der Prozess aus der PID-Datei DIESES Ports und der Prozess, der DIESEN Port haelt, werden beendet
+#     (und nur wenn die Kommandozeile unser service.py enthaelt); Log-Eintrag. Andere Instanzen/Prozesse nie.
 #  2. python.exe laeuft in einem Job-Objekt mit KILL_ON_JOB_CLOSE: stirbt diese PowerShell (Task stoppen, Abmelden,
 #     Absturz), schliesst Windows das Job-Handle und beendet python.exe samt Kindern.
 #  3. PID-Datei + taskkill /T im finally fuer den normalen Ausstieg.
@@ -22,22 +22,30 @@ $log = Join-Path $logDir 'pvp-host-service.log'
 $pidFile = Join-Path $logDir "pvp-host-service-$port.pid"
 function Log($m) { Add-Content -LiteralPath $log -Value ("{0:s} {1}" -f (Get-Date), $m) }
 
-# 1) stale instances of OUR service.py (command line contains this script's path), incl. the one holding the port
-$mine = {
-  param($p) $p.ProcessId -ne $PID -and $p.CommandLine -and $p.CommandLine.ToLower().Contains($svc.ToLower())
+# 1) stale instance of THIS port only: (a) the PID in this port's pid file, (b) the process listening on this port; each
+#    only if its command line still contains our service.py. Another service.py (other port / other pid file) is never touched.
+function CmdLineOf($id) { $q = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue; if ($q) { $q.CommandLine } }
+function IsOurs($id) { $c = CmdLineOf $id; [bool]($c -and $c.ToLower().Contains($svc.ToLower())) }
+function PortOwners($p) {   # netstat (works regardless of the Windows language) plus Get-NetTCPConnection
+  $ids = @()
+  foreach ($l in (& netstat.exe -ano -p tcp)) { if ($l -match "^\s*TCP\s+\S+:$p\s+\S+:0\s+\S+\s+(\d+)\s*$") { $ids += [int]$Matches[1] } }
+  foreach ($c in @(Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue | Where-Object { $_.State -eq "Listen" -or $_.RemotePort -eq 0 })) { $ids += [int]$c.OwningProcess }   # a listener has no remote port
+  $ids | Where-Object { $_ -gt 0 -and $_ -ne $PID } | Select-Object -Unique
 }
-$stale = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { & $mine $_ })
-foreach ($c in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
-  if ($c.OwningProcess -and -not ($stale | Where-Object { $_.ProcessId -eq $c.OwningProcess })) {
-    Log "port $port is held by PID $($c.OwningProcess), which is not our service.py - left alone"
-  }
+$victims = @()
+if (Test-Path -LiteralPath $pidFile) {
+  $old = [int](Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($old -and $old -ne $PID) { if (IsOurs $old) { $victims += $old } else { Log "pid file names PID $old, which is not our service.py (or gone) - left alone" } }
 }
-foreach ($p in $stale) {
-  Log "stale service.py found (PID $($p.ProcessId)) - killing it and its children"
-  & taskkill.exe /T /F /PID $p.ProcessId | Out-Null
+foreach ($id in @(PortOwners $port)) {
+  if (IsOurs $id) { $victims += $id } else { Log "port $port is held by PID $id, which is not our service.py - left alone" }
 }
-if ($stale.Count) {
-  for ($i = 0; $i -lt 20 -and (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
+foreach ($id in ($victims | Select-Object -Unique)) {
+  Log "stale service.py for port $port found (PID $id) - killing it and its children"
+  & taskkill.exe /T /F /PID $id | Out-Null
+}
+if ($victims.Count) {
+  for ($i = 0; $i -lt 20 -and @(PortOwners $port).Count; $i++) { Start-Sleep -Milliseconds 250 }
 }
 
 # 2) python in a job object that dies with this process
