@@ -1,0 +1,22 @@
+name: changelog
+# A merged PR's "## Changelog" block -> Neuigkeiten on nwebnotfound.dev (NwebNotFoundDOTDev src/changelog-ingest.js parses it there; area mc -> the mc /changelog).
+# curl only: no checkout, no install, a few seconds per merge. Without the CHANGELOG_TOKEN secret it just skips.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+permissions: {}
+jobs:
+  ingest:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post the merged PR to the changelog
+        env:
+          TOKEN: ${{ secrets.CHANGELOG_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "CHANGELOG_TOKEN is not set: skipped"; exit 0; fi
+          curl -sS --fail-with-body -m 20 -X POST "https://nwebnotfound.dev/api/changelog/ingest" \
+            -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
+            --data-binary @"$GITHUB_EVENT_PATH"
