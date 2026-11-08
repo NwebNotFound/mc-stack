@@ -45,6 +45,8 @@ jobs:
           python-version: '3.11'
       - name: Install bot dependencies
         run: pip install -r bot/requirements.txt pytest
+      - name: Data dir the bot expects (the tests write below /app)
+        run: sudo mkdir -p /app/data && sudo chown -R "$USER" /app
       - name: Bot tests (bot/test_*.py)
         run: python -m pytest -q
         working-directory: bot
