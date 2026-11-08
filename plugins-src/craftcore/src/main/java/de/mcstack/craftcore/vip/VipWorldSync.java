@@ -27,6 +27,9 @@ public final class VipWorldSync {
     public static final String PATH = "/mc-vip-worlds";
     static final long RESYNC_MILLIS = 300_000L;
     static final long LIMIT_CACHE_MILLIS = 300_000L;
+    /** After a failed post (e.g. HTTP 500 when the website's D1 is out of its daily write budget) the next try waits
+     *  5 s, 10 s, 20 s ... capped at 5 min, instead of hammering every 5 s; a success resets it. */
+    static final long BACKOFF_MIN_MILLIS = 5_000L, BACKOFF_MAX_MILLIS = 300_000L;
 
     private final VipStore store;
     private final VipWebQueue.Transport transport;
@@ -34,6 +37,8 @@ public final class VipWorldSync {
     private final Map<UUID, long[]> limits = new HashMap<>();
     private String lastBody;
     private long lastSent = Long.MIN_VALUE;
+    private int failures;
+    private long retryAt = Long.MIN_VALUE;
 
     /** @param playerLimit the owner's player cap by rank (LuckPerms lookup, may block; cached here) */
     public VipWorldSync(VipStore store, VipWebQueue.Transport transport, ToIntFunction<UUID> playerLimit) {
@@ -44,17 +49,31 @@ public final class VipWorldSync {
 
     /** Posts when the world list changed or the periodic resync is due. Returns whether it posted. */
     public boolean maybeSend(long now) throws Exception {
+        if (now < retryAt) return false;   // backing off after a failed post
         String worlds = worlds(now).toString();
         boolean due = lastSent == Long.MIN_VALUE || now - lastSent >= RESYNC_MILLIS;
         if (!due && worlds.equals(lastBody)) return false;
         JsonObject body = new JsonObject();
         body.addProperty("synced_at", now);
         body.add("vip_worlds", JsonParser.parseString(worlds));
-        int status = transport.post(PATH, body.toString());
-        if (status < 200 || status >= 300) throw new IllegalStateException("world sync HTTP " + status);
+        int status;
+        try { status = transport.post(PATH, body.toString()); }
+        catch (Exception e) { backOff(now); throw e; }
+        if (status < 200 || status >= 300) {
+            backOff(now);
+            throw new IllegalStateException("world sync HTTP " + status + ", next try in " + (retryAt - now) / 1000 + " s");
+        }
+        failures = 0;
+        retryAt = Long.MIN_VALUE;
         lastBody = worlds;
         lastSent = now;
         return true;
+    }
+
+    private void backOff(long now) {
+        failures = Math.min(failures + 1, 30);
+        long wait = BACKOFF_MIN_MILLIS << Math.min(failures - 1, 16);
+        retryAt = now + Math.min(wait, BACKOFF_MAX_MILLIS);
     }
 
     JsonArray worlds(long now) throws Exception {

@@ -1053,7 +1053,7 @@ async def push_pvp(session, token):
     return st < 300
 
 
-HISTORY_RECENT_S = 48 * 3600   # kein State: nur die letzten 48 h (der Server hat den Rest schon)
+HISTORY_RECENT_S = 6 * 3600   # kein State: nur die letzten 6 h (~1,250 Items x 6 = 7.5k statt 60k Zeilen; der Server hat den Rest schon, D1-Budget)
 _hist_run = {"full_done": False, "hash": None}
 
 

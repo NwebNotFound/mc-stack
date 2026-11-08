@@ -55,8 +55,8 @@ class DeltaTests(unittest.TestCase):
 
     def test_no_state_pushes_recent_window_not_90_days(self):
         sent = self.push()
-        self.assertGreaterEqual(min(e["hour_ts"] for e in sent), NOW - 48 * 3600)
-        self.assertLess(len(sent), 120)
+        self.assertGreaterEqual(min(e["hour_ts"] for e in sent), NOW - 6 * 3600 - 3600)   # 6 h window (D1 budget, 08.11.)
+        self.assertLess(len(sent), 20)
 
     def test_full_backfill_only_by_flag(self):
         with mock.patch.dict(os.environ, {"INGEST_HISTORY_FULL": "1"}):
