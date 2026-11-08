@@ -15,3 +15,5 @@ Der Dienst startet, wenn mindestens einer der getrennten Tokens `PVP_HOST_TOKEN`
 Jeder Docker-Aufruf hat ein Zeitlimit (inspect/logs 30 s, start 60 s, stop 150 s wegen der 2-min-Stop-Gnadenfrist, `compose up` 180 s). Läuft eines ab, antwortet der Dienst mit `503` (`docker_timeout`) und gibt die VIP-Sperre frei. Eine VIP-Anfrage wartet höchstens 210 s auf eine andere laufende VIP-Anfrage und bekommt sonst `503 busy`, statt endlos zu warten.
 
 Das Repository wird relativ zum Dienst gefunden; `MC_STACK_DIR` kann den Pfad überschreiben. Docker Compose und die konfigurierten VIP-Slots müssen vorhanden sein.
+
+Stoppen: Der Taskplaner beendet bei `Stop-ScheduledTask` nur die PowerShell, nicht ihr Kind. `run.ps1` startet python.exe deshalb in einem Job-Objekt (stirbt mit der PowerShell), beendet beim Start einen alten Prozess mit unserer `service.py`-Kommandozeile (Log: `%LOCALAPPDATA%\mc-stack\pvp-host-service.log`) und fasst fremde Prozesse nie an. Pruefen ohne den Live-Dienst: `powershell -File tools	est-pvp-host-run.ps1` (Testport 25598, Dummy-Token).

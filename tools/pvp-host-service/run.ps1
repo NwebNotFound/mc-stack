@@ -1,7 +1,86 @@
 # Startet den PvP-Host-Dienst mit PVP_HOST_* und VIP_HOST_TOKEN aus ..\..\.env (Token wird nie ausgegeben).
+# Stop-ScheduledTask beendet nur diese PowerShell, nicht ihr Kind python.exe (Port 25599 blieb belegt). Darum:
+#  1. Beim Start: nur der Prozess aus der PID-Datei DIESES Ports und der Prozess, der DIESEN Port haelt, werden beendet
+#     (und nur wenn die Kommandozeile unser service.py enthaelt); Log-Eintrag. Andere Instanzen/Prozesse nie.
+#  2. python.exe laeuft in einem Job-Objekt mit KILL_ON_JOB_CLOSE: stirbt diese PowerShell (Task stoppen, Abmelden,
+#     Absturz), schliesst Windows das Job-Handle und beendet python.exe samt Kindern.
+#  3. PID-Datei + taskkill /T im finally fuer den normalen Ausstieg.
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-foreach ($l in Get-Content (Join-Path $root '.env')) {
-  if ($l -match '^(PVP_HOST_[A-Z_]+|VIP_HOST_TOKEN)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2].Trim(), 'Process') }
+$envFile = Join-Path $root '.env'
+if (Test-Path -LiteralPath $envFile) {
+  foreach ($l in Get-Content $envFile) {
+    if ($l -match '^(PVP_HOST_[A-Z_]+|VIP_HOST_TOKEN)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2].Trim(), 'Process') }
+  }
 }
 Set-Location $root
-& 'C:\Program Files\Python311\python.exe' (Join-Path $PSScriptRoot 'service.py')
+$svc = Join-Path $PSScriptRoot 'service.py'
+$py = 'C:\Program Files\Python311\python.exe'
+$port = if ($env:PVP_HOST_PORT) { [int]$env:PVP_HOST_PORT } else { 25599 }
+$logDir = Join-Path $env:LOCALAPPDATA 'mc-stack'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$log = Join-Path $logDir 'pvp-host-service.log'
+$pidFile = Join-Path $logDir "pvp-host-service-$port.pid"
+function Log($m) { Add-Content -LiteralPath $log -Value ("{0:s} {1}" -f (Get-Date), $m) }
+
+# 1) stale instance of THIS port only: (a) the PID in this port's pid file, (b) the process listening on this port; each
+#    only if its command line still contains our service.py. Another service.py (other port / other pid file) is never touched.
+function CmdLineOf($id) { $q = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue; if ($q) { $q.CommandLine } }
+function IsOurs($id) { $c = CmdLineOf $id; [bool]($c -and $c.ToLower().Contains($svc.ToLower())) }
+function PortOwners($p) {   # netstat (works regardless of the Windows language) plus Get-NetTCPConnection
+  $ids = @()
+  foreach ($l in (& netstat.exe -ano -p tcp)) { if ($l -match "^\s*TCP\s+\S+:$p\s+\S+:0\s+\S+\s+(\d+)\s*$") { $ids += [int]$Matches[1] } }
+  foreach ($c in @(Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue | Where-Object { $_.State -eq "Listen" -or $_.RemotePort -eq 0 })) { $ids += [int]$c.OwningProcess }   # a listener has no remote port
+  $ids | Where-Object { $_ -gt 0 -and $_ -ne $PID } | Select-Object -Unique
+}
+$victims = @()
+if (Test-Path -LiteralPath $pidFile) {
+  $old = [int](Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($old -and $old -ne $PID) { if (IsOurs $old) { $victims += $old } else { Log "pid file names PID $old, which is not our service.py (or gone) - left alone" } }
+}
+foreach ($id in @(PortOwners $port)) {
+  if (IsOurs $id) { $victims += $id } else { Log "port $port is held by PID $id, which is not our service.py - left alone" }
+}
+foreach ($id in ($victims | Select-Object -Unique)) {
+  Log "stale service.py for port $port found (PID $id) - killing it and its children"
+  & taskkill.exe /T /F /PID $id | Out-Null
+}
+if ($victims.Count) {
+  for ($i = 0; $i -lt 20 -and @(PortOwners $port).Count; $i++) { Start-Sleep -Milliseconds 250 }
+}
+
+# 2) python in a job object that dies with this process
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class PvpJob {
+  [StructLayout(LayoutKind.Sequential)] struct BASIC { public long a; public long b; public uint LimitFlags; public UIntPtr c; public UIntPtr d; public uint e; public UIntPtr f; public uint g; public uint h; }
+  [StructLayout(LayoutKind.Sequential)] struct IOC { public ulong a, b, c, d, e, f; }
+  [StructLayout(LayoutKind.Sequential)] struct EXT { public BASIC Basic; public IOC Io; public UIntPtr a, b, c, d; }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr attr, string name);
+  [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int cls, IntPtr info, uint len);
+  [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr proc);
+  public static IntPtr Create() {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    EXT ext = new EXT(); ext.Basic.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    IntPtr mem = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(EXT)));
+    Marshal.StructureToPtr(ext, mem, false);
+    bool ok = SetInformationJobObject(job, 9, mem, (uint)Marshal.SizeOf(typeof(EXT)));
+    Marshal.FreeHGlobal(mem);
+    if (!ok) throw new System.ComponentModel.Win32Exception();
+    return job;
+  }
+  public static void Add(IntPtr job, IntPtr proc) { if (!AssignProcessToJobObject(job, proc)) throw new System.ComponentModel.Win32Exception(); }
+}
+'@
+$job = [PvpJob]::Create()   # stays referenced (and open) until this process ends
+$proc = Start-Process -FilePath $py -ArgumentList "`"$svc`"" -NoNewWindow -PassThru
+$null = $proc.Handle        # keep the handle: needed for the exit code
+try {
+  [PvpJob]::Add($job, $proc.Handle)
+  Set-Content -LiteralPath $pidFile -Value $proc.Id
+  Log "started service.py (PID $($proc.Id), port $port)"
+  $proc.WaitForExit()
+} finally {
+  if (-not $proc.HasExited) { & taskkill.exe /T /F /PID $proc.Id | Out-Null; Log "stopped service.py (PID $($proc.Id))" }
+  Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
+}
+exit $proc.ExitCode
