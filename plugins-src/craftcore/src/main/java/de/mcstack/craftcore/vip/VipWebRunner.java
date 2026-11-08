@@ -37,6 +37,7 @@ public final class VipWebRunner {
             new VipWebCommands.Host() {
                 public VipHostClient.Result start(String id) { return host.start(id); }
                 public VipHostClient.Result stop(String slot) { return host.stop(slot); }
+                public java.util.List<VipReconcile.Slot> slots() { return host.slots(); }
             },
             uuid -> rank(uuid), db, config.adminSlots(), config.trustedMayStart());
         HttpTransport transport = new HttpTransport(base, token);

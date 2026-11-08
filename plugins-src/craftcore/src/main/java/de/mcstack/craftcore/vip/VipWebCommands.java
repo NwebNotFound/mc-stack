@@ -12,6 +12,8 @@ import java.util.function.Function;
 public final class VipWebCommands implements VipWebQueue.Applier {
     public interface Host {
         VipHostClient.Result start(String worldId);
+        /** What the host really runs; null when it can't be asked. */
+        default java.util.List<VipReconcile.Slot> slots() { return null; }
         VipHostClient.Result stop(String slot);
     }
     public interface RankLookup { String rank(UUID player) throws Exception; }
@@ -87,7 +89,16 @@ public final class VipWebCommands implements VipWebQueue.Applier {
 
         switch (c.action()) {
             case "start" -> {
-                if ("running".equals(world.status()) && world.slot() != null) return VipWebQueue.Outcome.done();
+                if ("running".equals(world.status()) || "starting".equals(world.status())) {
+                    // The row can be stale (idle stop, crash, host restart): ask the host, like the in-game button.
+                    VipStartDecision.Decision d = VipStartDecision.decide(world.status(), world.slot(), id, host.slots());
+                    switch (d.step()) {
+                        case CONNECT -> { if (d.staleRow()) store.status(id, "running", d.slot()); return VipWebQueue.Outcome.done(); }
+                        case WAIT -> { if (d.staleRow()) store.status(id, "starting", d.slot()); return VipWebQueue.Outcome.done(); }
+                        case HOST_DOWN -> { return VipWebQueue.Outcome.failed("host_unavailable"); }
+                        case START -> store.idleStopped(id);   // not running anywhere: close the stale row, then start
+                    }
+                }
                 VipHostClient.Result result = host.start(id);
                 if (result == null) return VipWebQueue.Outcome.failed("host_unavailable");
                 switch (result.outcome()) {
